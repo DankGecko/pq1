@@ -1,4 +1,4 @@
-![PQ1](docs/pq1_banner_image.jpg)
+[![PQ1](docs/pq1_banner_image.jpg)](https://freedomfactory.io)
 
 # PQ1
 
@@ -502,8 +502,8 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] Field-tested on staging hardware before public rollout; documented recovery path for a bricked fleet (RDP-2 cannot be unlocked)
 
 **H. External validation**
-- [ ] External audit by an embedded + TrustZone + SE firm (NCC, Trail of Bits, Quarkslab, Kudelski, Riscure) of the *signed production image* — budget $30K–$150K
-- [ ] All findings fixed or risk-accepted with external sign-off; public bug bounty (≥ $25K for seed extraction) + VDP published before any device ships
+- [ ] External audit by an embedded + TrustZone + SE firm of the *signed production image*
+- [ ] All findings fixed or risk-accepted with external sign-off; public bug bounty + VDP published before any device ships
 - [ ] Independent FI report from a lab; independent attestation that the build is reproducible
 
 **I. Operational readiness**
@@ -567,3 +567,26 @@ Copyright (c) 2026 Freedom Factory Inc.
 - **Smart contracts (`contracts/`):** [MIT License](contracts/LICENSE). Vendored third-party contract dependencies (Solady, Coinbase Smart Wallet reference code, forge-std, etc.) remain under their own licenses.
 
 Vendor datasheets, application notes, and the NXP Plug & Trust middleware are **not** distributed in this repository (their licenses do not permit redistribution). Download them from the respective vendors: STMicroelectronics (RM0456, STM32U585 datasheet, UM2839), NXP (SE050 datasheet, AN12413, AN12436, AN12514, AN13539, Plug & Trust middleware), Infineon (OPTIGA Trust M doc pack), and the display-controller vendors (NV3007, SSD1306). The SPHINCS+C parameter-set paper is open access at [eprint.iacr.org/2022/778](https://eprint.iacr.org/2022/778).
+
+## ⚠️ Early access — work in progress
+
+**PQ1 is unfinished, not yet audited, and not ready to hold value.** We are
+open-sourcing it early, while it is still being built, rather than presenting it
+as finished after the fact — the design and the code should be reviewable in the
+open. Expect breaking changes.
+
+- **No devices have shipped** and no on-chain wallet holds funds. Do not use this
+  to protect real value.
+- **An external security audit by Trail of Bits is currently under way**, and no
+  external audit has been finalized. Treat the security claims above as
+  unconfirmed until that work lands — the reviews under `docs/audits/` are our
+  own.
+- **Ship-blocking work is still open**, including irreversible secure-element
+  provisioning steps. [`docs/STATUS.md`](docs/STATUS.md) tracks the state of each
+  subsystem — what is done, what is open, and why.
+- Values described above as "frozen" — domain-separation tags, the C10 parameter
+  set, the CREATE2 salt, the EntryPoint version — are what we intend to commit to
+  *at launch*, and can still change cleanly before first shipment.
+
+Review, reproduction, and bug reports are welcome — see
+[`SECURITY.md`](SECURITY.md).

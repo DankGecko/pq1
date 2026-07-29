@@ -1,5 +1,21 @@
 # Provisioning Research Brief — STM32U585 + OPTIGA Trust M V3 + SE050
 
+> **⚠️ ARCHIVED RESEARCH INPUT — its OPTIGA S-2 premise is DISPROVEN (banner
+> added 2026-07-26; body below left byte-identical).** This brief is a
+> paste-ready research *question*, never a ceremony, and it predates the
+> 2026-04-22 bench dump. Two of its statements are wrong and would be
+> destructive if executed: `0xE0E3` is **not** an Infineon public-sample trust
+> anchor but a full `DataType=0x12` **device certificate** the chip refuses to
+> retype, and `0xE0E4..0xE0E7` hold **no objects at all**. Since the stale
+> range's only real member `0xE0E8` is one of three type-`0x11` anchors, a
+> fill-and-lock pass over it junk-overwrites the `0xE0E3` device cert, aborts at
+> the absent `0xE0E4`, never reaches `0xE0E9`/`0xE0EF`, and reads as closure.
+> The candidate pool is `{0xE0E8, 0xE0E9, 0xE0EF}` — documentarily confirmed,
+> **silicon-unconfirmed for the shipping SKU/revision**. Nothing here is
+> authorized: `lockdown_ta_pool` emits no APDU and S-2 remains an OPEN
+> ship-blocker. Current authority: `../STATUS.md` §A and the CORRECTION
+> 2026-07-26 block in `../provisioning/first-boot-provisioning.md`.
+
 State-of-the-art secure **configuration + provisioning** of the three chips in
 the PQ1 crypto hardware wallet. Production, one-shot, irreversible, debug-off
 final state. This file is the paste-ready brief for a deep-research run.

@@ -1,0 +1,41 @@
+[
+  {
+    "id": "ousg-token-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x1b19c19393e2d034d8ff31ff34c81252fcbbee92",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "usdy-token-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x96f6ef951840721adbf46ac996b59e0235cb985c",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "rusdy-token-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0xaf37c1167910ebc994e266949387d2c7c326b879",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

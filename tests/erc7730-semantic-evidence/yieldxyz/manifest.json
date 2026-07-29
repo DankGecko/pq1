@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "scope": "Historical fixed-block deployment, proxy, runtime, token/configuration, ABI, and source-semantic evidence for the seventeen Yield.xyz POL validator leaves and one USDe allocator-vault leaf admitted by PQ1.",
+  "captured_at_utc": "2026-07-28T11:13:28Z",
+  "fixed_block": {
+    "chain_id": 1,
+    "number": 25630720,
+    "number_hex": "0x1871800",
+    "hash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+    "state_root": "0x56201c1863e551e47e584fbe807a6200b8937e7d62a373a37e1342c0f113e27d",
+    "timestamp": 1785234491,
+    "timestamp_utc": "2026-07-28T10:28:11Z",
+    "rpc_endpoints": ["https://eth.drpc.org", "https://rpc.mevblocker.io"]
+  },
+  "upstream": {
+    "blockscout_api": "https://eth.blockscout.com/api/v2/smart-contracts/{address}",
+    "validator_share_compiler": "0.5.17+commit.d19bba13",
+    "allocator_vault_compiler": "v0.8.25+commit.b61c2a91"
+  },
+  "descriptor_families": [
+    {
+      "source": "yieldxyz/calldata-yieldxyz-pol-validator.json",
+      "admitted_leaf_count": 17,
+      "deployments": [
+        "0xb929b89153fc2eed442e81e5a1add4e2fa39028f",
+        "0x56d783ca8e0b998c57a428bf1c26a8baca50524e",
+        "0x857679d69fe50e7b722f94acd2629d80c355163d",
+        "0xf30cf4ed712d3734161fdaab5b1dbb49fd2d0e5c",
+        "0x5a10de50160126a5f936506bd342c541ac44e943",
+        "0x35b1ca0f398905cf752e6fe122b51c88022fca32",
+        "0xd9e6987d77bf2c6d0647b8181fd68a259f838c36",
+        "0xd14a87025109013b0a2354a775cb335f926af65a",
+        "0xa6e768fef2d1af36c0cfdb276422e7881a83e951",
+        "0x467585aaea860f9d8b3b43bb994e4da8a93788a7",
+        "0x06998af8f39ff8630d1fb515d22781da4dc2ca71",
+        "0xc7757805b983ee1b6272c1840c18e66837de858e",
+        "0xe3e9ba8c8c696f8537cf16b23eddf118bbd7f21f",
+        "0x875e901465a639f2e71fcfc10f426ed32f5a909a",
+        "0x2905b3387c9550ea57fa3ee7d4b7e5abf3acd3d2",
+        "0x15c2b3adca66e26b6f230b4023f52a285b7f9995",
+        "0x2ea3c215daeacc1c90b51443ab5d08a9ad816138"
+      ],
+      "implementation": "0xbe63b977abbaa99fc0243e208340c530dd4ee9e8",
+      "admitted_formats": [
+        "buyVoucherPOL(uint256 _amount, uint256 _minSharesToMint)",
+        "sellVoucher_newPOL(uint256 claimAmount, uint256 maximumSharesToBurn)",
+        "unstakeClaimTokens_newPOL(uint256 unbondNonce)",
+        "withdrawRewardsPOL()"
+      ]
+    },
+    {
+      "source": "yieldxyz/calldata-yieldxyz-usde-vault.json",
+      "admitted_leaf_count": 1,
+      "deployment": "0x2d152fb171353e70e45322d32bc748f8a61d9971",
+      "implementation": "0xa7249e2902b956e7127df56bf45d58cff610d832",
+      "underlying": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+      "strategy": "0x9d39a5de30e57443bff2a8307a4256c8797a3497",
+      "admitted_formats": ["deposit(uint256 _underlying, address receiver)"],
+      "refusal_only_formats": [
+        "mint(uint256 shares, address receiver)",
+        "redeem(uint256 shares, address receiver, address owner)",
+        "withdraw(uint256 _underlying, address receiver, address owner)"
+      ]
+    }
+  ],
+  "claims": [
+    "Both independent RPC operators returned identical fixed-block results for every captured observation.",
+    "All seventeen POL destinations share an exact proxy runtime and implementation() result, and the implementation runtime exactly matches the fully verified ValidatorShare deployed bytecode.",
+    "The USDe destination EIP-1967 slot, proxy and implementation runtimes, underlying/strategy bindings, token metadata, and cooldown-enabled configuration are fixed-block bound; both verified deployed bytecodes exactly match RPC runtime.",
+    "Verified ABIs and source bind all admitted signed-input meanings and the three exact-known USDe refusal reasons documented by the curation."
+  ],
+  "boundary": "Historical fixed-block source/runtime and signed-input meaning only. No live-state, transaction-success, future proxy/configuration/deployment, fallback, blind-signing, production, shipment, or irreversible-action authority.",
+  "artifacts": [
+    {
+      "path": "README.md",
+      "bytes": 2974,
+      "sha256": "f8195385d3959fded8baee821b72446996bda81d549a5f46a3ceeb42fca5e7b1"
+    },
+    {
+      "path": "blockscout/AllocatorVaultProxy.json",
+      "bytes": 55983,
+      "sha256": "d05f2d37080a2cc1b20d2ef2e0e2b40072f4cba03ad763e67f1a1706568b57e0"
+    },
+    {
+      "path": "blockscout/AllocatorVaultV3.json",
+      "bytes": 302755,
+      "sha256": "1e631ae1910150450244eac6d59fe62677a4f5885fb72a5c4055b756b24b3a2e"
+    },
+    {
+      "path": "blockscout/ValidatorShare.json",
+      "bytes": 173020,
+      "sha256": "f6029dddde8511b7e7484f8d6476c350591f2ea9b9eba9b9ddd141b4e7b33921"
+    },
+    {
+      "path": "blockscout/ValidatorShareProxy.json",
+      "bytes": 29110,
+      "sha256": "53cd8b07b7bf59392f0bb434a73e83e73a2b8f0980a4e42912e4c909f9ca3e83"
+    },
+    {
+      "path": "collect.sh",
+      "bytes": 6994,
+      "sha256": "8e933174503a6f23d193be6848a83edbefb684e2d66ff845edf8dbaaca06a284"
+    },
+    {
+      "path": "rpc/pol-drpc.json",
+      "bytes": 142500,
+      "sha256": "f5716631d43ecba1c034a85be7c1d6fa9d37ad5282ff809c688d49a0bc2ebd16"
+    },
+    {
+      "path": "rpc/pol-mevblocker.json",
+      "bytes": 142680,
+      "sha256": "8cc1ce663d989c8c7cae089ac6f24d28e4b0ea87338b3c158275d2f53be3fc2d"
+    },
+    {
+      "path": "rpc/usde-drpc.json",
+      "bytes": 125293,
+      "sha256": "ad371afeb35871a5a189929f943636c0fb378d2d4dd64e655417f32c8a1e76fe"
+    },
+    {
+      "path": "rpc/usde-mevblocker.json",
+      "bytes": 125393,
+      "sha256": "e7165323efb70d0ea0fe710aab0b4d7a4249d88d6afebeafe9d08630c82284fb"
+    },
+    {
+      "path": "runtime/AllocatorVaultProxy.hex",
+      "bytes": 2901,
+      "sha256": "37997d67cda7107cbf40176435ec6c9e4bd54e6c4b80ec6d01b80462824d8031"
+    },
+    {
+      "path": "runtime/AllocatorVaultV3.hex",
+      "bytes": 37699,
+      "sha256": "915bc4ad72281fd1fdd789d71489e90324b3c4787e5010440da4df0addec8b56"
+    },
+    {
+      "path": "runtime/USDe.hex",
+      "bytes": 15137,
+      "sha256": "1a978f559a399762ac6ee123fabb7b32c44903bc061d0c26de9158d3b9e98fff"
+    },
+    {
+      "path": "runtime/ValidatorShare.hex",
+      "bytes": 32639,
+      "sha256": "6a2c8ba45cb6af0f1a1225d2c38d82267e9d025e4a23c119c59713c8496cf461"
+    },
+    {
+      "path": "runtime/ValidatorShareProxy.hex",
+      "bytes": 4061,
+      "sha256": "f69afc2acd8acd12ce9cfded49f57cc946cdb935b6c03a8e99e977be565becd7"
+    },
+    {
+      "path": "runtime/sUSDe.hex",
+      "bytes": 34601,
+      "sha256": "ae6880e8d1580c59f352589d1ef86028f2586c76488db77ae4c6c4ef0212480d"
+    }
+  ]
+}

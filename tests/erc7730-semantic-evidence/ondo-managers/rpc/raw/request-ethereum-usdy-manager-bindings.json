@@ -1,0 +1,32 @@
+[
+  {
+    "id": "usdy-manager-rwa-token",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x0c5bf351",
+        "to": "0xa42613c243b67bf6194ac327795b926b4b491f15"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "usdy-manager-rusdy",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x10a4f09f",
+        "to": "0xa42613c243b67bf6194ac327795b926b4b491f15"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

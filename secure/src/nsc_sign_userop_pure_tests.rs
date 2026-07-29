@@ -899,6 +899,7 @@ const CMD_SIGN_USEROP_SRC: &str =
 const CMD_SIGN_USEROP_FORCED_SRC: &str = include_str!("nsc/cmd_sign_userop_forced.rs");
 const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
 const CMD_SIGN_OFFCHAIN_SRC: &str = include_str!("nsc/cmd_sign_offchain.rs");
+const OFFCHAIN_STATE_SRC: &str = include_str!("offchain_state.rs");
 const NSC_MOD_SRC: &str = include_str!("nsc/mod.rs");
 const FORCED_BLIND_DISPLAY_SRC: &str = include_str!("tx/display/forced_blind.rs");
 const SAFE_EXEC_DECODE_SRC: &str = include_str!("tx/eip712/safe/exec_decode.rs");
@@ -1832,55 +1833,81 @@ fn forced_route_is_feature_gated_and_owned_only_by_direct_userop() {
 
 #[test]
 fn forced_route_requires_an_explicit_zero_length_erc7730_header() {
-    let parse = CMD_SIGN_USEROP_SRC
-        .find("let erc7730_explicit_header =")
-        .expect("typed forced absence capture");
-    let route = CMD_SIGN_USEROP_SRC[parse..]
-        .find("super::cmd_sign_userop_forced::classify(")
-        .map(|offset| parse + offset)
-        .expect("forced classifier call");
-    let evidence = &CMD_SIGN_USEROP_SRC[parse..route];
-    assert!(evidence.contains("checked_add(2)"));
-    assert!(evidence.contains("*end <= total_len"));
-    assert!(evidence.contains("erc7730_explicit_header == Some(0)"));
-    assert!(evidence.contains("erc7730_trailer.len == 0"));
+    let derive = CMD_SIGN_USEROP_FORCED_SRC
+        .find("fn derive_wire_facts(")
+        .expect("request-derived forced wire parser");
+    let exclusions = CMD_SIGN_USEROP_FORCED_SRC[derive..]
+        .find("fn exclusions_hold(")
+        .map(|offset| derive + offset)
+        .expect("forced exclusion proof");
+    let parser = &CMD_SIGN_USEROP_FORCED_SRC[derive..exclusions];
+    let compact_parser = parser.split_whitespace().collect::<String>();
+    assert!(parser.contains("let erc7730_header_offset = cursor;"));
+    assert!(compact_parser.contains("cursor.checked_add(2)"));
+    assert!(parser.contains("*end <= total_len"));
+    assert!(parser.contains("[wire[cursor], wire[cursor + 1]]"));
+
+    let classify = CMD_SIGN_USEROP_FORCED_SRC
+        .find("pub(super) fn classify(request: &ForcedRequest<'_>)")
+        .expect("forced classifier");
+    let exclusion_body = &CMD_SIGN_USEROP_FORCED_SRC[exclusions..classify];
+    assert!(exclusion_body.contains("facts.erc7730_header == Some([0, 0])"));
+    assert!(exclusion_body.contains("facts.erc7730_len == 0"));
     assert!(
-        CMD_SIGN_USEROP_FORCED_SRC.contains("if !clean_metadata_absence || calldata.len() < 4"),
-        "legacy missing headers and selector-short calls must stay ordinary"
+        !CMD_SIGN_USEROP_SRC.contains("erc7730_clean_absence")
+            && !CMD_SIGN_USEROP_FORCED_SRC.contains("clean_metadata_absence"),
+        "forced authority must reparse raw framing, not accept an absence boolean"
     );
 }
 
 #[test]
 fn forced_route_passes_every_frozen_exclusion_to_closed_classification() {
-    let start = CMD_SIGN_USEROP_SRC
-        .find("let single_steady_type2 =")
-        .expect("forced exclusion block");
-    let end = CMD_SIGN_USEROP_SRC[start..]
-        .find("// 7e. Address-name bundles.")
+    let start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("fn exclusions_hold(")
+        .expect("request-derived forced exclusion block");
+    let end = CMD_SIGN_USEROP_FORCED_SRC[start..]
+        .find("/// Determine whether an absent-descriptor request")
         .map(|offset| start + offset)
-        .expect("ordinary metadata resolver boundary");
-    let block = &CMD_SIGN_USEROP_SRC[start..end];
+        .expect("forced classifier boundary");
+    let block = &CMD_SIGN_USEROP_FORCED_SRC[start..end];
     for required in [
-        "!include_init_code && !register_slot",
-        "paymaster_and_data_hash == SHA256_EMPTY",
-        "cow_order.len > 0",
-        "safe_v1.len > 0",
-        "safe_v1_verified.is_some()",
-        "safe_exec_verified.is_some()",
-        "safe_exec_verified_check.is_some()",
-        "cow_order_verified.is_some()",
-        "cow_bind.via_safe",
+        "decode_flags(facts.flags)",
+        "facts.data_len == request.calldata.len()",
+        "facts.chain_id == request.chain_id",
+        "facts.target == request.target",
+        "facts.selector == request.calldata[..4]",
+        "!include_init_code",
+        "!register_slot",
+        "account_index == request.account_index",
+        "slot_index == request.slot_index",
+        "facts.paymaster_and_data_hash == SHA256_EMPTY",
+        "facts.cow_order_len == 0",
+        "facts.safe_v1_len == 0",
+        "facts.erc7730_header == Some([0, 0])",
+        "facts.erc7730_len == 0",
+        "!protected_selector",
+        "!protected_target",
     ] {
         assert!(block.contains(required), "missing forced exclusion: {required}");
     }
-    assert!(CMD_SIGN_USEROP_FORCED_SRC.contains("protected_selector"));
-    assert!(CMD_SIGN_USEROP_FORCED_SRC.contains("protected_target"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("wire: &snap[..total_len]"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("cmd_sign_userop_forced::classify(&request)"));
+    for collapsed in [
+        "single_steady_type2",
+        "paymaster_empty",
+        "safe_or_cow_present",
+    ] {
+        assert!(
+            !CMD_SIGN_USEROP_SRC.contains(collapsed),
+            "caller must not collapse forced exclusion into {collapsed}"
+        );
+    }
 }
 
 #[test]
 fn forced_exact_membership_exclusions_are_fatal_before_candidate_proof() {
     let membership = CMD_SIGN_USEROP_FORCED_SRC
-        .find("if !parsed.contains(chain_id, target, &selector)")
+        .find("if !parsed.contains(facts.chain_id, &facts.target, &facts.selector)")
         .expect("exact-F membership gate");
     let proof = CMD_SIGN_USEROP_FORCED_SRC[membership..]
         .find("let mut verdict = crate::fi::FAIL_SENTINEL;")
@@ -1893,7 +1920,7 @@ fn forced_exact_membership_exclusions_are_fatal_before_candidate_proof() {
             .matches("return ForcedRoute::ContinueOrdinary;")
             .count(),
         1,
-        "only a negative exact-F lookup may resume ordinary signing"
+        "only a wire-derived negative exact-F lookup may resume ordinary signing"
     );
 }
 
@@ -1985,7 +2012,7 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
     let body = &CMD_SIGN_USEROP_FORCED_SRC[start..];
     let mut cursor = 0;
     for stage in [
-        "prove_eligibility(",
+        "prove_flow_eligibility(",
         "ForcedAttemptPhase::Armed",
         "read_counter_snapshot(",
         "compute_type2_digest(",
@@ -1993,7 +2020,7 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
         "capacity_receipt(",
         "ensure_slot_key(",
         "forced_rate_preflight(",
-        "ForcedCandidate::new(",
+        "ForcedCandidate::bind(",
         "collect_consent(",
         "prove_candidate_eligibility(",
         "read_counter_snapshot(",
@@ -2020,7 +2047,7 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
         "the forced flow must reserve exactly one durable use"
     );
     let tally = body
-        .find("if unsafe { commit_durable_tally(")
+        .find("let mut tally_verdict = crate::fi::FAIL_SENTINEL;")
         .expect("pre-key durable tally");
     let signer = body
         .find("c10_sign_verified_forced_with_progress(")
@@ -2029,6 +2056,9 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
     let tally_arm = &body[tally..signer];
     assert!(tally_arm.contains("zeroize_sensitive_state();"));
     assert!(tally_arm.contains("CFI_PREKEY_EXPECTED"));
+    assert!(tally_arm.contains("capacity_check,"));
+    assert!(tally_arm.contains("&request_digest_check,"));
+    assert!(tally_arm.contains("CFI_TALLY_COMMIT_EXPECTED"));
     assert!(tally_arm.matches("deadline_expired()").count() >= 1);
 
     let outer_verify = body[signer..]
@@ -2047,6 +2077,159 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
         .expect("outer verification call");
     let outer_cache_gate = &body[outer_verify..first_outer_verify];
     assert!(outer_cache_gate.contains("zeroize_sensitive_state();"));
+}
+
+#[test]
+fn forced_tally_final_proof_follows_every_page123_mutation() {
+    let start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("unsafe fn commit_durable_tally(")
+        .expect("durable tally helper");
+    let end = CMD_SIGN_USEROP_FORCED_SRC[start..]
+        .find("unsafe fn publish_forced_response(")
+        .map(|offset| start + offset)
+        .expect("durable tally helper boundary");
+    let body = &CMD_SIGN_USEROP_FORCED_SRC[start..end];
+
+    let reserve = body
+        .find("userop_sigs_bump(slot_key, next_tally)")
+        .expect("USEROP_SIGS reservation");
+    let promote = body
+        .find("offchain_count_promote_to(slot_key, counters.new_offchain_count)")
+        .expect("COUNT promotion");
+    let userop = body
+        .find("last_userop_count_set(slot_key, counters.new_offchain_count)")
+        .expect("USEROP publication");
+    let effective = body
+        .find("effective_offchain_count(local, last)")
+        .expect("effective count recheck");
+    let final_a = body
+        .find("let tally_a = unsafe { crate::offchain_state::userop_sigs_read(slot_key) };")
+        .expect("final tally read A");
+    let final_b = body
+        .find("let tally_b = unsafe { crate::offchain_state::userop_sigs_read(slot_key) };")
+        .expect("final tally read B");
+    let proof = body
+        .find("forced_final_tally_pair_proof(next_tally, tally_a, tally_b)")
+        .expect("final tally equality proof");
+    let publish = body
+        .find("core::ptr::write_volatile(verdict_out, crate::fi::OK_SENTINEL)")
+        .expect("fail-in verdict publication");
+
+    assert!(reserve < final_a);
+    assert!(promote < final_a);
+    assert!(userop < final_a);
+    assert!(effective < final_a);
+    assert!(final_a < final_b && final_b < proof && proof < publish);
+    assert_eq!(
+        body.matches("crate::offchain_state::userop_sigs_read(slot_key)")
+            .count(),
+        2,
+        "the authoritative post-mutation proof must contain exactly two tally reads"
+    );
+    assert!(body[final_a..].contains("CFI_TALLY_FINAL_READ_A"));
+    assert!(body[final_b..].contains("CFI_TALLY_FINAL_READ_B"));
+    assert!(body[proof..].contains("CFI_TALLY_PREPUBLISH_EXPECTED"));
+    assert!(!body[final_a..].contains("userop_sigs_bump("));
+    assert!(!body[final_a..].contains("offchain_count_promote_to("));
+    assert!(!body[final_a..].contains("last_userop_count_set("));
+
+    let consume = body
+        .find("consume_capacity_receipt_once(")
+        .expect("fresh capacity receipt consumption");
+    assert!(consume < reserve);
+
+    let consume_start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("fn consume_capacity_receipt_once(")
+        .expect("capacity consumption helper");
+    let consume_end = CMD_SIGN_USEROP_FORCED_SRC[consume_start..]
+        .find("unsafe fn commit_durable_tally(")
+        .map(|offset| consume_start + offset)
+        .expect("capacity consumption helper boundary");
+    let consume_body = &CMD_SIGN_USEROP_FORCED_SRC[consume_start..consume_end];
+    assert!(consume_body.contains("*capacity.request_digest()"));
+    assert!(consume_body.contains("capacity.slot_present()"));
+    assert!(consume_body.contains("!core::hint::black_box(capacity.requires_compaction())"));
+    assert!(consume_body.contains("capacity.blank_qws()"));
+    assert!(consume_body.contains("FORCED_CAPACITY_REQUIRED_APPENDS"));
+    assert!(consume_body.contains("cfi.bump(CFI_TALLY_CAPACITY_CONSUMED)"));
+
+    let receipt = OFFCHAIN_STATE_SRC
+        .find("pub struct ForcedCapacityReceipt")
+        .expect("forced capacity receipt");
+    let derive_start = OFFCHAIN_STATE_SRC[..receipt]
+        .rfind("#[derive(")
+        .expect("forced capacity receipt derive");
+    let derive = &OFFCHAIN_STATE_SRC[derive_start..receipt];
+    assert!(!derive.contains("Clone"));
+    assert!(!derive.contains("Copy"));
+}
+
+#[test]
+fn forced_tally_commit_cfi_rejects_every_omitted_stage_subset() {
+    fn source_u32_const(name: &str) -> u32 {
+        let prefix = format!("const {name}: u32 = 0x");
+        let start = CMD_SIGN_USEROP_FORCED_SRC
+            .find(&prefix)
+            .unwrap_or_else(|| panic!("missing forced tally CFI constant {name}"))
+            + prefix.len();
+        let end = CMD_SIGN_USEROP_FORCED_SRC[start..]
+            .find(';')
+            .map(|offset| start + offset)
+            .expect("CFI constant terminator");
+        let hex = CMD_SIGN_USEROP_FORCED_SRC[start..end].replace('_', "");
+        u32::from_str_radix(&hex, 16).expect("hex CFI constant")
+    }
+
+    let names = [
+        "CFI_TALLY_CAPACITY_CONSUMED",
+        "CFI_TALLY_FINAL_READ_A",
+        "CFI_TALLY_FINAL_READ_B",
+        "CFI_TALLY_FINAL_MATCH",
+        "CFI_TALLY_VERDICT_PUBLISHED",
+    ];
+    let stages = names.map(source_u32_const);
+    let expected = stages.iter().fold(
+        crate::fi::CfiCounter::INIT_VALUE,
+        |accum, stage| accum.wrapping_add(*stage),
+    );
+
+    let expected_start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("const CFI_TALLY_COMMIT_EXPECTED")
+        .expect("tally commit expected constant");
+    let expected_end = CMD_SIGN_USEROP_FORCED_SRC[expected_start..]
+        .find(");")
+        .map(|offset| expected_start + offset)
+        .expect("tally commit expected boundary");
+    let expected_source = &CMD_SIGN_USEROP_FORCED_SRC[expected_start..expected_end];
+    for name in names {
+        assert!(
+            expected_source.contains(name),
+            "production tally CFI expected value omitted {name}"
+        );
+    }
+
+    let mut complete = crate::fi::CfiCounter::new();
+    for stage in stages {
+        complete.bump(stage);
+    }
+    assert_eq!(
+        complete.check_into_sentinel(expected),
+        crate::fi::OK_SENTINEL
+    );
+
+    for omitted in 1usize..(1usize << stages.len()) {
+        let mut cfi = crate::fi::CfiCounter::new();
+        for (index, stage) in stages.iter().enumerate() {
+            if omitted & (1usize << index) == 0 {
+                cfi.bump(*stage);
+            }
+        }
+        assert_eq!(
+            cfi.check_into_sentinel(expected),
+            crate::fi::FAIL_SENTINEL,
+            "omitted tally-CFI subset {omitted:#07b} collided with the complete transcript"
+        );
+    }
 }
 
 #[test]

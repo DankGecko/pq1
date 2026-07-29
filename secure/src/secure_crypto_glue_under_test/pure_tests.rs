@@ -13,10 +13,11 @@ use sha3::Keccak256;
 use crate::db_roots::{ERC20_DB_ROOT, NAMES_DB_ROOT, SELECTOR_DB_ROOT};
 
 use super::offchain_state::{
-    clamp_offchain_count, forced_capacity_receipt_from_snapshot, last_userop_count_read,
-    last_userop_count_set, may_create_distinct_slot, offchain_count_bump,
-    offchain_count_is_registered, offchain_count_promote_to, offchain_count_read,
-    offchain_count_register_slot, slot_key_compute, ForcedCapacityError, ForcedCapacitySnapshot,
+    clamp_offchain_count, forced_capacity_receipt_from_snapshot,
+    forced_final_tally_pair_proof, last_userop_count_read, last_userop_count_set,
+    may_create_distinct_slot, offchain_count_bump, offchain_count_is_registered,
+    offchain_count_promote_to, offchain_count_read, offchain_count_register_slot,
+    slot_key_compute, ForcedCapacityError, ForcedCapacitySnapshot,
     FORCED_CAPACITY_REQUIRED_APPENDS, MAX_DISTINCT_SLOTS, OFFCHAIN_CAPACITY_QWS,
     OFFCHAIN_COUNT_CEILING,
 };
@@ -1107,16 +1108,43 @@ fn forced_capacity_constants_pin_two_appends_and_page_geometry() {
 }
 
 #[test]
-fn forced_capacity_distinct_slot_boundary_is_exact() {
+fn forced_tally_pair_proof_accepts_only_two_exact_final_reads() {
+    let expected = 41u64;
+    assert_eq!(
+        forced_final_tally_pair_proof(expected, expected, expected),
+        crate::fi::OK_SENTINEL
+    );
+
+    for (first, second) in [
+        (expected - 1, expected - 1),
+        (0, 0),
+        (expected, expected - 1),
+        (expected - 1, expected),
+        (expected + 1, expected + 1),
+        (u64::MAX, u64::MAX),
+    ] {
+        assert_eq!(
+            forced_final_tally_pair_proof(expected, first, second),
+            crate::fi::FAIL_SENTINEL,
+            "accepted non-authoritative final tally pair ({first}, {second})"
+        );
+    }
+}
+
+#[test]
+fn forced_capacity_requires_registered_slot_and_valid_distinct_projection() {
     let key = [0x11; 8];
     let request = [0x22; 32];
     let at_127 = capacity_snapshot(MAX_DISTINCT_SLOTS - 1, 384, 128, false);
-    assert!(forced_capacity_receipt_from_snapshot(&key, &request, at_127).is_ok());
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, at_127),
+        Err(ForcedCapacityError::SlotUnregistered)
+    );
 
     let new_at_128 = capacity_snapshot(MAX_DISTINCT_SLOTS, 384, 128, false);
     assert_eq!(
         forced_capacity_receipt_from_snapshot(&key, &request, new_at_128),
-        Err(ForcedCapacityError::DistinctSlotCap)
+        Err(ForcedCapacityError::SlotUnregistered)
     );
     let present_at_128 = capacity_snapshot(MAX_DISTINCT_SLOTS, 384, 128, true);
     assert!(forced_capacity_receipt_from_snapshot(&key, &request, present_at_128).is_ok());
@@ -1133,10 +1161,11 @@ fn forced_capacity_projected_qw_boundary_is_exact() {
     let key = [0x33; 8];
     let request = [0x44; 32];
     let full_but_compactable = capacity_snapshot(1, 510, 0, true);
-    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, full_but_compactable)
-        .expect("510 projected QWs leave exactly two commit QWs");
-    assert!(receipt.requires_compaction());
-    assert_eq!(receipt.projected_live_qws(), 510);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, full_but_compactable),
+        Err(ForcedCapacityError::CompactionRequired),
+        "forced signing must not enter the single-page erase/replay compactor"
+    );
 
     let one_qw_short = capacity_snapshot(1, 511, 1, true);
     assert_eq!(
@@ -1144,10 +1173,18 @@ fn forced_capacity_projected_qw_boundary_is_exact() {
         Err(ForcedCapacityError::InsufficientCapacity)
     );
 
+    let one_blank_but_compactable = capacity_snapshot(1, 3, 1, true);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, one_blank_but_compactable),
+        Err(ForcedCapacityError::CompactionRequired),
+        "the fixed two-append reservation requires two already-erased QWs"
+    );
+
     let direct = capacity_snapshot(1, 3, 2, true);
     let direct_receipt = forced_capacity_receipt_from_snapshot(&key, &request, direct)
         .expect("two blank QWs admit the direct path");
     assert!(!direct_receipt.requires_compaction());
+    assert_eq!(direct_receipt.blank_qws(), 2);
 }
 
 #[test]
@@ -1180,9 +1217,12 @@ fn forced_capacity_mock_snapshot_is_read_only_and_slot_bound() {
     let before =
         unsafe { super::offchain_state::forced_capacity_snapshot(&key) }.expect("mock projection");
     assert!(!before.slot_present);
-    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, before)
-        .expect("fresh mock has capacity");
-    assert!(!receipt.slot_present());
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, before),
+        Err(ForcedCapacityError::SlotUnregistered),
+        "forced Type-2 must not create slot registration"
+    );
+    assert!(!unsafe { offchain_count_is_registered(&key) });
 
     unsafe { offchain_count_register_slot(&key).expect("register mock slot") };
     let after = unsafe { super::offchain_state::forced_capacity_snapshot(&key) }
@@ -1190,6 +1230,9 @@ fn forced_capacity_mock_snapshot_is_read_only_and_slot_bound() {
     assert!(after.slot_present);
     assert_eq!(after.distinct_live, before.distinct_live + 1);
     assert!(unsafe { offchain_count_is_registered(&key) });
+    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, after)
+        .expect("registered mock slot has capacity");
+    assert!(receipt.slot_present());
 }
 
 #[test]
@@ -1230,6 +1273,7 @@ fn forced_capacity_preflight_publishes_distinct_verdict_and_cfi() {
     let _guard = lock_offchain_mock();
     let key = slot_key_compute(222, 223, 224);
     let request = [0x6c; 32];
+    unsafe { offchain_count_register_slot(&key).expect("register forced Type-2 slot") };
     let mut verdict = crate::fi::FAIL_SENTINEL;
     let mut cfi = crate::fi::CfiCounter::new();
     let receipt = unsafe {
@@ -1247,6 +1291,7 @@ fn forced_capacity_preflight_publishes_distinct_verdict_and_cfi() {
         crate::fi::OK_SENTINEL
     );
     assert_eq!(receipt.request_digest(), &request);
+    assert!(receipt.slot_present());
 }
 
 #[test]

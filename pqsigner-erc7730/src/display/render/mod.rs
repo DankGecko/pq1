@@ -1108,6 +1108,18 @@ fn render_erc7730_eip712_pages_inner_into<'ir>(
     }
     let body = head_bounded_body(encoded_data, format.static_head_words)?;
     formatters::validate_eip712_integer_words(&descriptor.ir, &format, body)?;
+    // Exact, descriptor-enrolled signed-word predicates are evaluated before
+    // the trusted intent. EIP-712 guards are restricted by deep IR validation
+    // to one top-level encodeData word, so the static body is both the head and
+    // complete value source.
+    formatters::validate_contract_word_guards(
+        &descriptor.ir,
+        &format,
+        body,
+        body,
+        formatters::ContractCalldataMode::Standard,
+        &container,
+    )?;
 
     let mut interpolation = InterpolationState::from_format(&descriptor.ir, &format)?;
     if interpolation.is_enrolled() {
@@ -2056,6 +2068,11 @@ fn render_nested_subfields(
         if sf_params.exact_empty_bytes {
             return Err(RenderErr::Reject("7730 exact-empty nested"));
         }
+        // Word guards are top-level EIP-712 predicates. Re-parse and reject at
+        // the publication boundary as a local belt behind deep IR validation.
+        if sf_params.word_guard.is_some() {
+            return Err(RenderErr::Reject("7730 nested word guard"));
+        }
         // This phase authenticates direct top-level EIP-712 member words only.
         // A marker or terminal-kind smuggled into a nested sub-field must not
         // reach ordinary Raw dispatch and display the hash as though it were
@@ -2733,6 +2750,47 @@ mod unknown_chain_fee_tests {
         assert_eq!(trimmed(&pages.buf[1][2]), b"Tip/gwei:");
         assert_eq!(trimmed(&pages.buf[1][3]), b"0.000000002");
         assert_eq!(trimmed(&pages.buf[2][0]), b"Max total/ETH:");
+    }
+
+    #[test]
+    fn known_chain_large_exact_fee_is_not_narrowed_to_the_legacy_layout() {
+        let raw = 123_456_789_012u128 * 1_000_000_000;
+        let mut tx = unknown_fee_tx(raw, 0, 21_000);
+        tx.chain_id = 1;
+        assert!(
+            !crate::display::primitives::legacy_fee_rows_are_exactly_renderable(
+                &tx.max_fee_per_gas,
+                &tx.max_priority_fee_per_gas,
+                tx.gas_limit,
+                tx.chain_id,
+            ),
+            "fixture must exceed the compact legacy max-fee row"
+        );
+
+        let mut pages = Pages::with_len(0);
+        append_envelope_pages(&mut pages, &tx)
+            .expect("the selected ERC-7730 painter has an exact full-row representation");
+        assert_eq!(trimmed(&pages.buf[1][1]), b"123456789012");
+    }
+
+    #[test]
+    fn known_chain_large_exact_gas_is_not_narrowed_to_the_legacy_layout() {
+        let mut tx = unknown_fee_tx(0, 0, 1_000_000_000);
+        tx.chain_id = 1;
+        assert!(
+            !crate::display::primitives::legacy_fee_rows_are_exactly_renderable(
+                &tx.max_fee_per_gas,
+                &tx.max_priority_fee_per_gas,
+                tx.gas_limit,
+                tx.chain_id,
+            ),
+            "fixture must exceed the compact legacy gas row"
+        );
+
+        let mut pages = Pages::with_len(0);
+        append_envelope_pages(&mut pages, &tx)
+            .expect("the selected ERC-7730 painter has an exact full-row representation");
+        assert_eq!(trimmed(&pages.buf[2][3]), b"Gas:1000000000");
     }
 
     #[test]

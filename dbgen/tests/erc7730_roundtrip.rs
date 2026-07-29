@@ -101,12 +101,12 @@ fn build_e2e() -> Erc7730BuildResult {
 /// Exact combined catalogue cardinality for the current generated receipt.
 /// Protocol-specific assertions below pin their own deployment/route subsets;
 /// the accepted-family inventory independently accounts for every source.
-const EXPECTED_REGISTRY_LEAVES: usize = 400;
+const EXPECTED_REGISTRY_LEAVES: usize = 365;
 
 /// EIP-712 admission does not add contract selectors to the independent
 /// known-call inventory. Keep its exact cardinality pinned separately from the
 /// Merkle-leaf count.
-const EXPECTED_KNOWN_CALL_TUPLES: usize = 4_580;
+const EXPECTED_KNOWN_CALL_TUPLES: usize = 4_615;
 
 #[derive(Clone, Copy)]
 enum OneinchExpectedBinding {
@@ -1907,11 +1907,11 @@ fn registry_oneinch_v6_cancellation_controls_admit_only_verified_deployments() {
     assert_eq!(catalogue.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(catalogue.known_call_set_hash),
-        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
+        "50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&catalogue.known_calls_bloom)),
-        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
+        "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"
     );
 }
 
@@ -2679,11 +2679,11 @@ fn registry_midas_mtbill_redemption_admits_only_four_token_output_routes() {
     assert_eq!(catalogue.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(catalogue.known_call_set_hash),
-        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
+        "50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&catalogue.known_calls_bloom)),
-        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
+        "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"
     );
 }
 
@@ -2845,7 +2845,10 @@ fn registry_morpho_blue_assets_and_exact_empty_callbacks_are_bound_on_both_chain
                 let callback_params =
                     parse_params(&ir, callback.param_off).expect("Morpho callback params parse");
                 assert_eq!(callback_params.visibility, Visibility::Always);
-                assert_eq!(callback_params.terminal_kind, Some(TerminalKind::DynamicBytes));
+                assert_eq!(
+                    callback_params.terminal_kind,
+                    Some(TerminalKind::DynamicBytes)
+                );
                 assert_eq!(callback_params.dynamic_kind, Some(DYNAMIC_KIND_BYTES));
                 assert!(
                     callback_params.exact_empty_bytes,
@@ -2964,12 +2967,12 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829",
+        "50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6",
         "permit refusal must not change the declared known-call tuple set"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9",
+        "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d",
         "permit refusal must not change the known-call Bloom"
     );
 }
@@ -3104,8 +3107,8 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.root),
-        // Re-derived after bounded multi-tail formats were admitted.
-        "0775c1c31572394e9fe9240a957aa897c0ae984e64f62567032a98fb1cf83d70"
+        // Re-derived after the bounded Phase-4 semantic curations.
+        "c3f20eca651c3d147dddcc48ca27a5ae464839e84181ca3849eb501681d6a08b"
     );
 }
 
@@ -3216,11 +3219,11 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
+        "50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
+        "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"
     );
 }
 
@@ -3436,11 +3439,11 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
+        "50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
+        "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"
     );
 }
 
@@ -3544,11 +3547,11 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
+        "50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
+        "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"
     );
 }
 
@@ -4056,11 +4059,11 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
+        "50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
+        "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"
     );
 }
 
@@ -4329,8 +4332,20 @@ fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
             1,
             [0xb4, 0x60, 0xaf, 0x94],
         ),
+        (
+            "calldata-EpochRewardsVault.json",
+            146,
+            [0x6e, 0x55, 0x3f, 0x65],
+        ),
+        (
+            "calldata-EpochRewardsVault.json",
+            146,
+            [0xb4, 0x60, 0xaf, 0x94],
+        ),
         ("calldata-MintAndRedeem.json", 1, [0xa6, 0x47, 0xe8, 0xec]),
         ("calldata-MintAndRedeem.json", 1, [0xea, 0x20, 0x92, 0xf3]),
+        ("calldata-MintAndRedeem.json", 146, [0xa6, 0x47, 0xe8, 0xec]),
+        ("calldata-MintAndRedeem.json", 146, [0xea, 0x20, 0x92, 0xf3]),
         ("calldata-wstETH.json", 1, [0xde, 0x0e, 0x9a, 0x3e]),
         ("calldata-wstETH.json", 1, [0xea, 0x59, 0x8c, 0xb0]),
     ]
@@ -4342,7 +4357,7 @@ fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
         "a registry update changed the explicitly reviewed scalar-interpolation set"
     );
     assert_eq!(
-        leaf_format_count, 6,
+        leaf_format_count, 10,
         "only covered deployment-static token identities may retain interpolation"
     );
     assert_eq!(
@@ -4351,69 +4366,34 @@ fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
     );
     assert_eq!(
         candidate_deployment_count - leaf_format_count,
-        17,
+        13,
         "deployment-dynamic or metadata-uncovered candidates must omit the tag"
     );
 }
 
 #[test]
-fn eip712_string_preimages_admit_only_the_five_exact_formats() {
-    #[derive(Clone, Copy)]
-    struct EnrolledStringFormat {
-        source: &'static str,
-        signature: &'static str,
-        deployments: &'static [(u64, &'static str)],
-        signed_word_ordinals: &'static [u16],
-    }
-
-    const FLYING_TULIP_DEPLOYMENTS: &[(u64, &str)] = &[
-        (1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8"),
-        (146, "109ae72778a0260571b9767477204f1ce41fbdff"),
-    ];
-    const LENS_DEPLOYMENT: &[(u64, &str)] =
-        &[(137, "db46d1dc155634fbc732f92e853b10b288ad5a1d")];
-    const RARIBLE_721_DEPLOYMENT: &[(u64, &str)] =
-        &[(1, "c9154424b823b10579895ccbe442d41b9abd96ed")];
-    const RARIBLE_1155_DEPLOYMENT: &[(u64, &str)] =
-        &[(1, "b66a603f4cfe17e3d27b87a8bfcad319856518b8")];
-
-    let enrolled = [
-        EnrolledStringFormat {
-            source: "flyingtulip/eip712-SpotOrderCancel.json",
-            signature: "CancelOrder(string orderId)",
-            deployments: FLYING_TULIP_DEPLOYMENTS,
-            signed_word_ordinals: &[0],
-        },
-        EnrolledStringFormat {
-            source: "flyingtulip/eip712-SpotOrderCancel.json",
-            signature:
-                "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)",
-            deployments: FLYING_TULIP_DEPLOYMENTS,
-            signed_word_ordinals: &[1, 2],
-        },
-        EnrolledStringFormat {
-            source: "lens/eip712-lens-lenshub.json",
-            signature:
-                "Quote(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256 nonce,uint256 deadline)",
-            deployments: LENS_DEPLOYMENT,
-            signed_word_ordinals: &[1],
-        },
-        EnrolledStringFormat {
-            source: "rarible/eip712-rarible-erc-721.json",
-            signature:
-                "Mint721(uint256 tokenId,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
-            deployments: RARIBLE_721_DEPLOYMENT,
-            signed_word_ordinals: &[1],
-        },
-        EnrolledStringFormat {
-            source: "rarible/eip712-rarible-erc-1155.json",
-            signature:
-                "Mint1155(uint256 tokenId,uint256 supply,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
-            deployments: RARIBLE_1155_DEPLOYMENT,
-            signed_word_ordinals: &[2],
-        },
-    ];
+fn production_catalogue_has_no_eip712_string_preimage_authority() {
     let refused = [
+        (
+            "flyingtulip/eip712-SpotOrderCancel.json",
+            "CancelOrder(string orderId)",
+        ),
+        (
+            "flyingtulip/eip712-SpotOrderCancel.json",
+            "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)",
+        ),
+        (
+            "lens/eip712-lens-lenshub.json",
+            "Quote(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256 nonce,uint256 deadline)",
+        ),
+        (
+            "rarible/eip712-rarible-erc-721.json",
+            "Mint721(uint256 tokenId,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
+        ),
+        (
+            "rarible/eip712-rarible-erc-1155.json",
+            "Mint1155(uint256 tokenId,uint256 supply,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
+        ),
         (
             "hyperliquid/eip712-withdraw.json",
             "HyperliquidTransaction:Withdraw(string hyperliquidChain,string destination,string amount,uint64 time)",
@@ -4461,10 +4441,9 @@ fn eip712_string_preimages_admit_only_the_five_exact_formats() {
             if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
                 continue;
             }
-            let descriptor: serde_json::Value = serde_json::from_slice(
-                &std::fs::read(&path).expect("read registry descriptor"),
-            )
-            .expect("parse registry descriptor");
+            let descriptor: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).expect("read registry descriptor"))
+                    .expect("parse registry descriptor");
             if !descriptor["context"]["eip712"].is_object() {
                 continue;
             }
@@ -4482,139 +4461,44 @@ fn eip712_string_preimages_admit_only_the_five_exact_formats() {
         }
     }
 
-    fn parse_address(address: &str) -> [u8; 20] {
-        hex::decode(address)
-            .expect("hex enrolled address")
-            .try_into()
-            .expect("enrolled address width")
-    }
-
-    fn assert_exact_string_markers(
-        ir: &Erc7730Ir<'_>,
-        format: FormatHeader<'_>,
-        signed_word_ordinals: &[u16],
-    ) {
-        assert_eq!(
-            usize::from(format.string_preimage_count),
-            signed_word_ordinals.len()
-        );
-        let mut marked = Vec::new();
+    fn assert_no_string_preimage_markers(ir: &Erc7730Ir<'_>, format: FormatHeader<'_>) {
+        assert_eq!(format.string_preimage_count, 0);
         for field in format.fields() {
-            let field = field.expect("enrolled string field parses");
-            let params = parse_params(ir, field.param_off).expect("enrolled string params parse");
-            let Some(evidence_ordinal) = params.eip712_string_preimage_ordinal else {
-                continue;
-            };
-            assert_eq!(FormatOp::try_from(field.format_op), Ok(FormatOp::Raw));
+            let field = field.expect("production field parses");
+            let params = parse_params(ir, field.param_off).expect("production params parse");
             assert_eq!(
-                params.terminal_kind,
-                Some(TerminalKind::Eip712StringHashWord)
+                params.eip712_string_preimage_ordinal, None,
+                "production field retained stale string-preimage authority"
             );
-            assert_eq!(params.visibility, Visibility::Always);
-            let path = ir
-                .path_bytes(field.path_off)
-                .expect("enrolled string path parses");
-            assert_eq!(
-                path.len(),
-                4,
-                "string preimage must bind one direct EIP-712 word"
-            );
-            assert_eq!(path[0], PathOp::RootStructured as u8);
-            assert_eq!(path[1], PathOp::FieldIdx as u8);
-            assert!(!path.contains(&(PathOp::FollowOffset as u8)));
-            marked.push((
-                evidence_ordinal,
-                u16::from_be_bytes([path[2], path[3]]),
-            ));
         }
-        let expected: Vec<_> = signed_word_ordinals
-            .iter()
-            .enumerate()
-            .map(|(evidence_ordinal, signed_word_ordinal)| {
-                (evidence_ordinal as u8, *signed_word_ordinal)
-            })
-            .collect();
-        assert_eq!(marked, expected);
     }
 
     let root = workspace_root();
     let registry_root = root.join("secure/data/erc7730-registry/registry");
     let policy = root.join("secure/data/erc7730/policy.toml");
     let registry_parent = root.join("secure/data/erc7730-registry");
-    let (catalogue, skips) =
-        build_db_tolerant(&registry_root, &policy, Some(&registry_parent))
-            .expect("build registry corpus");
+    let (catalogue, skips) = build_db_tolerant(&registry_root, &policy, Some(&registry_parent))
+        .expect("build registry corpus");
 
     // Pin the complete source inventory so a newly vendored EIP-712 string
-    // cannot silently escape both the enrolled and explicitly refused sets.
-    let expected_inventory: BTreeSet<_> = enrolled
+    // cannot silently escape the explicit refusal set.
+    let expected_inventory: BTreeSet<_> = refused
         .iter()
-        .map(|format| (format.source.to_string(), format.signature.to_string()))
-        .chain(
-            refused
-                .iter()
-                .map(|(source, signature)| (source.to_string(), signature.to_string())),
-        )
+        .map(|(source, signature)| (source.to_string(), signature.to_string()))
         .collect();
     let mut declared_inventory = BTreeSet::new();
-    collect_declared_eip712_strings(
-        &registry_root,
-        &registry_root,
-        &mut declared_inventory,
-    );
+    collect_declared_eip712_strings(&registry_root, &registry_root, &mut declared_inventory);
     assert_eq!(
         declared_inventory, expected_inventory,
-        "every vendored EIP-712 string format must be exactly enrolled or explicitly refused"
+        "every vendored EIP-712 string format must be explicitly refused"
     );
 
-    let enrolled_identities: BTreeSet<_> = enrolled
-        .iter()
-        .map(|format| (format.source, keccak256(format.signature.as_bytes())))
-        .collect();
-    let mut expected_instances = BTreeSet::new();
-    for format in &enrolled {
-        let type_hash = keccak256(format.signature.as_bytes());
-        for &(chain_id, address) in format.deployments {
-            expected_instances.insert((
-                format.source.to_string(),
-                chain_id,
-                parse_address(address),
-                type_hash,
-            ));
-        }
-    }
-
-    let mut actual_instances = BTreeSet::new();
     for entry in &catalogue.entries {
-        let source = entry
-            .source
-            .strip_prefix(&registry_root)
-            .expect("emitted descriptor remains below registry root")
-            .to_string_lossy()
-            .replace('\\', "/");
-        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("enrolled EIP-712 leaf parses");
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("production leaf parses");
         for format in ir.format_iter().map(Result::unwrap) {
-            if !enrolled_identities.contains(&(source.as_str(), format.type_hash)) {
-                continue;
-            }
-            let enrollment = enrolled
-                .iter()
-                .find(|candidate| {
-                    candidate.source == source
-                        && keccak256(candidate.signature.as_bytes()) == format.type_hash
-                })
-                .expect("emitted string format has exact enrollment");
-            assert_exact_string_markers(&ir, format, enrollment.signed_word_ordinals);
-            actual_instances.insert((
-                source.clone(),
-                entry.chain_id,
-                entry.contract,
-                format.type_hash,
-            ));
+            assert_no_string_preimage_markers(&ir, format);
         }
     }
-    assert_eq!(actual_instances, expected_instances);
-    assert_eq!(actual_instances.len(), 7, "five formats span seven exact deployments");
 
     for (source, signature) in refused {
         let type_hash = keccak256(signature.as_bytes());
@@ -4622,17 +4506,21 @@ fn eip712_string_preimages_admit_only_the_five_exact_formats() {
             !catalogue.entries.iter().any(|entry| {
                 entry.source.ends_with(source)
                     && Erc7730Ir::parse(&entry.ir_bytes).is_ok_and(|ir| {
-                        ir.format_iter().any(|format| {
-                            format.is_ok_and(|format| format.type_hash == type_hash)
-                        })
+                        ir.format_iter()
+                            .any(|format| format.is_ok_and(|format| format.type_hash == type_hash))
                     })
             }),
             "unenrolled EIP-712 string format became clear-signable: {source} :: {signature}"
         );
         assert!(
-            skips
-                .iter()
-                .any(|skip| skip.source.ends_with(source) && skip.reason.contains(signature)),
+            skips.iter().any(|skip| {
+                skip.source.ends_with(source)
+                    && (skip.reason.contains(signature)
+                        || skip.reason.contains(
+                            "zero EIP-712 formats after authenticated PQSigner \
+                                 deploymentFormats/refusalOnlyFormats curation",
+                        ))
+            }),
             "missing exact skip receipt for {source} :: {signature}"
         );
     }
@@ -4670,7 +4558,7 @@ fn registry_declared_but_uncompiled_call_is_still_known() {
 }
 
 #[test]
-fn registry_1inch_native_currency_list_is_authenticated_in_order() {
+fn registry_1inch_clipper_authenticates_only_its_zero_native_sentinel() {
     let catalogue = build_registry();
     let entry = catalogue
         .entries
@@ -4690,11 +4578,7 @@ fn registry_1inch_native_currency_list_is_authenticated_in_order() {
         .find(|format| format.selector == selector)
         .expect("clipperSwap format survives");
 
-    let expected = {
-        let mut addresses = [0u8; 40];
-        addresses[..20].fill(0xEE);
-        addresses
-    };
+    let expected = [0u8; 20];
     let token_amounts: Vec<_> = format
         .fields()
         .map(Result::unwrap)
@@ -4706,7 +4590,7 @@ fn registry_1inch_native_currency_list_is_authenticated_in_order() {
         assert_eq!(
             params.native_currency_addresses,
             Some(&expected[..]),
-            "{} must authenticate [0xEeee…, 0x0] in descriptor order",
+            "{} must authenticate only address zero for deployed ClipperRouter semantics",
             String::from_utf8_lossy(field.label),
         );
     }
@@ -4733,8 +4617,8 @@ fn registry_flying_tulip_nft_collections_expand_injectively() {
         .collect();
     assert_eq!(
         entries.len(),
-        7,
-        "three real descriptors expand to seven deployments"
+        6,
+        "three real descriptors expand to six deployments"
     );
 
     let mut format_count = 0usize;
@@ -4763,10 +4647,15 @@ fn registry_flying_tulip_nft_collections_expand_injectively() {
         }
     }
     assert_eq!(
-        format_count, 15,
-        "the twelve NFT formats plus three operator-approval formats expand"
+        format_count, 13,
+        "six pFT NFT, three marketplace, and four PutManager formats expand"
     );
-    assert_eq!(nft_field_count, 12);
+    assert_eq!(
+        nft_field_count, 6,
+        "only pFT approve and marketplace listing IDs are collection-authenticated; \
+         PutManager positions intentionally render as raw IDs because one descriptor spans \
+         two pFT collections"
+    );
 }
 
 #[test]
@@ -4844,8 +4733,8 @@ fn registry_flying_tulip_pft_nft_admits_only_injective_operator_approval() {
         assert_eq!(operator_params.terminal_kind, Some(TerminalKind::Address));
         assert_eq!(
             operator_params.addr_types,
-            Some(0x04),
-            "operator rendering must remain contract-restricted"
+            Some(0x07),
+            "operator rendering must admit wallet, EOA, and contract address roles"
         );
 
         let rights = &fields[1];
@@ -5260,8 +5149,7 @@ fn registry_runtime_dead_opaque_bytes_are_omitted_but_stay_known() {
     );
     let mut morpho_blue = [0u8; 20];
     morpho_blue.copy_from_slice(
-        &hex::decode("bbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb")
-            .expect("Morpho Blue address"),
+        &hex::decode("bbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb").expect("Morpho Blue address"),
     );
     let morpho_empty_selectors: BTreeSet<[u8; 4]> = [
         "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
@@ -5731,10 +5619,12 @@ fn successful_stub_output(output: Output) -> Vec<u8> {
 
 /// The Python companion stub at `tools/companion-stub/erc7730_trailer.py`
 /// must produce byte-for-byte bundles that the on-device parser accepts. The
-/// current LBTC deployments each carry BOTH a Contract leaf and an EIP-712
-/// `NetworkFeeAuthorization` leaf, so a first `(chain, contract)` match is
-/// provably wrong. Exact context + full authenticated-IR type-hash lookup must
-/// select the typed leaf, while the no-flag default remains Contract-only.
+/// The evidenced mainnet LBTC deployment carries BOTH a Contract leaf and an
+/// EIP-712 `feeApproval` leaf, so a first `(chain, contract)` match is provably
+/// wrong. Exact context + full authenticated-IR type-hash lookup must select
+/// the typed leaf, while the no-flag default remains Contract-only. The
+/// quarantined Sepolia deployment must retain only its Contract leaf and reject
+/// typed lookup.
 #[test]
 fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
     let root_dir = workspace_root();
@@ -5758,10 +5648,7 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
     std::fs::write(&db_path, &result.blob).expect("write current companion fixture");
     let type_hash_hex = "40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725";
     let type_hash: [u8; 32] = hex::decode(type_hash_hex).unwrap().try_into().unwrap();
-    let deployments = [
-        (1u64, "8236a87084f8b84306f72007f36f2618a5634494"),
-        (11_155_111u64, "731efa688f3679688cf60a3993b8658138953ed6"),
-    ];
+    let deployments = [(1u64, "8236a87084f8b84306f72007f36f2618a5634494")];
 
     for (chain_id, address_hex) in deployments {
         let address_vec = hex::decode(address_hex).unwrap();
@@ -5809,6 +5696,42 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
             "selected authenticated IR must carry the complete requested type hash"
         );
     }
+
+    let sepolia_chain_id = 11_155_111u64;
+    let sepolia_address_hex = "731efa688f3679688cf60a3993b8658138953ed6";
+    let sepolia_address: [u8; 20] = hex::decode(sepolia_address_hex)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let sepolia_group: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| entry.chain_id == sepolia_chain_id && entry.contract == sepolia_address)
+        .collect();
+    assert_eq!(
+        sepolia_group.len(),
+        1,
+        "quarantined Sepolia feeApproval must emit no typed-data leaf"
+    );
+    assert_eq!(sepolia_group[0].context_kind, CTX_CONTRACT);
+    let zero_domain_arg = format!("0x{}", "00".repeat(32));
+    let type_hash_arg = format!("0x{type_hash_hex}");
+    let sepolia_output = run_companion_stub(
+        &stub_path,
+        &db_path,
+        sepolia_chain_id,
+        &format!("0x{sepolia_address_hex}"),
+        Some("eip712"),
+        Some(&zero_domain_arg),
+        Some(&type_hash_arg),
+    );
+    assert!(!sepolia_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&sepolia_output.stderr)
+            .contains("no EIP-712 descriptor for chain=11155111"),
+        "quarantined Sepolia typed lookup must fail closed: {}",
+        String::from_utf8_lossy(&sepolia_output.stderr)
+    );
 
     // Backward-compatible three-argument/default CLI lookup is deliberately
     // Contract-only; it must not return the adjacent EIP-712 leaf.

@@ -1,0 +1,236 @@
+{
+  "admitted_routes": {
+    "PutManager": [
+      "divest(uint256,uint256)",
+      "withdrawFT(uint256,uint256)"
+    ],
+    "pFT": [
+      "approve(address,uint256)",
+      "setApprovalForAll(address,bool)"
+    ],
+    "pFTMarketplace": [
+      "addListing(uint256,address,uint256,uint40)",
+      "editListing(uint256,address,uint256,uint256)",
+      "removeListing(uint256)"
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "161d9fdeb5acc166d384237069837f812ec875d3142ba6346d146e7e75506566"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "dca21260c51595a20ad0acbc31df38906cc60455ae5156d655d57a98c1835918"
+    },
+    {
+      "path": "compiler/marketplace.json",
+      "sha256": "0ebc1dbe06a281d16b5b8c8e33c00bc066aac9cb3e8276f8fc004e63d6d79f82"
+    },
+    {
+      "path": "compiler/pft.json",
+      "sha256": "a8737eeab8f9d65913f5947439d0abe997828a14e5416b15cd25b1b8a85708da"
+    },
+    {
+      "path": "compiler/putmanager-current.json",
+      "sha256": "8c82f15bb8f87900784350d80789a208968858df298cf7e5bd8108bddcfce941"
+    },
+    {
+      "path": "compiler/putmanager-ethereum.json",
+      "sha256": "206926eba73289823317611438e4709e9e39b59faa38ce2e8efac8350543c1f0"
+    },
+    {
+      "path": "explorer/marketplace.standard-input.json",
+      "sha256": "98ad8b20bbd42f91c4ad659f765bc86f513c9bd6bd67f715a8fef97674e15af0"
+    },
+    {
+      "path": "explorer/pft.standard-input.json",
+      "sha256": "15d1f2c57a355d7b62020593260e57d1e76c87fd5570d60e097062efddce62c7"
+    },
+    {
+      "path": "explorer/putmanager-current.standard-input.json",
+      "sha256": "181cd7e73062ec1a2de22bd18ab45a752aacecf2b4da10d70e3c724fcdccbbc7"
+    },
+    {
+      "path": "explorer/putmanager-ethereum.standard-input.json",
+      "sha256": "031211e5d572aae19d98b901ffcca8d39d1433601be3fc19077fd1bbc2daf3bd"
+    },
+    {
+      "path": "explorer/records.json",
+      "sha256": "61a20960d6c3878bde83a417084b0be6d4303e0ca6cc0380ae277ca869dccc9d"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-creation-transactions.json",
+      "sha256": "43d9ce9578339e8c3c460e5f5a22842a9746cc68084e8a87a656f28f8a4db6f5"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-identity-a.json",
+      "sha256": "5e497be2abd97167251b86ccd0a7f60920fbc3950b0ad5a4d8af3b69e1ce4242"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-identity-b.json",
+      "sha256": "0e4b4a308754428a8a31f89d9e54e4ab23a12bf54f4644e643614a1fa324b4e1"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-identity-c.json",
+      "sha256": "815a5279533e0e307d844047d84a362ff90d269ec391d2cde9a5f1f6e9d6fd81"
+    },
+    {
+      "path": "rpc/raw/request-sonic-creation-transactions.json",
+      "sha256": "d3ae25f2cf63276f04250177620b71c6b5bc13cf49a1862f09c44cca8bbae1bd"
+    },
+    {
+      "path": "rpc/raw/request-sonic-identity.json",
+      "sha256": "6cae6a7e4b6f3b444d79a1684dbce3a1a902304c03e750b9ca3c20f56de7fa46"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-creation-transactions.json",
+      "sha256": "18ac0492b367ce5bdfea977a27dbdb48d7d69a54b2039d2d5f31001a6611c371"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-identity-a.json",
+      "sha256": "2968a493e36a737190bfa8e812268f3748b8900ed503cb8f4b4eb2b8b13569c7"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-identity-b.json",
+      "sha256": "66d3a09e0024bfb433d5b439500ca514418fadba45ebb6750d526e8120688b96"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-identity-c.json",
+      "sha256": "f16bd8ceba64814da4684a0bb58e5fbaa5cadd9aafe176954f18b316a8ac46a4"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-creation-transactions.json",
+      "sha256": "d8d292b2876253829ff9f05fcd3badb9b27e99b2728ff7a0309e179d78bcad62"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-identity-a.json",
+      "sha256": "2968a493e36a737190bfa8e812268f3748b8900ed503cb8f4b4eb2b8b13569c7"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-identity-b.json",
+      "sha256": "66d3a09e0024bfb433d5b439500ca514418fadba45ebb6750d526e8120688b96"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-identity-c.json",
+      "sha256": "f16bd8ceba64814da4684a0bb58e5fbaa5cadd9aafe176954f18b316a8ac46a4"
+    },
+    {
+      "path": "rpc/raw/response-sonic-publicnode-creation-transactions.json",
+      "sha256": "62ded8ae9032f5598ebfbd8c8685238644b0cc53a59e6b75ad14668efed64556"
+    },
+    {
+      "path": "rpc/raw/response-sonic-publicnode-identity.json",
+      "sha256": "9c7d1ab4dcc837a7452226e37649b650461ba74188fdbe33a8bd26c16ba14bcc"
+    },
+    {
+      "path": "rpc/raw/response-sonic-soniclabs-creation-transactions.json",
+      "sha256": "62ded8ae9032f5598ebfbd8c8685238644b0cc53a59e6b75ad14668efed64556"
+    },
+    {
+      "path": "rpc/raw/response-sonic-soniclabs-identity.json",
+      "sha256": "9c7d1ab4dcc837a7452226e37649b650461ba74188fdbe33a8bd26c16ba14bcc"
+    }
+  ],
+  "boundary": "Historical verified-source, compiler, fixed-block proxy/runtime, immutable, token-metadata, and signed-meaning evidence only. No future-upgrade, live-state, success, fallback, forced-blind, hardware, production, or shipment authority.",
+  "captured_at_utc": "2026-07-28T11:10:00Z",
+  "deployments": [
+    {
+      "accepted_routes": 2,
+      "chain_id": 1,
+      "family": "pFT",
+      "implementation": "0xc55253ea84050700e1efa8878d4a5053b6bf7c5e",
+      "proxy": "0xa4215daaf3745e14e96e169e0e7706c479ce04f2",
+      "put_manager": "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa"
+    },
+    {
+      "accepted_routes": 2,
+      "chain_id": 146,
+      "family": "pFT",
+      "implementation": "0xc55253ea84050700e1efa8878d4a5053b6bf7c5e",
+      "proxy": "0xa4215daaf3745e14e96e169e0e7706c479ce04f2",
+      "put_manager": "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa"
+    },
+    {
+      "accepted_routes": 2,
+      "chain_id": 146,
+      "family": "pFT",
+      "implementation": "0xcf047256d5cd7354327213929214e5dad3a83326",
+      "proxy": "0x1d8051c90076faa5b683a3551ee4369d00f99d67",
+      "put_manager": "0xabd838e9977fc76430d637ed35eccfaf178ce071"
+    },
+    {
+      "accepted_routes": 2,
+      "chain_id": 1,
+      "family": "PutManager",
+      "ft": "0x5dd1a7a369e8273371d2dbf9d83356057088082c",
+      "implementation": "0x1e4e741e5f0f4f258def137e1968716eddae4bf5",
+      "pft": "0xa4215daaf3745e14e96e169e0e7706c479ce04f2",
+      "proxy": "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa"
+    },
+    {
+      "accepted_routes": 2,
+      "chain_id": 146,
+      "family": "PutManager",
+      "ft": "0x5dd1a7a369e8273371d2dbf9d83356057088082c",
+      "implementation": "0x90ae2cac15f8d58a258f7b4a243657754469922a",
+      "pft": "0xa4215daaf3745e14e96e169e0e7706c479ce04f2",
+      "proxy": "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa"
+    },
+    {
+      "accepted_routes": 0,
+      "chain_id": 146,
+      "family": "PutManager",
+      "ft": "0x26382a5331ddb46e7c0c101fb53480eb64a94ad9",
+      "implementation": "0x915220f3845d9d0db7960399c4e5ba0038f1170b",
+      "pft": "0x1d8051c90076faa5b683a3551ee4369d00f99d67",
+      "proxy": "0xabd838e9977fc76430d637ed35eccfaf178ce071"
+    },
+    {
+      "accepted_routes": 3,
+      "chain_id": 146,
+      "family": "pFTMarketplace",
+      "implementation": "0xbdd1327024b66212bf1f6a6a7f8b21f81b1faca4",
+      "pft": "0x1d8051c90076faa5b683a3551ee4369d00f99d67",
+      "proxy": "0x9bb958d459a97e3e37e11becf842e728167d9114"
+    }
+  ],
+  "exact_known_refusals": {
+    "PutManager": [
+      "invest(address,uint256,address,uint256,bytes32[])"
+    ],
+    "pFTMarketplace": [
+      "buy(uint256,address,uint256,bytes32,(uint256,uint40,bytes))",
+      "acceptBuyOffer((address,address,uint96,uint96,uint96,address,uint96,uint256,uint40),uint256,bytes,bytes,uint256,bytes32)"
+    ]
+  },
+  "fixed_blocks": {
+    "ethereum": {
+      "chain_id": 1,
+      "hash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+      "number": 25630720,
+      "number_hex": "0x1871800",
+      "providers": [
+        "MEV Blocker",
+        "Tenderly"
+      ],
+      "state_root": "0x56201c1863e551e47e584fbe807a6200b8937e7d62a373a37e1342c0f113e27d",
+      "timestamp_hex": "0x6a68843b"
+    },
+    "sonic": {
+      "chain_id": 146,
+      "hash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+      "number": 76644352,
+      "number_hex": "0x4918000",
+      "providers": [
+        "Sonic Labs",
+        "PublicNode"
+      ],
+      "state_root": "0x7c8d728e11af622c3484a0e21de463dbdfd96a10d4fadbb0a4a33d8209d5968a",
+      "timestamp_hex": "0x6a6885e1"
+    }
+  },
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/497",
+  "schema_version": 1,
+  "scope": "Seven FlyingTulip pFT, marketplace, and PutManager leaves; fifteen admitted deployment-format instances"
+}

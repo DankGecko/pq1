@@ -1,0 +1,39 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "implementation",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x66a28B080918184851774a89aB94850a41f6a1e5",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "proxy-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x66a28B080918184851774a89aB94850a41f6a1e5",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "implementation-code",
+    "method": "eth_getCode",
+    "params": [
+      "0xd048a8D52da402611A0C5eb6f7388ffC41cd1417",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

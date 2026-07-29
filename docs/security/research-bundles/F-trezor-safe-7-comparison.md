@@ -740,8 +740,8 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] Field-tested on staging hardware before public rollout; documented recovery path for a bricked fleet (RDP-2 cannot be unlocked)
 
 **H. External validation**
-- [ ] External audit by an embedded + TrustZone + SE firm (NCC, Trail of Bits, Quarkslab, Kudelski, Riscure) of the *signed production image* — budget $30K–$150K
-- [ ] All findings fixed or risk-accepted with external sign-off; public bug bounty (≥ $25K for seed extraction) + VDP published before any device ships
+- [ ] External audit by an embedded + TrustZone + SE firm (NCC, Trail of Bits, Quarkslab, Kudelski, Riscure) of the *signed production image*
+- [ ] All findings fixed or risk-accepted with external sign-off; public bug bounty + VDP published before any device ships
 - [ ] Independent FI report from a lab; independent attestation that the build is reproducible
 
 **I. Operational readiness**
@@ -1518,7 +1518,7 @@ Firmware update is its own project, outside the scope of this document, but note
 
 ### 12.1 Before Touching Real Funds
 
-- **External security audit** from a firm with embedded/TrustZone/secure-element specialization (NCC Group, Trail of Bits, Quarkslab, Kudelski, etc.). Budget $30K–$150K. Yes, really.
+- **External security audit** from a firm with embedded/TrustZone/secure-element specialization (NCC Group, Trail of Bits, Quarkslab, Kudelski, etc.).
 - Fault injection testing on real hardware (lab time).
 - Public bug bounty with meaningful rewards.
 - Gradual rollout: start with small amounts, wait months, scale up only if nothing surfaces.

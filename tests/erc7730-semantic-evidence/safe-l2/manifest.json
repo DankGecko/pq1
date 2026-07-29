@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "scope": "SafeL2 singleton calldata semantics for Safe 1.3.0, 1.4.1, and 1.5.0",
+  "captured_at_utc": "2026-07-27T17:14:09Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/497",
+  "boundary": "Historical official-source, deployment-manifest, ABI, and fixed-block runtime-identity evidence for the SafeL2 singleton deployments already named by the three descriptors. It does not prove live transaction success, owner or threshold state, future code, per-chain runtime monitoring outside the recorded Ethereum observations, proxy instances, migrations, module execution, fallback authority, blind signing, hardware, production, or shipment.",
+  "fixed_block": {
+    "chain_id": 1,
+    "number": 25624960,
+    "number_hex": "0x1870180",
+    "hash": "0x5ceb4e40574ba2b93faf07aaa23587804ac417d25aa6a57174c318438c22c64d",
+    "parent_hash": "0x8769fdf35dd709cc52d7ab7598fb04365cc540a8f63e2d4d00118a35a2616df8",
+    "state_root": "0x6e43c0236e18ae6ed7204d7ab91b21b6f5735f73ba531acad04594fdf93bc349",
+    "timestamp": 1785165131,
+    "timestamp_hex": "0x6a67754b",
+    "timestamp_utc": "2026-07-27T15:12:11Z",
+    "providers": [
+      "https://eth.drpc.org",
+      "https://rpc.mevblocker.io"
+    ]
+  },
+  "upstream_sources": [
+    {
+      "repository": "https://github.com/safe-fndn/safe-smart-account",
+      "tag": "v1.3.0",
+      "commit": "186a21a74b327f17fc41217a927dea7064f74604",
+      "files": [
+        "source/v1.3.0/GnosisSafeL2.sol",
+        "source/v1.3.0/GnosisSafe.sol",
+        "source/v1.3.0/OwnerManager.sol"
+      ]
+    },
+    {
+      "repository": "https://github.com/safe-fndn/safe-smart-account",
+      "tag": "v1.4.1",
+      "commit": "bf943f80fec5ac647159d26161446ac5d716a294",
+      "files": [
+        "source/v1.4.1/SafeL2.sol",
+        "source/v1.4.1/Safe.sol",
+        "source/v1.4.1/OwnerManager.sol"
+      ]
+    },
+    {
+      "repository": "https://github.com/safe-fndn/safe-smart-account",
+      "tag": "v1.5.0",
+      "commit": "dc437e8fba8b4805d76bcbd1c668c9fd3d1e83be",
+      "files": [
+        "source/v1.5.0/SafeL2.sol",
+        "source/v1.5.0/Safe.sol",
+        "source/v1.5.0/OwnerManager.sol"
+      ]
+    }
+  ],
+  "safe_deployments": {
+    "repository": "https://github.com/safe-global/safe-deployments",
+    "commit": "06021f40739266f21a9ec083cf19827ab48b5dc7",
+    "assets": [
+      "deployments/v1.3.0-gnosis_safe_l2.json",
+      "deployments/v1.4.1-safe_l2.json",
+      "deployments/v1.5.0-safe_l2.json"
+    ]
+  },
+  "descriptor_inputs": [
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/common-Safe.json",
+      "sha256": "354793337c021f674f4f510fedfe3b922a63d8435983c8449d0ab6ee5e9d7d4b"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/calldata-SafeL2-1.3.0.json",
+      "sha256": "27a910f57238a1771cf920e290551ffc93efbb667f8d918c5123816fd7b5adee"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/calldata-SafeL2-1.4.1.json",
+      "sha256": "c247b99e93fdeac090e20220217b2aa0edbcf1e0bd800dba8979180025fcf9ca"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/calldata-SafeL2-1.5.0.json",
+      "sha256": "7b35a9aaec838b7fb4283e109eef5504caf4396cb93e922d78632309ea0f956c"
+    }
+  ],
+  "admitted_routes": [
+    {
+      "canonical_signature": "addOwnerWithThreshold(address,uint256)",
+      "successful_effect": "Adds the signed owner and, if needed, sets the complete signed threshold."
+    },
+    {
+      "canonical_signature": "changeThreshold(uint256)",
+      "successful_effect": "Sets the Safe threshold to the complete signed value."
+    },
+    {
+      "canonical_signature": "approveHash(bytes32)",
+      "successful_effect": "Records the caller's approval for the complete signed Safe hash."
+    }
+  ],
+  "refused_routes": [
+    {
+      "canonical_signature": "setup(address[],uint256,address,bytes,address,address,uint256,address)",
+      "reason": "The shared upstream display omits the effect-bearing delegatecall target."
+    },
+    {
+      "canonical_signature": "execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)",
+      "reason": "The shared upstream display omits the effect-bearing execution target."
+    },
+    {
+      "canonical_signature": "removeOwner(address,address,uint256)",
+      "reason": "The shared upstream display hides the linked-list predecessor."
+    },
+    {
+      "canonical_signature": "swapOwner(address,address,address)",
+      "reason": "The shared upstream display hides the linked-list predecessor."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "6a0580d0c9e5e53e6ef20c55f80e53ca99fc4080e3549842969ec2c1aa560a65"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "06b3f5222f174dcd0afa396569059014d85d624e3cc73505219d234a989fabfe"
+    },
+    {
+      "path": "deployments/v1.3.0-gnosis_safe_l2.json",
+      "sha256": "65ba89c9b727e85beb504d177e87a2e3857b1238b78b48f5f1f00920cd57fbde"
+    },
+    {
+      "path": "deployments/v1.4.1-safe_l2.json",
+      "sha256": "4a6973cefcd3db1043c9f3bb0eff54d89dc3b2971ba2cef01bf59ef2ea31199d"
+    },
+    {
+      "path": "deployments/v1.5.0-safe_l2.json",
+      "sha256": "5657ff493e26be70db3fe1013d9b583ec2c9f14769eb95679de337d2b2d58249"
+    },
+    {
+      "path": "rpc/raw/request-identity.json",
+      "sha256": "30b50e9c15432201f73fac1d45a52061d51fea6c8107caa595a41d8482b67d36"
+    },
+    {
+      "path": "rpc/raw/request-v1.3.0.json",
+      "sha256": "33f9487c4c5fa26a58fe97b07a601da872a177eff763612aff50fbd9f553b7b9"
+    },
+    {
+      "path": "rpc/raw/request-v1.4.1-v1.5.0.json",
+      "sha256": "dfe1e2047b05fe5771cb40cdc31b6b682d640f38c8bc7e49a05b30e03388225f"
+    },
+    {
+      "path": "rpc/raw/response-drpc-identity.json",
+      "sha256": "30155408cc7c5d47097eafd416b1ebd0dbbf340cb1bf797f0554fb399990c17c"
+    },
+    {
+      "path": "rpc/raw/response-drpc-v1.3.0.json",
+      "sha256": "76ee64c0186830b2601a8d755f0802345bf6d85528db29452db2daa108c96cad"
+    },
+    {
+      "path": "rpc/raw/response-drpc-v1.4.1-v1.5.0.json",
+      "sha256": "77b9e8da17a044433ced47695614d17191fc515b7e88fb9a155bde8c07b81988"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-identity.json",
+      "sha256": "e7c237714faa11d9901327b48eca5e5fe96a9a92f70408cce5cc1c24d889e7c2"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-v1.3.0.json",
+      "sha256": "8763f88d8bcc08b6e2d0bcc2bf5278db8a17590dfa3c1adbe6bcf16ab2e63c58"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-v1.4.1-v1.5.0.json",
+      "sha256": "dc606462377d6a1d1c35d0a596c93425e62cec76e4d6eb1c12395c554b404e90"
+    },
+    {
+      "path": "runtime/SafeL2-1.3.0.ethereum.hex",
+      "sha256": "44f2f2806b3c2e4f321260feea051b9f0b2d34c5b3b8095cffa3b749a906aead"
+    },
+    {
+      "path": "runtime/SafeL2-1.4.1.ethereum.hex",
+      "sha256": "a233b1d2ce8badab2eaa27e253a247c402f9f468460762900cdfcc23e78d62fd"
+    },
+    {
+      "path": "runtime/SafeL2-1.5.0.ethereum.hex",
+      "sha256": "4c84ea384f101ff708db16e38614b30332bbc10cf854b6da736e3ce6a987f1ac"
+    },
+    {
+      "path": "source/v1.3.0/GnosisSafe.sol",
+      "sha256": "744af6600164990c36b32ccac95d105280450d0f7aa159a7b99e870752e29f9b"
+    },
+    {
+      "path": "source/v1.3.0/GnosisSafeL2.sol",
+      "sha256": "164ccdbfd4f861e3abe3829c2d072dd1fa161a2f9fcd1e3c794e4acf7125c3d1"
+    },
+    {
+      "path": "source/v1.3.0/OwnerManager.sol",
+      "sha256": "ba9726f488471f69def4ca08c30dfc0fe033b19e2a55a825a8aa0e1d8c69ea19"
+    },
+    {
+      "path": "source/v1.4.1/OwnerManager.sol",
+      "sha256": "5ba538135072d73ddbc23cbd72e7f2e8307710b195b0741127a238569fa4df05"
+    },
+    {
+      "path": "source/v1.4.1/Safe.sol",
+      "sha256": "efd3301ed5c6bf522fb3a7a43be4a27341e65dff6d1fee04f8567f304a67e365"
+    },
+    {
+      "path": "source/v1.4.1/SafeL2.sol",
+      "sha256": "8ed69cb26d132702443e006c50d7ce36bd1ea05e2274d57df61e0ec1a96be7fe"
+    },
+    {
+      "path": "source/v1.5.0/OwnerManager.sol",
+      "sha256": "cb5f04371f1918129d9b175bde7f346376b53cdcc94e67f427bccea6e2659a6a"
+    },
+    {
+      "path": "source/v1.5.0/Safe.sol",
+      "sha256": "4b54dce0ad9d9c1264ecd5c146c82b7bc17d24f981bd42525487be3bf6a40366"
+    },
+    {
+      "path": "source/v1.5.0/SafeL2.sol",
+      "sha256": "183da37995a0d147604a478c76109808e2c1d53e2edfa6e7aeeb9cca4c33b6bf"
+    }
+  ]
+}

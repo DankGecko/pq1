@@ -1,7 +1,48 @@
 # FlyingTulip SessionManager semantic evidence
 
-This package binds PQ1's FlyingTulip SessionManager clear-signing routes to the
-seven deployments named by the vendored ERC-7730 descriptor.
+This package binds PQ1's FlyingTulip SessionManager calldata routes and EIP-712
+`Session` typed data to seven fixed-block direct deployments. The two surfaces
+share source/runtime authority but keep separate descriptor and admission
+boundaries.
+
+## EIP-712 Session admission
+
+PQ1 admits exactly one type graph:
+
+```text
+Session(address owner,address delegate,uint48 validAfter,uint48 validUntil,uint32 maxCalls,uint16 maxFeeBps,AssetLimit[] limits,bytes32 salt)AssetLimit(address token,uint256 limit)
+```
+
+The verified sources define both this exact type string and
+`AssetLimit(address token,uint256 limit)`, hash every ordered limit, apply
+`_hashTypedDataV4`, verify the owner signature, and pass the exact values to the
+common session-creation path. That path enforces the source's owner, delegate,
+validity, call-cap, fee-cap, and unique nonzero-token constraints before
+storing the session. Every signed terminal is displayed, including every
+limit's token and value.
+
+Admission is partitioned by the constructor-bound domain:
+
+- `FT SessionManager`, version `1`: Ethereum
+  `0xF9f3…60f8` and Sonic `0x109A…Bdff`.
+- `ftUSD SessionManager`, version `1`: Ethereum
+  `0x2DaF…5dC9`, BNB `0xC85C…7A42`, Sonic
+  `0x2DaF…5dC9` and `0x52Ef…0734`, and Avalanche
+  `0x1765…AC54`.
+
+PQ1 deliberately narrows the source-supported array topology. It renders
+exactly one through six ordered `limits` entries. An empty array or seven or
+more entries is a fatal refusal, with no raw, fallback, or blind-signing
+downgrade. The verified source has no explicit length bound and permits an
+empty array, so this is a compatibility narrowing, not a claim about source
+rejection. Wrong domain, deployment, or primary type likewise refuses.
+
+This evidence does not authorize the separate `CancelOrder` or
+`TpslGroupCancel` messages merely because their registry descriptor names the
+`FT SessionManager` domain. The verified SessionManager source contains
+neither type nor verification path.
+
+## Calldata routes
 
 Four curated routes expose every signed operand: three all-static routes and
 one bounded sole-dynamic-array route:

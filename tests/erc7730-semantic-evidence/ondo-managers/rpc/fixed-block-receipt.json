@@ -1,0 +1,35 @@
+{
+  "observations": [
+    {
+      "block": {
+        "hash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "number": "0x1870100",
+        "parent_hash": "0xecfee6578e4b660f0df1afe3f3360b936113ed8aafc0be768e6ad07f9f1e3ae3",
+        "state_root": "0xc0d11f7af5afc3ccf3cc3ba0485adf191b4f617ff89c4a3b3a3a552ca7ed89ae",
+        "timestamp": "0x6a676f4b"
+      },
+      "chain_id": 1,
+      "providers": [
+        "dRPC",
+        "Tenderly"
+      ],
+      "slug": "ethereum"
+    },
+    {
+      "block": {
+        "hash": "0x298e6b16ec7c93069a4d7048ab44e41f2fae718b7014c1574a606fa7c58816cd",
+        "number": "0x6b3f500",
+        "parent_hash": "0x32b44e1497ea5b4e73136638ef7829efb3835ce43edd306f9784237aa47b1a94",
+        "state_root": "0xc9ebfc2b7405fee6251dbd22002b480f4a2b2826d0f14f860db6dc3ba9147673",
+        "timestamp": "0x6a677711"
+      },
+      "chain_id": 56,
+      "providers": [
+        "NodeReal",
+        "MeowRPC"
+      ],
+      "slug": "bsc"
+    }
+  ],
+  "schema_version": 1
+}

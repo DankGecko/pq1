@@ -43,17 +43,17 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **400 leaves**, **339,990-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **365 leaves**, **330,929-byte**
 compiled companion catalogue, root
-`0775c1c31572394e9fe9240a957aa897c0ae984e64f62567032a98fb1cf83d70`,
-**4,580** canonical known-call tuples, tuple-set SHA-256
-`b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`.
+`c3f20eca651c3d147dddcc48ca27a5ae464839e84181ca3849eb501681d6a08b`,
+**4,615** canonical known-call tuples, tuple-set SHA-256
+`50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6`.
 Curation manifest SHA-256
-`049f57f49f21f4e5c8ad739bbd1b34c286efcb90074a300094f5af659595f825` binds upstream commit
+`ee5048c3de08f5ef47404b88b031ca4f6ac8992ca829b81f6e7392e86f8cb0fe` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
-Manifest v3 authorizes exactly **38** curation-added known-call tuples and no deletions.
-The Bloom contains 28,453 / 131,072 set bits, below the generator's 25% cap.
+Manifest v3 authorizes exactly **73** curation-added known-call tuples and no deletions.
+The Bloom contains 28,646 / 131,072 set bits, below the generator's 25% cap.
 <!-- END XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
 
 The `.pqsigner-erc7730-vendor` file is an exact machine-owned directory
@@ -62,9 +62,10 @@ the machine-checked source/overlay identities live in the curation manifest,
 while the generated catalogue authority remains in the artifacts and managed
 receipt above.
 
-Current reviewed full-file replacements (43):
+Current reviewed full-file replacements (47):
 
 - `ercs/calldata-erc20-tokens.json`
+- `registry/1inch/calldata-AggregationRouterV4-eth.json`
 - `registry/1inch/calldata-AggregationRouterV6-zksync.json`
 - `registry/1inch/calldata-AggregationRouterV6.json`
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
@@ -94,6 +95,9 @@ Current reviewed full-file replacements (43):
 - `registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json`
 - `registry/p2p/calldata-P2pSsvProxyFactory.json`
 - `registry/quickswap/calldata-QuickSwap.json`
+- `registry/safe/calldata-Safe-1.3.0.json`
+- `registry/safe/calldata-Safe-1.4.1.json`
+- `registry/safe/calldata-Safe-1.5.0.json`
 - `registry/serenita/calldata-EthVault.json`
 - `registry/tether/calldata-usdt.json`
 - `registry/threshold/calldata-L1BitcoinDepositor-address.json`

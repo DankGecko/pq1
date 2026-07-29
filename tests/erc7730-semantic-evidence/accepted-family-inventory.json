@@ -5,27 +5,25 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "9bdd194fd060c26f4e555f49050dc526015ec853325a803e531c8c8f29eb3079",
-    "merkle_root": "0775c1c31572394e9fe9240a957aa897c0ae984e64f62567032a98fb1cf83d70",
-    "accepted_leaf_count": 400,
-    "accepted_source_descriptor_count": 240,
-    "compiled_blob_bytes": 339990,
-    "known_call_count": 4580,
+    "curated_corpus_sha256": "e87406e66d897ea90653134d8850fbd7fe0c9ca7d02857a057feb501c86b306c",
+    "merkle_root": "c3f20eca651c3d147dddcc48ca27a5ae464839e84181ca3849eb501681d6a08b",
+    "accepted_leaf_count": 365,
+    "accepted_source_descriptor_count": 214,
+    "compiled_blob_bytes": 330929,
+    "known_call_count": 4615,
     "category_source_counts": {
-      "pinned-evidence": 27,
-      "shared-standard-implementation": 133,
-      "lower-priority-residual": 80
+      "pinned-evidence": 81,
+      "shared-standard-implementation": 133
     },
     "category_leaf_counts": {
-      "pinned-evidence": 80,
-      "shared-standard-implementation": 133,
-      "lower-priority-residual": 187
+      "pinned-evidence": 232,
+      "shared-standard-implementation": 133
     }
   },
   "classification_contract": {
     "pinned-evidence": "At least one accepted route/deployment subset in this source family is bound by the named offline evidence package. The evidence scope, not the source leaf count, defines the claim.",
     "shared-standard-implementation": "Every accepted format in the source is inherited unchanged from the shared ERC-4626 rendering template. This records review reuse only; it does not prove any deployment implements ERC-4626 honestly.",
-    "lower-priority-residual": "No pinned deployed-semantics package is named for an accepted subset and the exact shared ERC-4626 template rule does not apply. The named successor proposal owns future reconciliation."
+    "lower-priority-residual": "No pinned deployed-semantics package is named for an accepted subset and the exact shared ERC-4626 template rule does not apply. Any future record in this class must name a concrete GitHub successor issue that owns reconciliation."
   },
   "evidence_sets": {
     "1inch-v6-cancellation": {
@@ -49,11 +47,26 @@
         "tests/erc7730-semantic-evidence/aave-v3-shared-pools/manifest.json"
       ]
     },
+    "account-factory-controls": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the operand-complete Celo Accounts, Kiln Factory, and WalletConnect StakeWeight subsets to exact fixed-block deployment/source authority.",
+      "scope": "Only Celo mainnet Accounts, the Ethereum and Hoodi Kiln factories, and the Optimism StakeWeight proxy/routes enumerated by the package; Celo Alfajores, hidden-signature/opaque/nested-call siblings, future upgrades, and mutable state are not implied.",
+      "paths": [
+        "tests/erc7730-semantic-evidence/account-factory-controls/manifest.json",
+        "tests/erc7730-semantic-evidence/celo-validators-first-member/manifest.json"
+      ]
+    },
     "allowance-threshold-honesty": {
       "classification": "pinned-evidence",
       "reason": "Pins exact unlimited-allowance threshold semantics for three accepted descriptor families.",
       "scope": "Only the approval routes and deployments enumerated by the package.",
       "paths": ["tests/erc7730-semantic-evidence/allowance-threshold-honesty/manifest.json"]
+    },
+    "bridge-exits": {
+      "classification": "pinned-evidence",
+      "reason": "Pins operand-complete Igra exit, Lombard Sepolia calldata, StarkGate deposit, and SwissBorg outbound NTT route semantics to exact fixed-block deployment/source authority; it also records why Lombard Sepolia feeApproval remains structurally refused.",
+      "scope": "Only the Igra requestExit route, six static Lombard Sepolia calldata routes, StarkGate deposit, and the simple SwissBorg NTT transfer at the deployments enumerated by the package; Lombard Sepolia feeApproval, dynamic mint/Bitcoin-redemption routes, and the SwissBorg arbitrary-instructions overload remain refusals, while live routing, destination completion, and future upgrades are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/bridge-exits/manifest.json"]
     },
     "celo-election-vote": {
       "classification": "pinned-evidence",
@@ -79,11 +92,23 @@
       "scope": "Only the named route and deployment.",
       "paths": ["tests/erc7730-semantic-evidence/celo-validators-first-member/manifest.json"]
     },
+    "flyingtulip-market-nft": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the pFT approval, marketplace listing-management, and PutManager exit routes to exact fixed-block proxy/runtime, verified source/compiler, constructor binding, and collection/token evidence.",
+      "scope": "Exactly the pFT approve/setApprovalForAll, marketplace add/edit/remove listing, and PutManager divest/withdrawFT formats at the deployments enumerated by the package; marketplace purchase/offer acceptance, proof-bearing invest, live fees/listings/position state, future upgrades, transaction success, and blind signing are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/flyingtulip-market-nft/manifest.json"]
+    },
     "flyingtulip-sessionmanager": {
       "classification": "pinned-evidence",
-      "reason": "Pins the curated SessionManager routes across the descriptor deployments.",
-      "scope": "Only the routes and deployments enumerated by the package.",
+      "reason": "Pins the curated calldata routes and the seven admitted EIP-712 SessionManager leaves to exact fixed-block proxy/runtime, verified source/compiler, domain, type, deployment, token metadata, and bounded-array rendering evidence.",
+      "scope": "Only the calldata routes and the FT and ftUSD EIP-712 formats/deployments enumerated by the package; LeverageRfqEngine, SpotOrderCancel, out-of-range arrays, live state, future upgrades, transaction success, fallback, and blind signing are not implied.",
       "paths": ["tests/erc7730-semantic-evidence/flyingtulip-sessionmanager/manifest.json"]
+    },
+    "flyingtulip-vault-mint": {
+      "classification": "pinned-evidence",
+      "reason": "Pins ten Flying Tulip EpochRewardsVault and MintAndRedeem leaves to exact fixed-block proxy/runtime, verified source/ABI, immutable config, and token metadata.",
+      "scope": "Exactly the production and dev deployments and deposit, withdraw, claim, mint, and redeem formats enumerated by the package; live rewards, prices, fees, caps, collateral enablement, queues, sibling routes, transaction success, future upgrades, fallback, and blind signing are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/flyingtulip-vault-mint/manifest.json"]
     },
     "lido-staking": {
       "classification": "pinned-evidence",
@@ -111,9 +136,15 @@
     },
     "lombard-lbtc": {
       "classification": "pinned-evidence",
-      "reason": "Pins the six admitted LBTC calldata routes and distinguishes redemption requests from completed redemption.",
-      "scope": "Only the reviewed Ethereum mainnet LBTC deployment and six static routes; Sepolia and Lombard EIP-712 families are not implied.",
+      "reason": "Pins the six admitted LBTC calldata routes plus the mainnet feeApproval EIP-712 deployment/domain/typehash and maximum-LBTC-fee semantics.",
+      "scope": "Only the reviewed Ethereum mainnet LBTC deployment, six static calldata routes, and feeApproval typed data; Sepolia feeApproval remains structurally refused and no other Lombard EIP-712 family is implied.",
       "paths": ["tests/erc7730-semantic-evidence/lombard-lbtc/manifest.json"]
+    },
+    "legacy-defi-v4-v2": {
+      "classification": "pinned-evidence",
+      "reason": "Pins two operand-complete 1inch V4 Clipper routes and six Aave V2 LendingPool routes across four exact deployments.",
+      "scope": "Only the Ethereum 1inch V4 deployment and the Ethereum, Polygon, and Avalanche Aave V2 deployments enumerated by the package; permit, packed/dynamic aggregation, flash-loan, liquidation, authority, and other sibling routes are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/legacy-defi-v4-v2/manifest.json"]
     },
     "midas-mtbill-deposit-vault": {
       "classification": "pinned-evidence",
@@ -133,17 +164,59 @@
       "scope": "Only the routes and deployments enumerated by the package.",
       "paths": ["tests/erc7730-semantic-evidence/morpho-blue/manifest.json"]
     },
+    "ondo-managers": {
+      "classification": "pinned-evidence",
+      "reason": "Pins all accepted GM Token Limit Order, OUSG Instant Manager, and USDY Instant Manager routes to four exact direct deployments, verified source/ABI, and fixed-block token bindings.",
+      "scope": "Only the four deployment leaves and sixteen deployment-format instances enumerated by the package; mutable token state, future token implementations, other routes, and future deployments are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/ondo-managers/manifest.json"]
+    },
+    "corestake-sei-avvatar": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the eight Corestake, Sei-native-precompile, and Avvatar descriptor leaves to fixed-block runtime, official or verified source, ABI, and signed-field meaning evidence.",
+      "scope": "Exactly the eight source families and admitted formats enumerated by the package. Sei withdrawMultipleDelegationRewards and createValidator remain exact-known refusals; live state, future upgrades, transaction success, fallback, and blind signing are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/corestake-sei-avvatar/manifest.json"]
+    },
+    "p2p-pod-message": {
+      "classification": "pinned-evidence",
+      "reason": "Pins caller-bound EigenPod creation and generic exact-text P2P message publication across all five accepted deployments.",
+      "scope": "Exactly createPod at the two fixed-block EigenPodManager proxies and send(string) at the three direct P2pMessageSender deployments. Other EigenPodManager state-changing ABI routes remain exact-known refusals; live state, future upgrades/deployments, off-chain message interpretation, transaction success, fallback, and blind signing are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/p2p-pod-message/manifest.json"]
+    },
     "quickswap-router02-remove-liquidity": {
       "classification": "pinned-evidence",
       "reason": "Pins the constrained QuickSwap Router02 route set.",
       "scope": "Only the reviewed Polygon deployment and admitted routes.",
       "paths": ["tests/erc7730-semantic-evidence/quickswap-router02-remove-liquidity/manifest.json"]
     },
+    "safe-core": {
+      "classification": "pinned-evidence",
+      "reason": "Pins three operand-complete Safe singleton routes across the descriptor deployments for Safe 1.3.0, 1.4.1, and 1.5.0.",
+      "scope": "Only addOwnerWithThreshold, changeThreshold, and approveHash in the three Safe singleton descriptors. SafeL2, migrations, setup, execTransaction, owner removal/swap, modules, guards, and fallback authority are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/safe-core/manifest.json"]
+    },
+    "safe-l2": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the same three operand-complete inherited routes across the exact SafeL2 1.3.0, 1.4.1, and 1.5.0 singleton deployments named by the descriptors.",
+      "scope": "Only addOwnerWithThreshold, changeThreshold, and approveHash in the three SafeL2 singleton descriptors. Proxy instances, migrations, setup, execTransaction, owner removal/swap, modules, guards, fallback authority, and L2 event-derived meaning are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/safe-l2/manifest.json"]
+    },
+    "safe-migrations": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the two operand-complete Safe singleton migration routes and the L2 setup route across the Safe 1.4.1 and 1.5.0 migration/setup deployments.",
+      "scope": "Only migrateSingleton, migrateL2Singleton, and setupToL2 at the exact deployments enumerated by the package. Both migration-with-fallback-handler routes remain structural refusal-only because the fallback authority is not displayed; Safe core, SafeL2, and every other route are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/safe-migrations/manifest.json"]
+    },
     "stakewise-claim-exited-assets": {
       "classification": "pinned-evidence",
       "reason": "Pins three admitted StakeWise EthVault route families.",
       "scope": "Only the P2P and Serenita deployments and routes enumerated by the package.",
       "paths": ["tests/erc7730-semantic-evidence/stakewise-claim-exited-assets/manifest.json"]
+    },
+    "threshold": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the admitted Threshold L2 Wormhole send, rebate-staking, and optimistic-mint route families to fixed-block proxy/runtime, verified source/ABI, and token-binding evidence.",
+      "scope": "Exactly the seven L2WormholeGateway sendTbtc leaves, one RebateStaking leaf with five formats, and two TBTCVault leaves with two formats enumerated by the package; opaque VAA/payload routes, live state, future upgrades/deployments, and transaction success are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/threshold/manifest.json"]
     },
     "uniswap-permit2": {
       "classification": "pinned-evidence",
@@ -163,6 +236,18 @@
       "scope": "Only Ethereum mainnet and Sepolia deposit/withdraw.",
       "paths": ["tests/erc7730-semantic-evidence/weth9-deposit/manifest.json"]
     },
+    "liquid-staking-flare-calldata": {
+      "classification": "pinned-evidence",
+      "reason": "Pins seven liquid-staking and Flare/Songbird calldata families to exact fixed-block deployment, proxy/runtime, verified source/ABI, configuration, and token-meaning evidence.",
+      "scope": "Exactly the seven source families, deployments, and admitted formats enumerated by the package. Distribution autoClaim and executable PollingFoundation propose remain exact-known refusals; live state, future upgrades/configuration, proposal execution, and transaction success are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/liquid-staking-flare-calldata/manifest.json"]
+    },
+    "yieldxyz": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the four operand-complete POL validator-share routes across seventeen proxies and the exact-spend USDe allocator-vault deposit route to fixed-block proxy/runtime, source/ABI, token, strategy, and configuration evidence.",
+      "scope": "Exactly the two Yield.xyz source families and deployments/routes enumerated by the package. USDe mint, withdraw, and redeem remain structural exact-known refusals; live state, future upgrades/configuration, and transaction success are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/yieldxyz/manifest.json"]
+    },
     "erc4626-shared-template": {
       "classification": "shared-standard-implementation",
       "reason": "Accepted formats are inherited unchanged from the single shared ERC-4626 descriptor template.",
@@ -173,26 +258,13 @@
       ]
     }
   },
-  "successor_issues": {
-    "remaining-calldata-families": {
-      "issue_number": 497,
-      "url": "https://github.com/EthereumPhone/PQ1/issues/497",
-      "title": "erc7730-semantic-honesty: Reconcile remaining accepted calldata families",
-      "body": "Use tests/erc7730-semantic-evidence/accepted-family-inventory.json as the exact source-family queue. In bounded protocol slices, pin deployment/proxy/runtime, authoritative source/ABI, intent and field meaning, and metadata; then promote only the evidenced subset. Preserve exact-known hard refusal and do not infer proof for every leaf emitted by a mixed source descriptor."
-    },
-    "remaining-eip712-families": {
-      "issue_number": 498,
-      "url": "https://github.com/EthereumPhone/PQ1/issues/498",
-      "title": "erc7730-semantic-honesty: Reconcile remaining accepted EIP-712 families",
-      "body": "Use tests/erc7730-semantic-evidence/accepted-family-inventory.json as the exact EIP-712 source-family queue. Pin domain/deployment/runtime and authoritative type/source semantics in bounded slices, and promote only the explicitly evidenced types and deployments. Do not treat a descriptor-family record or leaf count as universal deployment proof."
-    }
-  },
+  "successor_issues": {},
   "families": [
   {
     "source": "1inch/calldata-AggregationRouterV4-eth.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "legacy-defi-v4-v2"
   },
   {
     "source": "1inch/calldata-AggregationRouterV6-zksync.json",
@@ -215,8 +287,8 @@
   {
     "source": "aave/calldata-lpv2.json",
     "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "legacy-defi-v4-v2"
   },
   {
     "source": "aave/calldata-lpv3.json",
@@ -227,32 +299,32 @@
   {
     "source": "avvatar-labs-alia/calldata-AgentIdentityRegistry-base.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "avvatar-labs-alia/calldata-AssetIdentityRegistry-base.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "avvatar-labs-alia/calldata-ScoreEngineV2-base.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "benqi/calldata-sAVAX.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "celo/calldata-celo_accounts.json",
-    "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "account-factory-controls"
   },
   {
     "source": "celo/calldata-celo_election.json",
@@ -281,98 +353,86 @@
   {
     "source": "corestake/calldata-coreagent.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "corestake/calldata-corestake.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "corestake/calldata-stakehub.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
-  },
-  {
-    "source": "degate/eip712-degate.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "ethena/calldata-ethena.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
-  },
-  {
-    "source": "fellow-fund/calldata-fellow-fund.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flare/calldata-DistributionToDelegators-Flare.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flare/calldata-PollingFoundation-Flare.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flare/calldata-PollingFoundation-Songbird.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flare/calldata-ValidatorRewardManager-Flare.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flyingtulip/calldata-EpochRewardsVault-dev.json",
     "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-vault-mint"
   },
   {
     "source": "flyingtulip/calldata-EpochRewardsVault.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-vault-mint"
   },
   {
     "source": "flyingtulip/calldata-MintAndRedeem-dev.json",
     "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-vault-mint"
   },
   {
     "source": "flyingtulip/calldata-MintAndRedeem.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-vault-mint"
   },
   {
     "source": "flyingtulip/calldata-PftMarketplace.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-market-nft"
   },
   {
     "source": "flyingtulip/calldata-PftNft.json",
     "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-market-nft"
   },
   {
     "source": "flyingtulip/calldata-PositionsManager.json",
@@ -382,9 +442,9 @@
   },
   {
     "source": "flyingtulip/calldata-PutManager.json",
-    "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "accepted_leaf_count": 2,
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-market-nft"
   },
   {
     "source": "flyingtulip/calldata-SessionManager.json",
@@ -393,34 +453,22 @@
     "evidence": "flyingtulip-sessionmanager"
   },
   {
-    "source": "flyingtulip/eip712-LeverageRfqEngine.json",
-    "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
     "source": "flyingtulip/eip712-SessionManager-FT.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-sessionmanager"
   },
   {
     "source": "flyingtulip/eip712-SessionManager-ftUSD.json",
     "accepted_leaf_count": 5,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "flyingtulip/eip712-SpotOrderCancel.json",
-    "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-sessionmanager"
   },
   {
     "source": "igra/calldata-KasExitBridge.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "bridge-exits"
   },
   {
     "source": "kiln/calldata-Vault-EURC-Morpho-Gauntlet-Core.json",
@@ -593,32 +641,14 @@
   {
     "source": "kiln/calldata-kiln-fee-splitter-factory.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "account-factory-controls"
   },
   {
     "source": "layerswap/calldata-LayerswapDepository.json",
     "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
     "evidence": "layerswap-depository-funding"
-  },
-  {
-    "source": "ledgerquest/eip712-ledgerquest.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "lens/eip712-lens-lenshub.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "lens/eip712-lens-token-handle-registry.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
   },
   {
     "source": "lido/calldata-WithdrawalQueueERC721.json",
@@ -653,20 +683,14 @@
   {
     "source": "lombard/calldata-lbtc-sepolia.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "bridge-exits"
   },
   {
     "source": "lombard/eip712-network-fee-authorization-mainnet.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "lombard/eip712-network-fee-authorization-sepolia.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
+    "classification": "pinned-evidence",
+    "evidence": "lombard-lbtc"
   },
   {
     "source": "midas/calldata-MinterVault.json",
@@ -1319,26 +1343,26 @@
   {
     "source": "ondo-finance/calldata-GMTokenLimitOrder.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "ondo-managers"
   },
   {
     "source": "ondo-finance/calldata-OUSGInstantManager.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "ondo-managers"
   },
   {
     "source": "ondo-finance/calldata-USDYInstantManager.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "ondo-managers"
   },
   {
     "source": "p2p/calldata-EigenPodManager.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "p2p-pod-message"
   },
   {
     "source": "p2p/calldata-NativeTokenVault.json",
@@ -1349,14 +1373,8 @@
   {
     "source": "p2p/calldata-P2pMessageSender.json",
     "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
-  },
-  {
-    "source": "paraswap/eip712-paraswap.json",
-    "accepted_leaf_count": 5,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
+    "classification": "pinned-evidence",
+    "evidence": "p2p-pod-message"
   },
   {
     "source": "quickswap/calldata-QuickSwap.json",
@@ -1365,88 +1383,76 @@
     "evidence": "quickswap-router02-remove-liquidity"
   },
   {
-    "source": "rarible/eip712-rarible-erc-1155.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "rarible/eip712-rarible-erc-721.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
     "source": "safe/calldata-Safe-1.3.0.json",
     "accepted_leaf_count": 14,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-core"
   },
   {
     "source": "safe/calldata-Safe-1.4.1.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-core"
   },
   {
     "source": "safe/calldata-Safe-1.5.0.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-core"
   },
   {
     "source": "safe/calldata-SafeL2-1.3.0.json",
     "accepted_leaf_count": 14,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-l2"
   },
   {
     "source": "safe/calldata-SafeL2-1.4.1.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-l2"
   },
   {
     "source": "safe/calldata-SafeL2-1.5.0.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-l2"
   },
   {
     "source": "safe/calldata-SafeMigration-1.4.1.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-migrations"
   },
   {
     "source": "safe/calldata-SafeMigration-1.5.0.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-migrations"
   },
   {
     "source": "safe/calldata-SafeToL2Setup-1.4.1.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-migrations"
   },
   {
     "source": "safe/calldata-SafeToL2Setup-1.5.0.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-migrations"
   },
   {
     "source": "sei/calldata-sei-distribution.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "sei/calldata-sei-staking.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "serenita/calldata-EthVault.json",
@@ -1455,112 +1461,22 @@
     "evidence": "stakewise-claim-exited-assets"
   },
   {
-    "source": "smartcredit/eip712-smartcredit.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
     "source": "starkgate/calldata-StarkGate-STRK.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "bridge-exits"
   },
   {
     "source": "swell/calldata-swell.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
-  },
-  {
-    "source": "swissborg/calldata-ChsbToBorgMigrator.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "swissborg/calldata-NttManager.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
-  },
-  {
-    "source": "tally/eip712-tally-arbitrum-arb-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-arbitrum-core-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-arbitrum-treasury-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-bitcoin-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-bravo-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-ens-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-ens-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-gtk-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-hop-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-hop-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-pool-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-pooltogether-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-uni-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
+    "classification": "pinned-evidence",
+    "evidence": "bridge-exits"
   },
   {
     "source": "tether/calldata-usdt.json",
@@ -1571,20 +1487,20 @@
   {
     "source": "threshold/calldata-L2WormholeGateway.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "threshold"
   },
   {
     "source": "threshold/calldata-RebateStaking.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "threshold"
   },
   {
     "source": "threshold/calldata-TBTCVault.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "threshold"
   },
   {
     "source": "uniswap/calldata-UniswapV3Router02.json",
@@ -1601,8 +1517,8 @@
   {
     "source": "walletconnect/calldata-stakeweight.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "account-factory-controls"
   },
   {
     "source": "walletconnect/calldata-wct.json",
@@ -1619,14 +1535,14 @@
   {
     "source": "yieldxyz/calldata-yieldxyz-pol-validator.json",
     "accepted_leaf_count": 17,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "yieldxyz"
   },
   {
     "source": "yieldxyz/calldata-yieldxyz-usde-vault.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "yieldxyz"
   }
 ]
 }

@@ -1,5 +1,26 @@
 {
   "$schema": "https://github.com/LedgerHQ/clear-signing-erc7730-registry/blob/master/specs/erc7730-v2.schema.json",
+  "_curation_note": "PQSigner semantic curation: the six flat-static LBTC routes below are admitted only for the fixed-block Sepolia StakedLBTC proxy listed by deploymentFormats. burn destroys caller LBTC; permit submits a classical ERC-2612 signature rather than creating one with PQ signing; redeem burns caller LBTC and requests asynchronous processing through mutable AssetRouter state, so no output or completion is promised. mint(bytes,bytes) and redeemForBtc(bytes,uint256) remain exact known-call refusals because their dynamic payload or Bitcoin script semantics are outside this curation. Evidence is historical fixed-block source/runtime authority, not live router, token metadata, pause/access state, execution success, Bitcoin payout, future proxy upgrades, fallback, or blind signing. See tests/erc7730-semantic-evidence/bridge-exits.",
+  "_pqsigner": {
+    "deploymentFormats": [
+      {
+        "chainId": 11155111,
+        "address": "0x731eFa688F3679688cf60A3993b8658138953ED6",
+        "formats": [
+          "approve(address spender, uint256 value)",
+          "burn(uint256 amount)",
+          "permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)",
+          "redeem(uint256 amount)",
+          "transfer(address to, uint256 value)",
+          "transferFrom(address from, address to, uint256 value)"
+        ]
+      }
+    ],
+    "refusalOnlyFormats": [
+      "mint(bytes rawPayload, bytes proof)",
+      "redeemForBtc(bytes scriptPubkey, uint256 amount)"
+    ]
+  },
   "context": {
     "$id": "LBTC",
     "contract": { "deployments": [{ "chainId": 11155111, "address": "0x731eFa688F3679688cf60A3993b8658138953ED6" }] }
@@ -50,7 +71,7 @@
       },
       "permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)": {
         "$id": "permit",
-        "intent": "Permit",
+        "intent": "Submit permit",
         "fields": [
           { "path": "owner", "label": "Owner", "format": "addressName", "params": { "types": ["eoa", "wallet"] }, "visible": "always" },
           {
@@ -69,11 +90,11 @@
       },
       "redeem(uint256 amount)": {
         "$id": "redeem",
-        "intent": "Redeem",
+        "intent": "Request redemption",
         "fields": [
           {
             "path": "amount",
-            "label": "Amount to Redeem",
+            "label": "LBTC to Burn",
             "format": "tokenAmount",
             "params": { "tokenPath": "@.to" },
             "visible": "always"

@@ -1,0 +1,395 @@
+{
+  "artifacts": [
+    {
+      "bytes": 3533,
+      "path": "README.md",
+      "sha256": "8622e6ca6281f3b45a0d79d721ccf4ec6217557b591a3321a38600b06a063416"
+    },
+    {
+      "bytes": 110342,
+      "path": "blockscout/AgentIdentityRegistry.json",
+      "sha256": "b5bdb0db63dedff3daa725117d9d32f70f2eab69ab150b7c9a6fe7492f091f77"
+    },
+    {
+      "bytes": 14710,
+      "path": "blockscout/AgentIdentityRegistry.sol",
+      "sha256": "c451e3ab54f718313072013b6391cd3e102d10c16788ca294150f5b80cbeaa29"
+    },
+    {
+      "bytes": 88698,
+      "path": "blockscout/AssetIdentityRegistry.json",
+      "sha256": "70650d6d8e7f2c1e9cb2830a439c0069266382020d5f21c8897f90606dd224bb"
+    },
+    {
+      "bytes": 15279,
+      "path": "blockscout/AssetIdentityRegistry.sol",
+      "sha256": "ea14442e82630e3f1fa96c48e2a941bca92d526bfc2e6409312f4b9fb9460e24"
+    },
+    {
+      "bytes": 120059,
+      "path": "blockscout/ScoreEngineV2.json",
+      "sha256": "a6105285ce4f0cd74fd6d655c047d54eda566f17e863f222cec6f46acd205f6c"
+    },
+    {
+      "bytes": 33925,
+      "path": "blockscout/ScoreEngineV2.sol",
+      "sha256": "0f6ac119abf1c3f44b1e3522429ca6372d49a48796ba1719bdbfde5519ceceee"
+    },
+    {
+      "bytes": 12964,
+      "path": "collect.sh",
+      "sha256": "b470a108fa6ed0c5325cd269d74603e6aa1d4c4c3fb5f1743b93bfe082f0f44e"
+    },
+    {
+      "bytes": 28941,
+      "path": "compiler/Earn.abi.json",
+      "sha256": "2faa600ee4e610d9a76f12110e83fa9c730b603818aff79464f126895559b5c9"
+    },
+    {
+      "bytes": 284,
+      "path": "compiler/Earn.immutable-references.json",
+      "sha256": "195794c7ff92e4b37ecbb61b44dfb6cb46d0d1277ccb4018d15a9d9a81ddcef5"
+    },
+    {
+      "bytes": 33329,
+      "path": "compiler/Earn.linked-runtime.hex",
+      "sha256": "c563fcb57a012ff3820c2adbfce91d3260ac452daa9ea1b5c946bbad6a856e61"
+    },
+    {
+      "bytes": 32402,
+      "path": "compiler/Earn.metadata.json",
+      "sha256": "17c71f7bc02844808be568b0b7698edf929fe664b2219bf2c376463f6baa4adb"
+    },
+    {
+      "bytes": 33327,
+      "path": "compiler/Earn.unlinked-runtime.hex",
+      "sha256": "0175d3173744a881cb9a8a04a7120f069c2481da463a15181971c234c3fc3206"
+    },
+    {
+      "bytes": 102232,
+      "path": "rpc/base-primary.json",
+      "sha256": "4e8f6217bf095028439907cfbacefbb832f9025555d460783e3639f28f2ed894"
+    },
+    {
+      "bytes": 102208,
+      "path": "rpc/base-secondary.json",
+      "sha256": "1c2c7ab391a1f8074b79ced049d078c43c52e036c9eaae24070754befa30a1e3"
+    },
+    {
+      "bytes": 105305,
+      "path": "rpc/core-primary.json",
+      "sha256": "ae11ec3629f84d9ea49cb77cd0e83fbcfc5402fdf8cfd83f6ae8c60458e7b8f1"
+    },
+    {
+      "bytes": 105345,
+      "path": "rpc/core-secondary.json",
+      "sha256": "b2e4b62f0d074fc00e51d52a7db0b1c5b1b20b04c30fd28223cc03ec283b504f"
+    },
+    {
+      "bytes": 31834,
+      "path": "rpc/sei-node-v6.5.0.json",
+      "sha256": "fa0b61cc3b9f13d88368c56425929c956193430861d2407b224ef0c68b8a1fec"
+    },
+    {
+      "bytes": 31833,
+      "path": "rpc/sei-node-v6.5.2.json",
+      "sha256": "28d796423a42b4b373d254736bee23330307a79f0f91a6c7d78c0f796480ddb2"
+    },
+    {
+      "bytes": 4232,
+      "path": "rpc/sei-primary.json",
+      "sha256": "eef23526ad817bd0ef752f8221427ba5a24ffcc63dec3f2023713aec9e63054b"
+    },
+    {
+      "bytes": 2081,
+      "path": "rpc/sei-secondary.json",
+      "sha256": "41d10b415e317c954d93efea81a4d26bd394388bf122d22227bf437eb45d4afe"
+    },
+    {
+      "bytes": 28,
+      "path": "rpc/sei-v6.5-upgrade.json",
+      "sha256": "f99f544f86a3eea4aa0e963e7ba1a292b0991cb1a4e476d1cf6f7f5a1552b8a0"
+    },
+    {
+      "bytes": 32611,
+      "path": "runtime/AgentIdentityRegistry.onchain.hex",
+      "sha256": "23d4ae2a57149c941d98cd730a0203022bfe00024c7983e930c4da8eaf77b29a"
+    },
+    {
+      "bytes": 27067,
+      "path": "runtime/AssetIdentityRegistry.onchain.hex",
+      "sha256": "d512c70098a56e4d96ff9c631cbe06dc08994aac41493c771e89bdf8b0ccb1a1"
+    },
+    {
+      "bytes": 28769,
+      "path": "runtime/CoreAgent.onchain.hex",
+      "sha256": "d0089e6b257173791e3734570d053aed4b1d408ad151d35c0d09a43286d74af1"
+    },
+    {
+      "bytes": 33329,
+      "path": "runtime/EarnImplementation.onchain.hex",
+      "sha256": "c563fcb57a012ff3820c2adbfce91d3260ac452daa9ea1b5c946bbad6a856e61"
+    },
+    {
+      "bytes": 2205,
+      "path": "runtime/EarnProxy.onchain.hex",
+      "sha256": "3bb366da95562e8214e89f21bcd4027d22d538ff57cd76e044f3c4cc08e2a5d6"
+    },
+    {
+      "bytes": 25729,
+      "path": "runtime/ScoreEngineV2.onchain.hex",
+      "sha256": "8f5ad9455033de1d2963744c1d69754e71b734c008fae80371c13286c7e3e54f"
+    },
+    {
+      "bytes": 33751,
+      "path": "runtime/StakeHub.onchain.hex",
+      "sha256": "af7c269a8c6f20f81852dfa40b0c17555f3cd334bc5fb43627b6a9ff611e7ae9"
+    },
+    {
+      "bytes": 28766,
+      "path": "source/core/core-chain/CoreAgentContract.hex",
+      "sha256": "404f445083218f5ee69e5590f2b711581db51a3cdd0a0456e59048f6165187c9"
+    },
+    {
+      "bytes": 33748,
+      "path": "source/core/core-chain/StakeHubContract.hex",
+      "sha256": "0c148af4dac308ebb9ed9de1378c1b4d7ca8e09bda5204a07c9a497b50693808"
+    },
+    {
+      "bytes": 472651,
+      "path": "source/core/core-chain/commit.json",
+      "sha256": "4021d3499301229d42b3b0d099c306fd9de62887c8ed45b52aa8fb1eb63b31fa"
+    },
+    {
+      "bytes": 65278,
+      "path": "source/core/core-chain/config.go",
+      "sha256": "d12bba56306ba4cef0d3e22d8cc6d617b2bafe5e36bf9b4b87a6c4fa25809274"
+    },
+    {
+      "bytes": 1501,
+      "path": "source/core/core-chain/const.go",
+      "sha256": "3265da76e1875e3bd3ba554603166a7deeb1ad85499c9d6fab7e5a0328eb10b3"
+    },
+    {
+      "bytes": 36437,
+      "path": "source/core/core-chain/upgrade.go",
+      "sha256": "99f326c3dd50e9c2612e89ceb4aaa1a394d286aab9706ceaee855a32eecc651c"
+    },
+    {
+      "bytes": 23932,
+      "path": "source/core/core-genesis/CoreAgent.sol",
+      "sha256": "a00d8bed55011beb3a555533e9d51ba3e57412f7f0d7d0e29e99e4261f9bf3c4"
+    },
+    {
+      "bytes": 14213,
+      "path": "source/core/core-genesis/StakeHub.sol",
+      "sha256": "da7c192a65d1ef493d3f17d0e10a907d1688187a88660957906e1f894f73153f"
+    },
+    {
+      "bytes": 405649,
+      "path": "source/core/core-genesis/commit.json",
+      "sha256": "aa600c136ea81bf952c77e15d5f3779e38c0462f9457fcc3c48321c1e4533b75"
+    },
+    {
+      "bytes": 4560,
+      "path": "source/core/earn/commit.json",
+      "sha256": "f1265598b49a5fa07155be94e237965da3b87af01cdb14210a18890f483af07f"
+    },
+    {
+      "bytes": 35090,
+      "path": "source/core/earn/contracts/Earn.sol",
+      "sha256": "dd0df9d91e8de9e1408f53293af7bf93c9177c39c97388511dea3e3b29b856e3"
+    },
+    {
+      "bytes": 1197,
+      "path": "source/core/earn/contracts/STCore.sol",
+      "sha256": "d731c7b2e0bbaedb8bb0ed723f116d4507c7b02f7ca2866ff820ec6178ca4361"
+    },
+    {
+      "bytes": 390,
+      "path": "source/core/earn/contracts/interface/ICandidateHub.sol",
+      "sha256": "463efd67d40320f0d678a18a6fd954dcf512d9cf0fa1f6ef71253116bcd4105c"
+    },
+    {
+      "bytes": 2256,
+      "path": "source/core/earn/contracts/interface/IErrors.sol",
+      "sha256": "61dc31f1eef7fd29c20e31f3b0236ea424f8e1dca49794e6e2a1949685c41ba4"
+    },
+    {
+      "bytes": 393,
+      "path": "source/core/earn/contracts/interface/IPledgeAgent.sol",
+      "sha256": "86c5d067f1a5631b300f4f4a4f472f3a2f4d5bfdd0a5c4aaa23dca684d6063f4"
+    },
+    {
+      "bytes": 199,
+      "path": "source/core/earn/contracts/interface/ISTCore.sol",
+      "sha256": "9df51066c84115616782de481486706240e5c85cf2939f5cb4c1d93677b44246"
+    },
+    {
+      "bytes": 1659,
+      "path": "source/core/earn/contracts/lib/IterableAddressDelegateMapping.sol",
+      "sha256": "6601cf826d85e356e5b2a9db8f0e8cef5badb0327b5f89a9dc9a2412c67d9230"
+    },
+    {
+      "bytes": 656,
+      "path": "source/core/earn/contracts/lib/Structs.sol",
+      "sha256": "7a71a4bca97e0ee5aefea81c0ad37bc1ea55b5fdc7b723dd9cbef9cfde26cbe7"
+    },
+    {
+      "bytes": 993,
+      "path": "source/core/earn/hardhat.config.ts",
+      "sha256": "180b5b1d916fa0eaa42047c848427071950f964f623b278fad69f1670f0c8978"
+    },
+    {
+      "bytes": 798,
+      "path": "source/core/earn/package.json",
+      "sha256": "f03ee185203256da017d1950af7afca8422479f7e03881279c2bf6c787e0462b"
+    },
+    {
+      "bytes": 5668,
+      "path": "source/sei/v6.5.0/commit.json",
+      "sha256": "c8a949e619fda0f549852bfee1ed233b9615cbe1524828bef46fa3cd9b6eaa3e"
+    },
+    {
+      "bytes": 2903,
+      "path": "source/sei/v6.5.0/precompiles/distribution/abi.json",
+      "sha256": "f0846d0d841d118ac9524b14881d48eb3599c03456dba43e57f6dc76a7cc6be6"
+    },
+    {
+      "bytes": 12537,
+      "path": "source/sei/v6.5.0/precompiles/distribution/distribution.go",
+      "sha256": "a09e3973711f9491c02aab463980df35cb199e07b8e7c8685b1f8aada8dc16f8"
+    },
+    {
+      "bytes": 18107,
+      "path": "source/sei/v6.5.0/precompiles/staking/abi.json",
+      "sha256": "d6515756e72a7a8803c505ffcb250515fcb39f362a001a49cd42575d0f86122e"
+    },
+    {
+      "bytes": 42415,
+      "path": "source/sei/v6.5.0/precompiles/staking/staking.go",
+      "sha256": "279542a08201b4291bc2748c47cec06115f5f957066d6680c038224cd95135e6"
+    },
+    {
+      "bytes": 1091,
+      "path": "source/sei/v6.5.2/app/tags",
+      "sha256": "4bfdd644cd692c73ba7a012db36d8e9f118b117db6e915467d2f78584751afa5"
+    },
+    {
+      "bytes": 2746,
+      "path": "source/sei/v6.5.2/app/upgrades.go",
+      "sha256": "f9625be31dc5edc135fa1377ce8943db9050aa372d0613017aede9b5f7cc4b9c"
+    },
+    {
+      "bytes": 5708,
+      "path": "source/sei/v6.5.2/commit.json",
+      "sha256": "022f62a72deda81cd3f7de38e54f4885162f32fb94aa945bbbdb1ed726421671"
+    },
+    {
+      "bytes": 10157,
+      "path": "source/sei/v6.5.2/precompiles/common/precompiles.go",
+      "sha256": "a4676917b61ce1b87969d62138a34acf3801f57d2877d6774d006eaf93434333"
+    },
+    {
+      "bytes": 3973,
+      "path": "source/sei/v6.5.2/precompiles/distribution/Distribution.sol",
+      "sha256": "99b061b8f88c4fd42bea3ba3eab822e9ce01fb6018144fa73adb36c5d9294884"
+    },
+    {
+      "bytes": 2903,
+      "path": "source/sei/v6.5.2/precompiles/distribution/abi.json",
+      "sha256": "f0846d0d841d118ac9524b14881d48eb3599c03456dba43e57f6dc76a7cc6be6"
+    },
+    {
+      "bytes": 12537,
+      "path": "source/sei/v6.5.2/precompiles/distribution/distribution.go",
+      "sha256": "a09e3973711f9491c02aab463980df35cb199e07b8e7c8685b1f8aada8dc16f8"
+    },
+    {
+      "bytes": 2148,
+      "path": "source/sei/v6.5.2/precompiles/distribution/setup.go",
+      "sha256": "d42d69ce486e05c7aa1728262452ae874350967221af8bfc8290687ba0520fe2"
+    },
+    {
+      "bytes": 12610,
+      "path": "source/sei/v6.5.2/precompiles/staking/Staking.sol",
+      "sha256": "49bcab9bebe9c7960a1a7762d4081243db1f22a2786a1bff701137ac2d300d39"
+    },
+    {
+      "bytes": 18107,
+      "path": "source/sei/v6.5.2/precompiles/staking/abi.json",
+      "sha256": "d6515756e72a7a8803c505ffcb250515fcb39f362a001a49cd42575d0f86122e"
+    },
+    {
+      "bytes": 1978,
+      "path": "source/sei/v6.5.2/precompiles/staking/setup.go",
+      "sha256": "e69f0b750ccdbd4f9019fdf3ee2a5c21443504954a3b33595632a0feec341221"
+    },
+    {
+      "bytes": 42415,
+      "path": "source/sei/v6.5.2/precompiles/staking/staking.go",
+      "sha256": "279542a08201b4291bc2748c47cec06115f5f957066d6680c038224cd95135e6"
+    }
+  ],
+  "boundary": "Historical fixed-block source/runtime and signed-input meaning only. No live-state, future-upgrade, execution-success, fallback, blind-signing, production, shipment, or irreversible-action authority.",
+  "descriptor_families": [
+    {
+      "admitted_leaf_count": 3,
+      "source": "corestake/calldata-coreagent.json"
+    },
+    {
+      "admitted_leaf_count": 3,
+      "source": "corestake/calldata-corestake.json"
+    },
+    {
+      "admitted_leaf_count": 1,
+      "source": "corestake/calldata-stakehub.json"
+    },
+    {
+      "admitted_leaf_count": 3,
+      "refusal_only_format_count": 1,
+      "source": "sei/calldata-sei-distribution.json"
+    },
+    {
+      "admitted_leaf_count": 4,
+      "refusal_only_format_count": 1,
+      "source": "sei/calldata-sei-staking.json"
+    },
+    {
+      "admitted_leaf_count": 5,
+      "source": "avvatar-labs-alia/calldata-AgentIdentityRegistry-base.json"
+    },
+    {
+      "admitted_leaf_count": 4,
+      "source": "avvatar-labs-alia/calldata-AssetIdentityRegistry-base.json"
+    },
+    {
+      "admitted_leaf_count": 2,
+      "source": "avvatar-labs-alia/calldata-ScoreEngineV2-base.json"
+    }
+  ],
+  "fixed_blocks": {
+    "base": {
+      "chain_id": 8453,
+      "hash": "0x8aa1852d9c5afdb6069c44b38764c548bc8b5c155f551ba6609cc50f8e26755a",
+      "hex": "0x2ef2800",
+      "number": 49227776,
+      "state_root": "0xbfb6fddf74293416356c81d3be06f8d209d42b171f97aca0818314be520542a1"
+    },
+    "core": {
+      "chain_id": 1116,
+      "hash": "0x971fe8195ccbf600ce03136634c50734938cfdd61dc9dc02c576027bb1bf5709",
+      "hex": "0x23955b7",
+      "number": 37311927,
+      "state_root": "0x4d012e1647f6f6601bbbdb39b858601d0d30e74267e97413b8ac66c3f8d59fa1"
+    },
+    "sei": {
+      "chain_id": 1329,
+      "hash": "0xb3798904e924708baab16cb1b7a6a3c2bc0c3f259dcca4679203a3571a6c4a99",
+      "hex": "0xd46b000",
+      "number": 222736384,
+      "state_root": "0xcdbba181b455fec3354a5f0dca7c0967c7bb330bc09892bd5ff265ace99275bf"
+    }
+  },
+  "schema_version": 1
+}

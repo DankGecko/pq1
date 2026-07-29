@@ -1321,11 +1321,11 @@ fn validate_uniswap_v3_format(
 }
 
 /// Validate the orthogonal exact-word predicate independently of formatter
-/// policy. Guards are contract-calldata preconditions: accepting one on typed
-/// data, a hidden/conditional field, or a dynamic/constant path would create a
-/// predicate that the contract renderer never evaluates or the user never
-/// sees. The expected value is canonical for the authenticated terminal type,
-/// preventing impossible-EQ and vacuous-NE guards over dirty ABI encodings.
+/// policy. Guards are accepted only on paths that the corresponding renderer
+/// evaluates before publishing trusted pages: static contract scalars or one
+/// top-level EIP-712 encodeData word. The expected value is canonical for the
+/// authenticated terminal type, preventing impossible-EQ and vacuous-NE
+/// guards over dirty ABI encodings.
 fn validate_word_guard(
     ir: &Erc7730Ir<'_>,
     field: &FieldEntry<'_>,
@@ -1338,8 +1338,7 @@ fn validate_word_guard(
     let Some(guard) = params.word_guard else {
         return Ok(());
     };
-    if !matches!(ir.context_kind, ContextKind::Contract)
-        || params.visibility != Visibility::Always
+    if params.visibility != Visibility::Always
         || !matches!(kind, TerminalKind::Unsigned | TerminalKind::Address)
         || field.path_off == 0
     {
@@ -1347,7 +1346,10 @@ fn validate_word_guard(
     }
 
     let path = ir.path_bytes(field.path_off)?;
-    validate_word_guard_scalar_path(path, allow_packed_v3_c2)?;
+    match ir.context_kind {
+        ContextKind::Contract => validate_word_guard_scalar_path(path, allow_packed_v3_c2)?,
+        ContextKind::Eip712 => validate_eip712_word_guard_path(path)?,
+    }
     if path.first().copied() == Some(PathOp::RootContainer as u8)
         && (kind != TerminalKind::Unsigned || params.integer_width_bytes != Some(32))
     {
@@ -1368,6 +1370,17 @@ fn validate_word_guard(
         }
         TerminalKind::Address => Ok(()),
         _ => Err(IrError::BadField),
+    }
+}
+
+pub(crate) fn validate_eip712_word_guard_path(path: &[u8]) -> Result<(), IrError> {
+    if path.len() == 4
+        && path[0] == PathOp::RootStructured as u8
+        && path[1] == PathOp::FieldIdx as u8
+    {
+        Ok(())
+    } else {
+        Err(IrError::BadField)
     }
 }
 
@@ -2308,6 +2321,55 @@ mod tests {
         let mut formats = std::vec![1];
         formats.extend_from_slice(&one_field_format([5, 6, 7, 8], FormatOp::Amount as u8));
         assert!(Erc7730Ir::parse(&build_ir(&pool, &formats)).is_ok());
+    }
+
+    #[test]
+    fn deep_validation_accepts_only_top_level_eip712_word_guards() {
+        use crate::render::{
+            params::{PARAM_INTEGER_WIDTH, PARAM_WORD_GUARD, WORD_GUARD_EQ},
+            policy::TerminalKind,
+        };
+
+        let mut guard_tlvs = std::vec![PARAM_WORD_GUARD, 33, WORD_GUARD_EQ];
+        let mut expected = [0u8; 32];
+        expected[31] = 1;
+        guard_tlvs.extend_from_slice(&expected);
+        guard_tlvs.extend_from_slice(&[PARAM_INTEGER_WIDTH, 1, 32]);
+
+        let mut pool = std::vec![0];
+        let field = eip712_string_field(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+            None,
+            TerminalKind::Unsigned,
+            FormatOp::Raw,
+            &guard_tlvs,
+        );
+        let format = eip712_format([1, 2, 3, 4], 1, 0, &[field]);
+        assert!(Erc7730Ir::parse(&build_eip712_ir(&pool, &format)).is_ok());
+
+        let mut nested_pool = std::vec![0];
+        let nested = eip712_string_field(
+            &mut nested_pool,
+            &[
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+            ],
+            None,
+            TerminalKind::Unsigned,
+            FormatOp::Raw,
+            &guard_tlvs,
+        );
+        let nested_format = eip712_format([1, 2, 3, 4], 1, 0, &[nested]);
+        assert_eq!(
+            Erc7730Ir::parse(&build_eip712_ir(&nested_pool, &nested_format)),
+            Err(IrError::BadField)
+        );
     }
 
     #[test]

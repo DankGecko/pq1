@@ -16,9 +16,9 @@
 //!     `unlimited` instead of a ~1e77 number that looks finite.
 
 use super::primitives::{
-    write_addr_full_or_name, write_chain, write_erc20_header, write_gas, write_gwei, write_line,
-    write_native_currency_row, write_native_fee_budget_row, write_nonce_row, write_tip_row,
-    write_token_amount_two_rows, write_token_name, AmountFit,
+    build_legacy_fee_pages, write_addr_full_or_name, write_chain, write_erc20_header, write_line,
+    write_native_currency_row, write_nonce_row, write_token_amount_two_rows, write_token_name,
+    AmountFit,
 };
 use super::Pages;
 use crate::erc20::bundle::Erc20Metadata;
@@ -124,24 +124,17 @@ pub fn render_erc20_known_pages(
     write_line(&mut pages.buf[p][3], "> next");
     p += 1;
 
-    // ── Max fee + tip ──────────────────────────────────────────────
-    write_line(&mut pages.buf[p][0], "Max fee:");
-    let _ = write_gwei(&mut pages.buf[p][1], &tx.max_fee_per_gas);
-    write_tip_row(&mut pages.buf[p][2], &tx.max_priority_fee_per_gas);
-    write_line(&mut pages.buf[p][3], "> next");
-    p += 1;
-
-    // ── Worst-case fee budget + gas ────────────────────────────────
-    write_line(&mut pages.buf[p][0], "Worst-case:");
-    write_native_fee_budget_row(
-        &mut pages.buf[p][1],
+    // ── Exact max/tip and worst-case fee envelope ──────────────────
+    let fee_pages = build_legacy_fee_pages(
         &tx.max_fee_per_gas,
+        &tx.max_priority_fee_per_gas,
         tx.gas_limit,
         tx.chain_id,
-    );
-    write_gas(&mut pages.buf[p][2], tx.gas_limit);
-    write_line(&mut pages.buf[p][3], "> next");
-    p += 1;
+    )
+    .pages;
+    pages.buf[p] = fee_pages[0];
+    pages.buf[p + 1] = fee_pages[1];
+    p += 2;
 
     // ── Nonce + buttons ────────────────────────────────────────────
     write_nonce_row(&mut pages.buf[p][0], tx.nonce);

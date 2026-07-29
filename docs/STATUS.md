@@ -136,9 +136,11 @@
 > slices, the catalogue was 428 leaves / 340,215 bytes / root
 > `c785f90c…b054d4`; the 4,542 known-call set and its receipt were unchanged,
 > and omissions remained 281.
-> Evidence is recorded in the live
-> [`work-todo.md`](work-todo.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16)
-> row. Host suites, descriptor drift, and standalone plus canonical dual-SE
+> Evidence is recorded in the
+> [`work-todo` archive](archive/work-todo-retired-2026-07-19.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16)
+> row (work tracking moved to the
+> [`source:work-todo`](https://github.com/EthereumPhone/PQ1/issues?q=label%3Asource%3Awork-todo)
+> issues on 2026-07-19). Host suites, descriptor drift, and standalone plus canonical dual-SE
 > STM32U585 `thumbv8m` checks are green. This is bounded implementation evidence,
 > not the batched Phase-D adversarial review or production/ship authority;
 > forced blind signing remains disabled under the 2026-07-16 decision above.
@@ -193,7 +195,7 @@
 > and Kimi K3 fast review returned three **GO** verdicts with no findings, after
 > which that identity landed on `master` and was pushed. The exhaustive
 > combined playbook lock-in is explicitly deferred to the future
-> owner-triggered item in `docs/work-todo.md`; session restart does not activate
+> owner-triggered item (`source:work-todo` issues); session restart does not activate
 > it. This grants no production, shipment, or forced-blind authority.
 
 > **Scoped ERC-7730 upstream-conformance review receipt — 2026-07-18.** The
@@ -210,7 +212,7 @@
 > This candidate changes no production descriptor, root, known-call Bloom,
 > firmware signing behavior, or legacy
 > transaction authority. Broader semantic enrollment and corpus-derived
-> adversarial mutations remain open in `docs/work-todo.md`; forced blind signing
+> adversarial mutations remain open in the `source:work-todo` issues; forced blind signing
 > remains disabled and out of scope. Frozen commit
 > `8b32c3a925bbf1f1d34d53caf5ca76b2a6d2245b`, tree
 > `036a209950f20bfe629570a78d4bdbeccd0d4f76`, received simultaneous GPT-5.6
@@ -317,7 +319,9 @@ re-drifting.
 
 ## A. SHIP GATE — must close before any unit leaves the bench
 
-`docs/production-todo.md` owns the OPTIGA bench/factory spec; `docs/security/security-review-2026-05.md` owns the
+The [`label:ship-blocker`](https://github.com/EthereumPhone/PQ1/issues?q=label%3Aship-blocker) issues own the OPTIGA
+bench/factory spec (retired `docs/production-todo.md` → see the migration note above; full pre-migration text at
+`docs/archive/production-todo-retired-2026-07-19.md`); `docs/security/security-review-2026-05.md` owns the
 `C-n → S-n` finding provenance; `docs/security/red-teaming.md` owns the bench pass/fail bars.
 
 | ID | Item | Status | Blocked-on | Evidence (spot-check) | What remains |
@@ -366,7 +370,7 @@ re-drifting.
 | SCA | dudect DWT Welch t-test on real U585 (`verify()`/KDF) | open | no make target / artifact | sota §1 |
 | SCA | lascar/scared CPA — **on-silicon** SHA-2 PRF DPA sufficiency (emulated half done: F-9 found+fixed) | partial | `make kdf`/`f9-*`; emulated = software-AES stand-in | work-todo §18b(b) |
 | FI/SCA | Hardware bench: ChipWhisperer-Husky + ChipSHOUTER-PicoEMP | open | listed adopt-now, nothing acquired | sota §SCA-rigs |
-| OPTIGA | S-1 / S-3 LcsO=Op ratchet + sacrificial-part validation | open | `production-todo.md` | sec-review |
+| OPTIGA | S-1 / S-3 LcsO=Op ratchet + sacrificial-part validation | open | `label:ship-blocker` issues | sec-review |
 | SE050 | S-5 logic-analyzer bus capture | open | `red-teaming §5.1` | — |
 
 > **Resolved sub-question:** "no public STM32U5 RDP/TZ glitch result exists" has **flipped** — the

@@ -1,0 +1,51 @@
+[
+  {
+    "id": "old-put-proxy-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-put-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-pft-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xc55253ea84050700e1efa8878d4a5053b6bf7c5e",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-put-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x1e4e741e5f0f4f258def137e1968716eddae4bf5",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

@@ -1,0 +1,117 @@
+[
+  {
+    "name": "createOperator",
+    "type": "function",
+    "inputs": [
+      {
+        "name": "_owner",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_name",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "_operatorFee",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "_maximumOperatorFee",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "_recipients",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "_percents",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "newOperator",
+        "type": "address",
+        "internalType": "contract Operator"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "name": "createSplitter",
+    "type": "function",
+    "inputs": [
+      {
+        "name": "operator",
+        "type": "address",
+        "internalType": "contract Operator"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract Splitter"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "name": "createSplitterAndCall",
+    "type": "function",
+    "inputs": [
+      {
+        "name": "operator",
+        "type": "address",
+        "internalType": "contract Operator"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "callAddress",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "newSplitter",
+        "type": "address",
+        "internalType": "contract Splitter"
+      }
+    ],
+    "stateMutability": "payable"
+  },
+  {
+    "name": "transferOwnership",
+    "type": "function",
+    "inputs": [
+      {
+        "name": "newOwner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  }
+]

@@ -15,7 +15,7 @@
 //!   `&mut [u8; DISPLAY_COLS]` and writes exactly one row's worth of
 //!   ASCII. Rows are pre-cleared to `b' '` before any data is written.
 
-use super::DISPLAY_COLS;
+use super::{Page, DISPLAY_COLS, DISPLAY_ROWS};
 use pqsigner_tx::erc20::bundle::Erc20Metadata;
 use pqsigner_tx::erc20::calldata::Erc20Call;
 use pqsigner_tx_core::eip1559::U256;
@@ -139,6 +139,23 @@ pub fn amount_is_exact_at_fraction_digits(
         }
     }
     true
+}
+
+/// Select the smallest friendly fractional width that preserves every signed
+/// base unit. The search is deliberately capped: ordinary token metadata uses
+/// at most 18 displayed decimals, while larger-decimal assets must have enough
+/// trailing zero base units to fit that exact envelope or be refused.
+#[must_use]
+fn exact_fraction_digits(value: &U256, decimals: u32, preferred: u32, maximum: u32) -> Option<u32> {
+    let mut fraction_digits = core::cmp::min(decimals, preferred);
+    let maximum = core::cmp::min(decimals, maximum);
+    while fraction_digits <= maximum {
+        if amount_is_exact_at_fraction_digits(value, decimals, fraction_digits) {
+            return Some(fraction_digits);
+        }
+        fraction_digits = fraction_digits.checked_add(1)?;
+    }
+    None
 }
 
 /// F14#3 collapse-to-zero guard: true iff `digits` (a `format_decimal`
@@ -631,9 +648,9 @@ pub fn write_chain(row1: &mut [u8; DISPLAY_COLS], row2: &mut [u8; DISPLAY_COLS],
 // ETH / gwei / gas formatting
 // ---------------------------------------------------------------------------
 
-/// Number of fractional digits shown for every ETH amount. Fixed (not
-/// auto-shrunk to fit a row) and matched to the ERC-20 token policy
-/// (`write_token_amount_two_rows` uses `min(decimals, 6)`).
+/// Number of fractional digits shown for compact known-chain native amounts.
+/// Unlike legacy known-token rows, which may widen to preserve exactness,
+/// native rendering remains fixed and relies on its pre-publication gate.
 /// Fractional precision shared by every compact known-chain native-currency
 /// painter and by the secure exactness gate that authorizes its output.
 /// Keeping one constant prevents the gate and painter from drifting into
@@ -648,10 +665,10 @@ pub const NATIVE_DISPLAY_FRACTION_DIGITS: u32 = 6;
 /// 17+ digit integer can't be rendered, and the caller paints a banner.
 ///
 /// **Anti-spoof (audit M-6).** The fractional width is FIXED at
-/// [`NATIVE_DISPLAY_FRACTION_DIGITS`] and trailing zeros are NOT trimmed — identical to
-/// the ERC-20 token-amount policy. This removes adaptive-width display drift,
-/// but six-decimal formatting can still round lower base units. A trusted sink
-/// that needs exact signed-value binding must require
+/// [`NATIVE_DISPLAY_FRACTION_DIGITS`] and trailing zeros are NOT trimmed. This
+/// removes adaptive-width display drift, but six-decimal formatting can still
+/// round lower base units. A trusted sink that needs exact signed-value binding
+/// must require
 /// [`amount_is_exact_at_fraction_digits`] in addition to `AmountFit::Full`.
 pub fn write_eth_two_rows(
     row1: &mut [u8; DISPLAY_COLS],
@@ -716,93 +733,164 @@ pub fn write_native_amount_two_rows(
     )
 }
 
-/// Paint a gas-price value in gwei on a single row. Uses 3 fractional
-/// digits by default; degrades precision if the integer portion needs
-/// more room. Returns `false` if even the integer form doesn't fit —
-/// in practice only possible for attacker-crafted 2^256-class inputs.
+/// Return `true` iff the real compact native-currency painter represents the
+/// signed value exactly.
+///
+/// Known chains have firmware-pinned 18-decimal native metadata, so the fixed
+/// six-decimal display is authorized only when every discarded base unit is
+/// zero. Unknown chains use the painter's exact raw-integer path and therefore
+/// need only pass its two-row width check.
+#[must_use]
+pub fn native_amount_is_exactly_renderable(value: &U256, chain_id: u64) -> bool {
+    if known_native_ticker(chain_id).is_some()
+        && !amount_is_exact_at_fraction_digits(value, 18, NATIVE_DISPLAY_FRACTION_DIGITS)
+    {
+        return false;
+    }
+
+    let mut row1 = [b' '; DISPLAY_COLS];
+    let mut row2 = [b' '; DISPLAY_COLS];
+    write_native_amount_two_rows(&mut row1, &mut row2, value, chain_id) == AmountFit::Full
+}
+
+/// Paint an exact derived native-currency bound across up to two rows.
+///
+/// Signed transfer values deliberately stay on the stable six-decimal
+/// [`write_native_amount_two_rows`] policy and must pass
+/// [`native_amount_is_exactly_renderable`]. A derived upper bound, such as a
+/// Safe gas refund estimate, is not itself a signed amount and commonly has
+/// finer-than-six-decimal dust after multiplication. Refusing every such bound
+/// would make ordinary refunds unavailable, so this sink widens only as far as
+/// required to preserve every base unit, then falls back to an exact raw-wei
+/// integer when the scaled form does not fit. Unknown-chain amounts retain the
+/// exact unscaled `raw` policy because their decimal scale is not pinned.
+///
+/// Every successful path is injective over `value`: scaled paths are admitted
+/// only when no base unit is discarded, and the fallback is the full integer.
+#[must_use]
+pub fn write_native_derived_amount_two_rows(
+    row1: &mut [u8; DISPLAY_COLS],
+    row2: &mut [u8; DISPLAY_COLS],
+    value: &U256,
+    chain_id: u64,
+) -> AmountFit {
+    let Some(unit) = known_native_ticker(chain_id) else {
+        return write_native_amount_two_rows(row1, row2, value, chain_id);
+    };
+
+    // At 18 fractional digits every U256 is exact, so this search always
+    // succeeds. Keep the Option handling fail-closed if that invariant changes.
+    if let Some(frac) = exact_fraction_digits(value, 18, NATIVE_DISPLAY_FRACTION_DIGITS, 18) {
+        if single_row_amount_fixed(row1, value, 18, frac, unit) {
+            *row2 = [b' '; DISPLAY_COLS];
+            return AmountFit::Full;
+        }
+        if write_amount_two_rows_bytes(row1, row2, value, 18, frac, false, unit) == AmountFit::Full
+        {
+            return AmountFit::Full;
+        }
+    }
+
+    // A long fractional tail can exceed row 2 even when the exact integer base
+    // units comfortably fit across both rows. The explicit `wei` suffix keeps
+    // this representation distinguishable from every ticker-scaled form.
+    write_amount_two_rows(row1, row2, value, 0, 0, false, true, "wei")
+}
+
+/// Paint a gas-price value exactly on a single row. Three fractional gwei
+/// digits remain the preferred stable width, but the renderer may use up to
+/// all nine gwei decimals when needed to preserve signed wei. If no exact gwei
+/// form fits, it falls back to an exact raw-wei integer. Returns `false` only
+/// when neither exact representation fits.
+#[must_use]
 pub fn write_gwei(row: &mut [u8; DISPLAY_COLS], value: &U256) -> bool {
-    // `reject_zero_collapse = false`: a genuinely tiny gas price rendering as
-    // "0.000 gwei" is truthful (a fee, not a transfer amount), so do NOT flip
-    // it to an overflow banner (F14#3 applies only to transfer amounts).
+    // Prefer the historical width and shorter exact forms first so large
+    // integer portions retain their previous layout.
     for &frac in &[3u32, 2, 1, 0] {
-        if try_write_amount_single_row(row, value, 9, frac, true, false, "gwei") {
+        if amount_is_exact_at_fraction_digits(value, 9, frac)
+            && try_write_amount_single_row(row, value, 9, frac, true, false, "gwei")
+        {
             return true;
         }
     }
-    // Last-ditch: raw wei as integer, labelled "wei". Prevents a silent
-    // gap on the screen; the user sees an unexpectedly large number.
-    for &frac in &[0u32] {
-        if try_write_amount_single_row(row, value, 0, frac, true, false, "wei") {
+    // Values below 0.001 gwei or carrying sub-micro-gwei dust need more
+    // precision, not rounding.
+    for frac in 4u32..=9 {
+        if amount_is_exact_at_fraction_digits(value, 9, frac)
+            && try_write_amount_single_row(row, value, 9, frac, true, false, "gwei")
+        {
             return true;
         }
+    }
+    // Last-ditch: exact raw wei as an integer.
+    if try_write_amount_single_row(row, value, 0, 0, true, false, "wei") {
+        return true;
     }
     write_line(row, "!OVERFLOW");
     false
 }
 
-/// "(gas: N)" limited to a single row. For gas limits that don't fit
-/// in decimal on 16 cols (> 10^15-ish) we emit "(gas: !OVF)" — the
-/// attacker-control path that would trip this is already a fee-bomb.
-pub fn write_gas(row: &mut [u8; DISPLAY_COLS], gas: u64) {
+/// Paint `"(gas: N)"` on one row. Returns `false` and paints
+/// `"(gas: !OVF)"` when the exact decimal value cannot fit.
+#[must_use]
+pub fn write_gas(row: &mut [u8; DISPLAY_COLS], gas: u64) -> bool {
     *row = [b' '; DISPLAY_COLS];
     let mut pos = append(row, 0, b"(gas: ");
     let mut tmp = [0u8; 20];
-    match format_u64(gas, &mut tmp) {
+    let exact = match format_u64(gas, &mut tmp) {
         Some(n) if pos + n + 1 <= DISPLAY_COLS => {
             row[pos..pos + n].copy_from_slice(&tmp[..n]);
             pos += n;
+            true
         }
         _ => {
             pos = append(row, pos, b"!OVF");
+            false
         }
-    }
+    };
     if pos < DISPLAY_COLS {
         row[pos] = b')';
     }
+    exact
 }
 
-/// "Tip: N gwei" on a single row. Same graceful degradation as
-/// [`write_gwei`].
-pub fn write_tip_row(row: &mut [u8; DISPLAY_COLS], tip: &U256) {
-    *row = [b' '; DISPLAY_COLS];
-    let mut pos = append(row, 0, b"Tip: ");
-    let mut tmp = [0u8; 96];
-    let mut wrote = false;
-    for &frac in &[3u32, 2, 1, 0] {
-        if let Some(n) = tip.format_decimal(9, frac, true, &mut tmp) {
-            if pos + n + 5 <= DISPLAY_COLS {
-                row[pos..pos + n].copy_from_slice(&tmp[..n]);
-                pos += n;
-                pos = append(row, pos, b" gwei");
-                let _ = pos;
-                wrote = true;
-                break;
-            }
-        }
-    }
-    if !wrote {
-        let _ = append(row, 5, b"!OVF");
-    }
+/// Paint the priority-fee value on the full row. Legacy fee pages label row 1
+/// and row 2 together as `max / tip`, so neither value sacrifices exact
+/// numeric width to a repeated inline label.
+#[must_use]
+pub fn write_tip_row(row: &mut [u8; DISPLAY_COLS], tip: &U256) -> bool {
+    write_gwei(row, tip)
 }
 
-/// "Max: X ETH" worst-case fee budget on a single row. Computed as
-/// `max_fee_per_gas * gas_limit`. Silently clamps to U256::MAX on
-/// multiplication overflow; the caller sees a suspiciously huge value
-/// rather than a wrong-by-modulus one.
-pub fn write_fee_budget_row(row: &mut [u8; DISPLAY_COLS], max_fee_per_gas: &U256, gas_limit: u64) {
-    write_fee_budget_row_with_unit(row, max_fee_per_gas, gas_limit, b"ETH");
+/// Paint the exact worst-case fee budget on the full row beneath the caller's
+/// `Worst-case:` header. Computed as `max_fee_per_gas * gas_limit`. Returns
+/// `false` if multiplication overflows or no exact native/wei representation
+/// fits.
+#[must_use]
+pub fn write_fee_budget_row(
+    row: &mut [u8; DISPLAY_COLS],
+    max_fee_per_gas: &U256,
+    gas_limit: u64,
+) -> bool {
+    write_fee_budget_row_with_unit(row, max_fee_per_gas, gas_limit, b"ETH")
 }
 
 /// Chain-aware variant of [`write_fee_budget_row`]. The fee budget is paid in
-/// the chain's native asset, so the suffix must be selected from the signed
-/// chain id. Unknown chains are labelled `NATIVE` rather than ETH.
+/// the chain's native asset, so both the suffix and 18-decimal scale must be
+/// selected from audited metadata for the signed chain id. Unknown chains
+/// refuse rather than assigning an unauthenticated magnitude.
+#[must_use]
 pub fn write_native_fee_budget_row(
     row: &mut [u8; DISPLAY_COLS],
     max_fee_per_gas: &U256,
     gas_limit: u64,
     chain_id: u64,
-) {
-    write_fee_budget_row_with_unit(row, max_fee_per_gas, gas_limit, native_ticker(chain_id));
+) -> bool {
+    let Some(unit) = known_native_ticker(chain_id) else {
+        write_line(row, "!NO SCALE");
+        return false;
+    };
+    write_fee_budget_row_with_unit(row, max_fee_per_gas, gas_limit, unit)
 }
 
 fn write_fee_budget_row_with_unit(
@@ -810,28 +898,183 @@ fn write_fee_budget_row_with_unit(
     max_fee_per_gas: &U256,
     gas_limit: u64,
     unit: &[u8],
-) {
+) -> bool {
     *row = [b' '; DISPLAY_COLS];
-    let mut pos = append(row, 0, b"Max: ");
-    let (budget, _overflow) = max_fee_per_gas.saturating_mul_u64(gas_limit);
+    let (budget, overflow) = max_fee_per_gas.saturating_mul_u64(gas_limit);
+    if overflow {
+        write_line(row, "!OVF");
+        return false;
+    }
     let mut tmp = [0u8; 96];
-    let mut wrote = false;
     for &frac in &[4u32, 3, 2, 1, 0] {
-        if let Some(n) = budget.format_decimal(18, frac, true, &mut tmp) {
-            if pos + n + 1 + unit.len() <= DISPLAY_COLS {
-                row[pos..pos + n].copy_from_slice(&tmp[..n]);
-                pos += n;
-                pos = append(row, pos, b" ");
-                pos = append(row, pos, unit);
-                let _ = pos;
-                wrote = true;
-                break;
+        if amount_is_exact_at_fraction_digits(&budget, 18, frac) {
+            if let Some(n) = budget.format_decimal(18, frac, true, &mut tmp) {
+                if n + 1 + unit.len() <= DISPLAY_COLS {
+                    row[..n].copy_from_slice(&tmp[..n]);
+                    let mut pos = n;
+                    pos = append(row, pos, b" ");
+                    let _ = append(row, pos, unit);
+                    return true;
+                }
             }
         }
     }
-    if !wrote {
-        let _ = append(row, 5, b"!OVF");
+    for frac in 5u32..=18 {
+        if amount_is_exact_at_fraction_digits(&budget, 18, frac) {
+            if let Some(n) = budget.format_decimal(18, frac, true, &mut tmp) {
+                if n + 1 + unit.len() <= DISPLAY_COLS {
+                    row[..n].copy_from_slice(&tmp[..n]);
+                    let mut pos = n;
+                    pos = append(row, pos, b" ");
+                    let _ = append(row, pos, unit);
+                    return true;
+                }
+            }
+        }
     }
+    if let Some(n) = budget.format_decimal(0, 0, true, &mut tmp) {
+        if n + 4 <= DISPLAY_COLS {
+            row[..n].copy_from_slice(&tmp[..n]);
+            let pos = n;
+            let _ = append(row, pos, b" wei");
+            return true;
+        }
+    }
+    write_line(row, "!OVF");
+    false
+}
+
+/// Number of pages in the compact legacy EIP-1559 fee envelope.
+pub const LEGACY_FEE_PAGE_COUNT: usize = 2;
+
+/// A complete legacy EIP-1559 fee render and its exactness verdict.
+///
+/// Every legacy route copies these pages verbatim, while dispatch independently
+/// consumes `exact` before allowing any page set to escape. Keeping both outputs
+/// in one builder prevents preflight and the trusted-display bytes from
+/// acquiring separate numeric policies.
+pub struct LegacyFeeRender {
+    pub pages: [Page; LEGACY_FEE_PAGE_COUNT],
+    pub exact: bool,
+}
+
+/// Build the two legacy EIP-1559 fee pages.
+///
+/// Known chains retain the historical gwei/native-asset layout byte-for-byte.
+/// An unknown chain has no authenticated decimal scale, so its signed fee
+/// operands and derived upper bound are displayed as unscaled base-unit
+/// integers under explicit `/base` labels. Every accepted integer is complete:
+/// max fee and tip fit one row each, while the worst-case total may span two
+/// rows with an explicit continuation marker.
+#[must_use]
+pub fn build_legacy_fee_pages(
+    max_fee_per_gas: &U256,
+    max_priority_fee_per_gas: &U256,
+    gas_limit: u64,
+    chain_id: u64,
+) -> LegacyFeeRender {
+    let mut pages = [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; LEGACY_FEE_PAGE_COUNT];
+
+    if known_native_ticker(chain_id).is_some() {
+        write_line(&mut pages[0][0], "Fees: max / tip");
+        let max_exact = write_gwei(&mut pages[0][1], max_fee_per_gas);
+        let tip_exact = write_tip_row(&mut pages[0][2], max_priority_fee_per_gas);
+        write_line(&mut pages[0][3], "> next");
+
+        write_line(&mut pages[1][0], "Worst-case:");
+        let budget_exact =
+            write_native_fee_budget_row(&mut pages[1][1], max_fee_per_gas, gas_limit, chain_id);
+        let gas_exact = write_gas(&mut pages[1][2], gas_limit);
+        write_line(&mut pages[1][3], "> next");
+
+        return LegacyFeeRender {
+            pages,
+            exact: max_exact & tip_exact & budget_exact & gas_exact,
+        };
+    }
+
+    write_line(&mut pages[0][0], "Base: max / tip");
+    let max_exact = write_raw_base_unit_row(&mut pages[0][1], max_fee_per_gas);
+    let tip_exact = write_raw_base_unit_row(&mut pages[0][2], max_priority_fee_per_gas);
+    write_line(&mut pages[0][3], "> next");
+
+    write_line(&mut pages[1][0], "Worst-case/base:");
+    let (budget, overflow) = max_fee_per_gas.saturating_mul_u64(gas_limit);
+    let budget_exact = if overflow {
+        write_line(&mut pages[1][1], "!OVERFLOW");
+        false
+    } else {
+        let [_, total_hi, total_lo, _] = &mut pages[1];
+        write_raw_base_unit_two_rows(total_hi, total_lo, &budget)
+    };
+    let gas_exact = write_gas(&mut pages[1][3], gas_limit);
+
+    LegacyFeeRender {
+        pages,
+        exact: max_exact & tip_exact & !overflow & budget_exact & gas_exact,
+    }
+}
+
+fn write_raw_base_unit_row(row: &mut [u8; DISPLAY_COLS], value: &U256) -> bool {
+    *row = [b' '; DISPLAY_COLS];
+    let mut digits = [0u8; 80];
+    let Some(n) = value
+        .format_decimal(0, 0, false, &mut digits)
+        .filter(|&n| n <= DISPLAY_COLS)
+    else {
+        write_line(row, "!OVERFLOW");
+        return false;
+    };
+    row[..n].copy_from_slice(&digits[..n]);
+    true
+}
+
+fn write_raw_base_unit_two_rows(
+    row1: &mut [u8; DISPLAY_COLS],
+    row2: &mut [u8; DISPLAY_COLS],
+    value: &U256,
+) -> bool {
+    *row1 = [b' '; DISPLAY_COLS];
+    *row2 = [b' '; DISPLAY_COLS];
+    let mut digits = [0u8; 80];
+    let Some(n) = value
+        .format_decimal(0, 0, false, &mut digits)
+        .filter(|&n| n <= 2 * DISPLAY_COLS - 1)
+    else {
+        write_line(row1, "!OVERFLOW");
+        return false;
+    };
+    if n <= DISPLAY_COLS {
+        row1[..n].copy_from_slice(&digits[..n]);
+        return true;
+    }
+
+    let first = DISPLAY_COLS - 1;
+    row1[..first].copy_from_slice(&digits[..first]);
+    row1[first] = b'>';
+    let rest = n - first;
+    row2[..rest].copy_from_slice(&digits[first..n]);
+    true
+}
+
+/// Build the complete legacy fee envelope in scratch storage and report
+/// whether every signed/derived value is represented exactly. Dispatch runs
+/// this for routes that use the legacy fee painter before publishing their
+/// pages, so a formatting failure cannot become an authorization banner.
+#[must_use]
+pub fn legacy_fee_rows_are_exactly_renderable(
+    max_fee_per_gas: &U256,
+    max_priority_fee_per_gas: &U256,
+    gas_limit: u64,
+    chain_id: u64,
+) -> bool {
+    build_legacy_fee_pages(
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+        gas_limit,
+        chain_id,
+    )
+    .exact
 }
 
 /// "Item X of Y" divider row for a nested array-of-struct (`T[]`) render (v2) —
@@ -983,23 +1226,62 @@ pub fn write_token_amount_two_rows(
     amount: &U256,
     meta: &Erc20Metadata<'_>,
 ) -> AmountFit {
-    // Mirror format_decimal's "decimals-bounded fractional width":
-    // frac_digits = min(decimals, 6). For 0-decimal tokens we collapse
-    // to pure integer.
+    // Keep six fractional digits as the friendly baseline, then widen only as
+    // far as needed (up to 18) to preserve every signed base unit. Metadata
+    // with more decimals is accepted only when its omitted low digits are all
+    // zero. No successful return may contain a rounded amount.
     let decimals = meta.decimals as u32;
-    let frac = core::cmp::min(decimals, 6);
     let unit_bytes = meta.symbol;
 
-    // Try single row first.
-    if single_row_amount_fixed(row1, amount, decimals, frac, unit_bytes) {
-        *row2 = [b' '; DISPLAY_COLS];
-        return AmountFit::Full;
+    if let Some(frac) = exact_fraction_digits(amount, decimals, 6, 18) {
+        // Try single row first.
+        if single_row_amount_fixed(row1, amount, decimals, frac, unit_bytes) {
+            *row2 = [b' '; DISPLAY_COLS];
+            return AmountFit::Full;
+        }
+
+        // 2-row fallback. Symbol can be up to MAX_DISPLAY_FIELD = 64 bytes
+        // from the bundle, but we trust only the first DISPLAY_COLS-1 of
+        // it on screen.
+        if write_amount_two_rows_bytes(row1, row2, amount, decimals, frac, false, unit_bytes)
+            == AmountFit::Full
+        {
+            return AmountFit::Full;
+        }
     }
 
-    // 2-row fallback. Symbol can be up to MAX_DISPLAY_FIELD = 64 bytes
-    // from the bundle, but we trust only the first DISPLAY_COLS-1 of
-    // it on screen.
-    write_amount_two_rows_bytes(row1, row2, amount, decimals, frac, false, unit_bytes)
+    // Tiny high-decimal amounts and other awkward exact decimals may not fit
+    // the two-row grid. Preserve availability without rounding by rendering
+    // the signed integer in explicitly labelled token base units. Refuse when
+    // the complete label or integer still cannot fit.
+    const BASE_PREFIX: &[u8] = b"base ";
+    if unit_bytes.len() > DISPLAY_COLS.saturating_sub(BASE_PREFIX.len() + 1) {
+        *row1 = [b' '; DISPLAY_COLS];
+        *row2 = [b' '; DISPLAY_COLS];
+        return AmountFit::Overflow;
+    }
+    let mut base_unit = [0u8; DISPLAY_COLS];
+    base_unit[..BASE_PREFIX.len()].copy_from_slice(BASE_PREFIX);
+    base_unit[BASE_PREFIX.len()..BASE_PREFIX.len() + unit_bytes.len()].copy_from_slice(unit_bytes);
+    write_amount_two_rows_bytes(
+        row1,
+        row2,
+        amount,
+        0,
+        0,
+        false,
+        &base_unit[..BASE_PREFIX.len() + unit_bytes.len()],
+    )
+}
+
+/// Pure pre-publication check for legacy token amount sinks. It intentionally
+/// executes the real painter into scratch rows so width, unit, decimal and
+/// exactness policy cannot drift from the pages later shown to the user.
+#[must_use]
+pub fn token_amount_is_exactly_renderable(amount: &U256, meta: &Erc20Metadata<'_>) -> bool {
+    let mut row1 = [b' '; DISPLAY_COLS];
+    let mut row2 = [b' '; DISPLAY_COLS];
+    write_token_amount_two_rows(&mut row1, &mut row2, amount, meta) == AmountFit::Full
 }
 
 /// CoW swap-leg amount renderer. Formats a 32-byte big-endian amount
@@ -1200,8 +1482,9 @@ mod eip55_tests {
 #[cfg(test)]
 mod native_amount_tests {
     use super::{
-        amount_is_exact_at_fraction_digits, known_native_ticker, write_native_amount_two_rows,
-        AmountFit, DISPLAY_COLS,
+        amount_is_exact_at_fraction_digits, known_native_ticker,
+        native_amount_is_exactly_renderable, write_native_amount_two_rows,
+        write_native_derived_amount_two_rows, AmountFit, DISPLAY_COLS,
     };
     use pqsigner_tx_core::eip1559::U256;
 
@@ -1274,6 +1557,7 @@ mod native_amount_tests {
         for chain_id in [1, 56] {
             assert!(known_native_ticker(chain_id).is_some());
             assert!(!amount_is_exact_at_fraction_digits(&value, 18, 6));
+            assert!(!native_amount_is_exactly_renderable(&value, chain_id));
             let mut row1 = [b' '; DISPLAY_COLS];
             let mut row2 = [b' '; DISPLAY_COLS];
             assert_eq!(
@@ -1296,10 +1580,12 @@ mod native_amount_tests {
             write_native_amount_two_rows(exact_row1, exact_row2, &exact, 1),
             AmountFit::Full
         );
+        assert!(native_amount_is_exactly_renderable(&exact, 1));
         assert_eq!(
             write_native_amount_two_rows(next_row1, next_row2, &next, 1),
             AmountFit::Full
         );
+        assert!(native_amount_is_exactly_renderable(&next, 1));
         assert_ne!(exact_rows, next_rows);
         assert_eq!(trimmed(&next_rows[0]), b"1.000001 ETH");
     }
@@ -1312,6 +1598,10 @@ mod native_amount_tests {
             write_native_amount_two_rows(&mut row1, &mut row2, &u256_from_u128(1), 4_242_424_242,),
             AmountFit::Full
         );
+        assert!(native_amount_is_exactly_renderable(
+            &u256_from_u128(1),
+            4_242_424_242
+        ));
         assert_eq!(trimmed(&row1), b"1");
         assert_eq!(trimmed(&row2), b"raw");
 
@@ -1319,6 +1609,207 @@ mod native_amount_tests {
             write_native_amount_two_rows(&mut row1, &mut row2, &U256([0xff; 32]), 4_242_424_242,),
             AmountFit::Overflow
         );
+        assert!(!native_amount_is_exactly_renderable(
+            &U256([0xff; 32]),
+            4_242_424_242
+        ));
+    }
+
+    #[test]
+    fn derived_native_bound_widens_then_falls_back_to_exact_wei() {
+        // Safe refund upper bound for baseGas=43_776 and gasPrice=1 gwei.
+        let ordinary = u256_from_u128(30_043_776_000_000_000);
+        let mut ordinary_rows = [[b' '; DISPLAY_COLS]; 2];
+        let [ordinary_row1, ordinary_row2] = &mut ordinary_rows;
+        assert_eq!(
+            write_native_derived_amount_two_rows(ordinary_row1, ordinary_row2, &ordinary, 1),
+            AmountFit::Full
+        );
+        assert_eq!(trimmed(&ordinary_rows[0]), b"0.030043776 ETH");
+        assert!(trimmed(&ordinary_rows[1]).is_empty());
+
+        // One extra wei per gas needs all 18 decimals; that scaled tail does
+        // not fit, but the exact 17-digit base-unit integer does.
+        let dusty = u256_from_u128(30_043_776_030_043_776);
+        let mut dusty_rows = [[b' '; DISPLAY_COLS]; 2];
+        let [dusty_row1, dusty_row2] = &mut dusty_rows;
+        assert_eq!(
+            write_native_derived_amount_two_rows(dusty_row1, dusty_row2, &dusty, 1),
+            AmountFit::Full
+        );
+        assert_eq!(trimmed(&dusty_rows[0]), b"3004377603004377");
+        assert_eq!(trimmed(&dusty_rows[1]), b"6 wei");
+        assert_ne!(ordinary_rows, dusty_rows);
+
+        assert_eq!(
+            write_native_derived_amount_two_rows(
+                &mut [b' '; DISPLAY_COLS],
+                &mut [b' '; DISPLAY_COLS],
+                &U256([0xff; 32]),
+                1,
+            ),
+            AmountFit::Overflow
+        );
+    }
+}
+
+#[cfg(test)]
+mod legacy_fee_page_tests {
+    use super::{
+        build_legacy_fee_pages, legacy_fee_rows_are_exactly_renderable,
+        write_raw_base_unit_two_rows, DISPLAY_COLS,
+    };
+    use pqsigner_tx_core::eip1559::U256;
+
+    const UNKNOWN_CHAIN: u64 = 4_242_424_242;
+
+    fn u256_from_u128(value: u128) -> U256 {
+        let mut bytes = [0u8; 32];
+        bytes[16..].copy_from_slice(&value.to_be_bytes());
+        U256(bytes)
+    }
+
+    fn trimmed(row: &[u8; DISPLAY_COLS]) -> &[u8] {
+        let end = row
+            .iter()
+            .rposition(|&b| b != b' ')
+            .map_or(0, |idx| idx + 1);
+        &row[..end]
+    }
+
+    #[test]
+    fn known_chain_fee_pages_keep_the_historical_bytes() {
+        let rendered = build_legacy_fee_pages(
+            &u256_from_u128(50_000_000_000),
+            &u256_from_u128(2_000_000_000),
+            21_000,
+            1,
+        );
+        assert!(rendered.exact);
+        assert_eq!(
+            rendered.pages,
+            [
+                [
+                    *b"Fees: max / tip ",
+                    *b"50 gwei         ",
+                    *b"2 gwei          ",
+                    *b"> next          ",
+                ],
+                [
+                    *b"Worst-case:     ",
+                    *b"0.00105 ETH     ",
+                    *b"(gas: 21000)    ",
+                    *b"> next          ",
+                ],
+            ],
+            "known-chain fee pages must remain byte-identical, including padding"
+        );
+    }
+
+    #[test]
+    fn unknown_chain_fee_pages_are_exact_raw_base_units() {
+        let max_fee = u256_from_u128(30_000_000_001);
+        let tip = u256_from_u128(1_234_567_890);
+        let rendered = build_legacy_fee_pages(&max_fee, &tip, 30_000_000, UNKNOWN_CHAIN);
+
+        assert!(rendered.exact);
+        assert!(legacy_fee_rows_are_exactly_renderable(
+            &max_fee,
+            &tip,
+            30_000_000,
+            UNKNOWN_CHAIN,
+        ));
+        assert_eq!(trimmed(&rendered.pages[0][0]), b"Base: max / tip");
+        assert_eq!(trimmed(&rendered.pages[0][1]), b"30000000001");
+        assert_eq!(trimmed(&rendered.pages[0][2]), b"1234567890");
+        assert_eq!(trimmed(&rendered.pages[0][3]), b"> next");
+        assert_eq!(trimmed(&rendered.pages[1][0]), b"Worst-case/base:");
+        assert_eq!(rendered.pages[1][1][DISPLAY_COLS - 1], b'>');
+        assert_eq!(trimmed(&rendered.pages[1][3]), b"(gas: 30000000)");
+
+        let mut total = [0u8; 32];
+        let mut total_len = 0usize;
+        for &cell in rendered.pages[1][1]
+            .iter()
+            .chain(rendered.pages[1][2].iter())
+        {
+            if cell.is_ascii_digit() {
+                total[total_len] = cell;
+                total_len += 1;
+            }
+        }
+        assert_eq!(&total[..total_len], b"900000000030000000");
+        assert!(rendered.pages.iter().flatten().all(|row| {
+            !row.windows(4).any(|w| w == b"gwei") && !row.windows(3).any(|w| w == b"ETH")
+        }));
+    }
+
+    #[test]
+    fn adjacent_unknown_fee_operands_have_distinct_transcripts() {
+        let one = build_legacy_fee_pages(
+            &u256_from_u128(1),
+            &u256_from_u128(1),
+            21_000,
+            UNKNOWN_CHAIN,
+        );
+        let two = build_legacy_fee_pages(
+            &u256_from_u128(2),
+            &u256_from_u128(1),
+            21_000,
+            UNKNOWN_CHAIN,
+        );
+        assert!(one.exact && two.exact);
+        assert_ne!(one.pages, two.pages);
+        assert_eq!(trimmed(&one.pages[0][1]), b"1");
+        assert_eq!(trimmed(&two.pages[0][1]), b"2");
+        assert_eq!(trimmed(&one.pages[1][1]), b"21000");
+        assert_eq!(trimmed(&two.pages[1][1]), b"42000");
+    }
+
+    #[test]
+    fn unknown_fee_width_gas_and_multiplication_boundaries_refuse() {
+        let max_rate = u256_from_u128(9_999_999_999_999_999);
+        assert!(build_legacy_fee_pages(&max_rate, &max_rate, 999_999_999, UNKNOWN_CHAIN,).exact);
+
+        let wide_rate = u256_from_u128(10_000_000_000_000_000);
+        assert!(
+            !build_legacy_fee_pages(&wide_rate, &u256_from_u128(1), 21_000, UNKNOWN_CHAIN,).exact
+        );
+        assert!(
+            !build_legacy_fee_pages(
+                &u256_from_u128(1),
+                &u256_from_u128(1),
+                1_000_000_000,
+                UNKNOWN_CHAIN,
+            )
+            .exact
+        );
+
+        let overflow =
+            build_legacy_fee_pages(&U256([0xff; 32]), &u256_from_u128(1), 2, UNKNOWN_CHAIN);
+        assert!(!overflow.exact);
+        assert_eq!(trimmed(&overflow.pages[1][1]), b"!OVERFLOW");
+    }
+
+    #[test]
+    fn raw_total_helper_accepts_31_digits_and_rejects_32() {
+        let mut rows = [[b' '; DISPLAY_COLS]; 2];
+        let [hi, lo] = &mut rows;
+        assert!(write_raw_base_unit_two_rows(
+            hi,
+            lo,
+            &u256_from_u128(9_999_999_999_999_999_999_999_999_999_999),
+        ));
+        assert_eq!(rows[0][DISPLAY_COLS - 1], b'>');
+
+        let [hi, lo] = &mut rows;
+        assert!(!write_raw_base_unit_two_rows(
+            hi,
+            lo,
+            &u256_from_u128(10_000_000_000_000_000_000_000_000_000_000),
+        ));
+        assert_eq!(trimmed(&rows[0]), b"!OVERFLOW");
+        assert!(trimmed(&rows[1]).is_empty());
     }
 }
 

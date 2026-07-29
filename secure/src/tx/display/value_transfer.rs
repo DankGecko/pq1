@@ -8,9 +8,9 @@
 //!     <chain name>          1234567890abcdef       56789 ETH
 //!     > next                0123456789             > next
 //!
-//!  3: "Max fee:"         4: "Worst-case:"       5: "Nonce: <n>"
-//!     <gwei> gwei           <max_fee*gas> ETH      Data: <n> B
-//!     Tip: <gwei>           (gas: <limit>)         L=Cancel
+//!  3: "Fees: max / tip"  4: "Worst-case:"       5: "Nonce: <n>"
+//!     <max gwei>             <max_fee*gas> ETH      Data: <n> B
+//!     <tip gwei>             (gas: <limit>)         L=Cancel
 //!     > next                > next                 R=Confirm
 //! ```
 //!
@@ -19,9 +19,8 @@
 //! fit, the renderer paints `!OVERFLOW` so the user can abort.
 
 use super::primitives::{
-    write_addr_full_or_name, write_chain, write_data_len_row, write_gas, write_gwei, write_line,
-    write_native_amount_two_rows, write_native_currency_row, write_native_fee_budget_row,
-    write_nonce_row, write_tip_row, AmountFit,
+    build_legacy_fee_pages, write_addr_full_or_name, write_chain, write_data_len_row, write_line,
+    write_native_amount_two_rows, write_native_currency_row, write_nonce_row, AmountFit,
 };
 use super::Pages;
 use crate::names::NameResolver;
@@ -65,22 +64,16 @@ pub fn render_pages(tx: &Eip1559Tx, resolver: &NameResolver<'_>) -> Pages {
         );
     }
 
-    // ── Page 3: Max fee + tip ───────────────────────────────────────
-    write_line(&mut pages.buf[3][0], "Max fee:");
-    let _ = write_gwei(&mut pages.buf[3][1], &tx.max_fee_per_gas);
-    write_tip_row(&mut pages.buf[3][2], &tx.max_priority_fee_per_gas);
-    write_line(&mut pages.buf[3][3], "> next");
-
-    // ── Page 4: Worst-case fee budget + gas limit ───────────────────
-    write_line(&mut pages.buf[4][0], "Worst-case:");
-    write_native_fee_budget_row(
-        &mut pages.buf[4][1],
+    // ── Pages 3-4: exact max/tip and worst-case fee envelope ────────
+    let fee_pages = build_legacy_fee_pages(
         &tx.max_fee_per_gas,
+        &tx.max_priority_fee_per_gas,
         tx.gas_limit,
         tx.chain_id,
-    );
-    write_gas(&mut pages.buf[4][2], tx.gas_limit);
-    write_line(&mut pages.buf[4][3], "> next");
+    )
+    .pages;
+    pages.buf[3] = fee_pages[0];
+    pages.buf[4] = fee_pages[1];
 
     // ── Page 5: Nonce + data + buttons ──────────────────────────────
     write_nonce_row(&mut pages.buf[5][0], tx.nonce);

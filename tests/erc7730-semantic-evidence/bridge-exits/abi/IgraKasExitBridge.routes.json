@@ -1,0 +1,1 @@
+[{"inputs":[{"internalType":"string","name":"kasPayoutAddress","type":"string"},{"internalType":"uint64","name":"unlockAmountSompi","type":"uint64"}],"name":"requestExit","outputs":[{"internalType":"uint32","name":"requestId","type":"uint32"},{"internalType":"bytes32","name":"messageId","type":"bytes32"}],"stateMutability":"payable","type":"function"}]

@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "scope": "Historical fixed-block deployment/runtime, verified-source/ABI, instruction-semantic, and signed-display evidence for the two remaining P2P calldata families in issue #497.",
+  "captured_at_utc": "2026-07-28T13:08:00Z",
+  "boundary": "Only createPod() at the two named EigenPodManager proxies and send(string) at the three named P2pMessageSender deployments. No live pause, ownership, existing-pod, beacon-implementation, off-chain message-processing, transaction-success, future-upgrade/deployment, fallback, blind-signing, production, shipment, or irreversible-action authority.",
+  "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+  "fixed_blocks": [
+    {
+      "chain_id": 1,
+      "number": 25631500,
+      "number_hex": "0x1871b0c",
+      "hash": "0x1257e85da64d0168674abb649f4b2a3dcf01ffd56fa53e2f7153016163bd8b66",
+      "state_root": "0x427964ad40fe4e7225a16baae6ac8f9b27077e9ce9806959e1d443a2bdb40a9c",
+      "timestamp": 1785243863,
+      "timestamp_utc": "2026-07-28T13:04:23Z",
+      "rpc_artifacts": [
+        "rpc/ethereum-drpc.json",
+        "rpc/ethereum-mevblocker.json"
+      ]
+    },
+    {
+      "chain_id": 560048,
+      "number": 3304500,
+      "number_hex": "0x326c34",
+      "hash": "0x6857490834734566b8a851a75687e1b5945e9496ca857561c95df057d1ae853c",
+      "state_root": "0xfd65c5e6926a4e7e192b7ad7a3e590f7d012d5bb93c0fef6767be22dc1b73b58",
+      "timestamp": 1785244080,
+      "timestamp_utc": "2026-07-28T13:08:00Z",
+      "rpc_artifacts": [
+        "rpc/hoodi-drpc.json",
+        "rpc/hoodi-ethpandaops.json"
+      ]
+    }
+  ],
+  "descriptor_families": [
+    {
+      "source": "p2p/calldata-EigenPodManager.json",
+      "admitted_leaf_count": 2,
+      "admitted_formats": [
+        "createPod()"
+      ],
+      "refusal_only_state_changing_abi_count": 14
+    },
+    {
+      "source": "p2p/calldata-P2pMessageSender.json",
+      "admitted_leaf_count": 3,
+      "admitted_formats": [
+        "send(string text)"
+      ]
+    }
+  ],
+  "eigen_pod_manager": {
+    "deployments": [
+      {
+        "chain_id": 1,
+        "proxy": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+        "implementation": "0xd22dd829779adbf3869fb224f703452f7f95e9db",
+        "implementation_slot_value": "0x000000000000000000000000d22dd829779adbf3869fb224f703452f7f95e9db",
+        "proxy_runtime": "runtime/EigenPodManager.proxy.ethereum.hex",
+        "implementation_runtime": "runtime/EigenPodManager.implementation.ethereum.hex",
+        "eigen_pod_beacon": "0x5a2a4f2f3c18f09179b6703e63d9edd165909073",
+        "delegation_manager": "0x39053d51b77dc0d36036fc1fcc8cb819df8ef37a",
+        "pauser_registry": "0xb8765ed72235d279c3fb53936e4606db0ef12806"
+      },
+      {
+        "chain_id": 560048,
+        "proxy": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+        "implementation": "0x0f264e714a3c03309f4041db26229ef4e9b00f5c",
+        "implementation_slot_value": "0x0000000000000000000000000f264e714a3c03309f4041db26229ef4e9b00f5c",
+        "proxy_runtime": "runtime/EigenPodManager.proxy.hoodi.hex",
+        "implementation_runtime": "runtime/EigenPodManager.implementation.hoodi.hex",
+        "eigen_pod_beacon": "0x5e1577f8efb21b229cd5eb4c5aa3d6c4b228f650",
+        "delegation_manager": "0x867837a9722c512e0862d8c2e15b8be220e8b87d",
+        "pauser_registry": "0x64d78399b0fa32ea72959f33edcf313159f3c13d"
+      }
+    ],
+    "verified_source": {
+      "artifact": "blockscout/EigenPodManager.implementation.ethereum.json",
+      "source": "source/EigenPodManager.sol",
+      "abi": "abi/EigenPodManager.abi.json",
+      "compiler": "0.8.30+commit.73712a01",
+      "evm_version": "prague",
+      "optimizer_runs": 200,
+      "is_fully_verified": true
+    },
+    "cross_chain_variant_ranges": [
+      { "offset": 652, "length": 20, "label": "eigenPodBeacon", "ethereum_hex": "5a2a4f2f3c18f09179b6703e63d9edd165909073", "hoodi_hex": "5e1577f8efb21b229cd5eb4c5aa3d6c4b228f650" },
+      { "offset": 1138, "length": 20, "label": "pauserRegistry", "ethereum_hex": "b8765ed72235d279c3fb53936e4606db0ef12806", "hoodi_hex": "64d78399b0fa32ea72959f33edcf313159f3c13d" },
+      { "offset": 1516, "length": 20, "label": "delegationManager", "ethereum_hex": "39053d51b77dc0d36036fc1fcc8cb819df8ef37a", "hoodi_hex": "867837a9722c512e0862d8c2e15b8be220e8b87d" },
+      { "offset": 1883, "length": 20, "label": "delegationManager", "ethereum_hex": "39053d51b77dc0d36036fc1fcc8cb819df8ef37a", "hoodi_hex": "867837a9722c512e0862d8c2e15b8be220e8b87d" },
+      { "offset": 2484, "length": 20, "label": "delegationManager", "ethereum_hex": "39053d51b77dc0d36036fc1fcc8cb819df8ef37a", "hoodi_hex": "867837a9722c512e0862d8c2e15b8be220e8b87d" },
+      { "offset": 2650, "length": 20, "label": "delegationManager", "ethereum_hex": "39053d51b77dc0d36036fc1fcc8cb819df8ef37a", "hoodi_hex": "867837a9722c512e0862d8c2e15b8be220e8b87d" },
+      { "offset": 2997, "length": 20, "label": "delegationManager", "ethereum_hex": "39053d51b77dc0d36036fc1fcc8cb819df8ef37a", "hoodi_hex": "867837a9722c512e0862d8c2e15b8be220e8b87d" },
+      { "offset": 3890, "length": 20, "label": "delegationManager", "ethereum_hex": "39053d51b77dc0d36036fc1fcc8cb819df8ef37a", "hoodi_hex": "867837a9722c512e0862d8c2e15b8be220e8b87d" },
+      { "offset": 4071, "length": 20, "label": "delegationManager", "ethereum_hex": "39053d51b77dc0d36036fc1fcc8cb819df8ef37a", "hoodi_hex": "867837a9722c512e0862d8c2e15b8be220e8b87d" },
+      { "offset": 4221, "length": 20, "label": "eigenPodBeacon", "ethereum_hex": "5a2a4f2f3c18f09179b6703e63d9edd165909073", "hoodi_hex": "5e1577f8efb21b229cd5eb4c5aa3d6c4b228f650" },
+      { "offset": 5189, "length": 20, "label": "pauserRegistry", "ethereum_hex": "b8765ed72235d279c3fb53936e4606db0ef12806", "hoodi_hex": "64d78399b0fa32ea72959f33edcf313159f3c13d" },
+      { "offset": 6106, "length": 20, "label": "eigenPodBeacon", "ethereum_hex": "5a2a4f2f3c18f09179b6703e63d9edd165909073", "hoodi_hex": "5e1577f8efb21b229cd5eb4c5aa3d6c4b228f650" },
+      { "offset": 6647, "length": 20, "label": "pauserRegistry", "ethereum_hex": "b8765ed72235d279c3fb53936e4606db0ef12806", "hoodi_hex": "64d78399b0fa32ea72959f33edcf313159f3c13d" }
+    ]
+  },
+  "p2p_message_sender": {
+    "deployments": [
+      {
+        "chain_id": 1,
+        "address": "0x4e1224f513048e18e7a1883985b45dc0fe1d917e",
+        "runtime": "runtime/P2pMessageSender.ethereum.hex"
+      },
+      {
+        "chain_id": 560048,
+        "address": "0x917105cc314c12890d9c8224aee5af9574f871cf",
+        "runtime": "runtime/P2pMessageSender.hoodi.hex",
+        "creation_tx": "0x9b488d7256121e1703a980f116ae70b5f6ec51aaeee32eb6232027158667c1a7",
+        "creation_block": 19793
+      },
+      {
+        "chain_id": 560048,
+        "address": "0x158f2bbef21cf9f92cf4a294999ba422948c8242",
+        "runtime": "runtime/P2pMessageSender.hoodi.hex",
+        "creation_tx": "0xb559eac23da274e0dcb41e18d7f0c72cc73f2c68ba4f8bb4e2a18d4e6c1b1512",
+        "creation_block": 19806
+      }
+    ],
+    "verified_ethereum_source": {
+      "artifact": "blockscout/P2pMessageSender.ethereum.json",
+      "source": "source/P2pMessageSender.ethereum.sol",
+      "abi": "abi/P2pMessageSender.abi.json",
+      "compiler": "0.8.10+commit.fc410830",
+      "evm_version": "london",
+      "optimizer_runs": 200000,
+      "is_fully_verified": true
+    },
+    "hoodi_semantic_reconstruction": {
+      "source": "source/P2pMessageSender.hoodi-reference.sol",
+      "standard_input": "compiler/P2pMessageSender.hoodi-reference.input.json",
+      "standard_output": "compiler/P2pMessageSender.hoodi-reference.output.json",
+      "compiler": "0.8.24+commit.e11b9ed9",
+      "instruction_bytes": 209,
+      "onchain_metadata_ipfs_multihash": "0x1220d68c9f738e13f0b4b5b67e6cadbcdabbe41a97b60da8a1b22d6c31facde27a73",
+      "exact_source_provenance": false
+    },
+    "canonical_signature": "send(string)",
+    "selector": "0x66792ba1",
+    "event_signature": "Message(address,string,string)",
+    "event_topic": "0x5c0bf6ba470f83fe17f0b8fd9fdf4799eaeb1b63bbf39e4868fc7e0798e7abeb"
+  },
+  "artifacts": [
+    { "path": "README.md", "bytes": 3621, "sha256": "074d88c1be6912eafca52df9ec1bc6b48c14036f671e8ea556a758c920a9852a" },
+    { "path": "abi/EigenPodManager.abi.json", "bytes": 17617, "sha256": "7c76ffcef6ff403b4a7371a8abec4924f8eb24339f1f0d8feff310d9f6f7dc90" },
+    { "path": "abi/P2pMessageSender.abi.json", "bytes": 711, "sha256": "9e785c45ef9f50f511b5b8ff5be2420acf0a67d89b288da302a8dd031e8c66c8" },
+    { "path": "blockscout/EigenPodManager.implementation.ethereum.json", "bytes": 366217, "sha256": "ea2c2385e8aaf6857bfca40f2d8869c5c858fe6a49bf97bd949fd3c00c1e4e22" },
+    { "path": "blockscout/EigenPodManager.proxy.ethereum.json", "bytes": 47752, "sha256": "e5209e5931c742b1e44d66a47ad332128394a0ef37540baaa19bc3da1b1e585a" },
+    { "path": "blockscout/EigenPodManager.proxy.hoodi.json", "bytes": 52842, "sha256": "33aa142bfa5af9333dde22950e6e3483eccb9d90798b14d4f3efecfd08508beb" },
+    { "path": "blockscout/P2pMessageSender.creation.hoodi-a.json", "bytes": 999, "sha256": "a938e47d3fb8711be38687f685fd436651b50de11ebd2f63514958f31612f238" },
+    { "path": "blockscout/P2pMessageSender.creation.hoodi-b.json", "bytes": 999, "sha256": "84899422b41878e0fc4cd7f550a5295ee53e204e7acda3235964c6d522aab2f6" },
+    { "path": "blockscout/P2pMessageSender.ethereum.json", "bytes": 4330, "sha256": "45a659bb387149bb5ac2e9258c36cfe1ad3710cdeec4721ea524347eb76ecd7e" },
+    { "path": "collect.sh", "bytes": 9151, "sha256": "f83485a930aa2ade4ac4643fa09556f682e7b51946c6f11e5c5ca20e57116fd7" },
+    { "path": "compiler/P2pMessageSender.hoodi-reference.input.json", "bytes": 754, "sha256": "71a730f209a2dc7f5316baa4efe54b94c8f80d6899a8bcd73556c121b8fa8483" },
+    { "path": "compiler/P2pMessageSender.hoodi-reference.output.json", "bytes": 3160, "sha256": "7d3a56c0bd40c0ffa179ab0ae47249b3d44d1ee83c95aabd33550aff9cfa03fb" },
+    { "path": "rpc/ethereum-drpc.json", "bytes": 59232, "sha256": "73491540851be9ff67103a770aaa1f66b5de317e37d75894c09e002403b1b586" },
+    { "path": "rpc/ethereum-mevblocker.json", "bytes": 59272, "sha256": "24bce51644f94f7b2a4adc1526a557263eec82508c759a7ef1ca7a8f28146637" },
+    { "path": "rpc/hoodi-drpc.json", "bytes": 47758, "sha256": "5c1bff626d569d62be8d2cf713859f718cd5e717bf9d1b19b3016c2b3ca4263b" },
+    { "path": "rpc/hoodi-ethpandaops.json", "bytes": 47888, "sha256": "92e0858e456db26e0a32c7929fbb2de77c703c05da696c9b29c8fe61ce3024d1" },
+    { "path": "runtime/EigenPodManager.implementation.ethereum.hex", "bytes": 21729, "sha256": "672693d7fdfabbb8abf583d7caa44103eb6f5b2fd0ef5e3b68cf0031187c1c17" },
+    { "path": "runtime/EigenPodManager.implementation.hoodi.hex", "bytes": 21729, "sha256": "7d2315858bd1893a9ff26f2ed5eefbce9b5d9905ccf303a000c7c67eef9c75cf" },
+    { "path": "runtime/EigenPodManager.proxy.ethereum.hex", "bytes": 4305, "sha256": "656150deb15e91855cf6543b23eac5ea057aa9f3e526c204a1ce8aa34cbb02f1" },
+    { "path": "runtime/EigenPodManager.proxy.hoodi.hex", "bytes": 4233, "sha256": "20c29a333e309275d86b2136eee2e29d0ab60bd058d3008d3f2fb63f27e7b153" },
+    { "path": "runtime/P2pMessageSender.ethereum.hex", "bytes": 879, "sha256": "2f4fac9e0d3824a2b20670af2f504199bc574ef91039a96c1b727ce75c347e3e" },
+    { "path": "runtime/P2pMessageSender.hoodi.hex", "bytes": 527, "sha256": "4c39c4f63f7107f3704079eaf122c90bf973edef8f816ec99d15beb34a8577ae" },
+    { "path": "source/EigenPodManager.sol", "bytes": 15913, "sha256": "096d48ab7563cfc03619dfac57b4970b71eb64f5e2d9fd7def909059b13a2f99" },
+    { "path": "source/P2pMessageSender.ethereum.sol", "bytes": 268, "sha256": "bf25fadc63e7cd7a5a9c7391c08c172d67d487e8a0322731c2b24cfd9e2d5c78" },
+    { "path": "source/P2pMessageSender.hoodi-reference.sol", "bytes": 268, "sha256": "83e7e6c0cd3a64a86ea4cadf41146bec1c496951d003d3557274a6cce5c67e69" }
+  ]
+}

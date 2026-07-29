@@ -27,12 +27,12 @@ use pqsigner_erc7730::{
 use sha2::{Digest, Sha256};
 
 const PRODUCTION_ROOT_HEX: &str =
-    "0775c1c31572394e9fe9240a957aa897c0ae984e64f62567032a98fb1cf83d70";
+    "c3f20eca651c3d147dddcc48ca27a5ae464839e84181ca3849eb501681d6a08b";
 const PRODUCTION_BLOB_SHA256_HEX: &str =
-    "d9218caedb2e2b64737eb6d07a12a04dbdddc841174e82352faeeb7bfc94a270";
+    "a46c1faf70c0ffb2e0b677eed77be986d289bb097c4ed1c15eeafb7b0131d17c";
 const PRODUCTION_BLOOM_SHA256_HEX: &str =
-    "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9";
-const PRODUCTION_LEAF_COUNT: usize = 400;
+    "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d";
+const PRODUCTION_LEAF_COUNT: usize = 365;
 #[cfg(feature = "nested-calldata-test-fixture")]
 const CHILD_CONTRACT: [u8; 20] = [0x56; 20];
 #[cfg(feature = "nested-calldata-test-fixture")]

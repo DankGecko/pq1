@@ -1,0 +1,38 @@
+{
+  "captures": [
+    {
+      "compiler_artifact": "compiler/pft.json",
+      "contract": "pFT",
+      "id": "pft",
+      "primary_source": "contracts/pFT.sol",
+      "standard_input": "explorer/pft.standard-input.json",
+      "url": "https://www.sonicscan.org/address/0xc55253ea84050700e1efa8878d4a5053b6bf7c5e#code"
+    },
+    {
+      "compiler_artifact": "compiler/putmanager-current.json",
+      "contract": "PutManager",
+      "id": "putmanager-current",
+      "primary_source": "contracts/PutManager.sol",
+      "standard_input": "explorer/putmanager-current.standard-input.json",
+      "url": "https://www.sonicscan.org/address/0x90ae2cac15f8d58a258f7b4a243657754469922a#code"
+    },
+    {
+      "compiler_artifact": "compiler/putmanager-ethereum.json",
+      "contract": "PutManager",
+      "id": "putmanager-ethereum",
+      "primary_source": "contracts/PutManager.sol",
+      "standard_input": "explorer/putmanager-ethereum.standard-input.json",
+      "url": "https://etherscan.io/address/0x1e4e741e5f0f4f258def137e1968716eddae4bf5#code"
+    },
+    {
+      "compiler_artifact": "compiler/marketplace.json",
+      "contract": "pFTMarketplace",
+      "id": "marketplace",
+      "primary_source": "contracts/pFTMarketplace.sol",
+      "standard_input": "explorer/marketplace.standard-input.json",
+      "url": "https://www.sonicscan.org/address/0xbdd1327024b66212bf1f6a6a7f8b21f81b1faca4#code"
+    }
+  ],
+  "compiler": "0.8.30+commit.73712a01",
+  "schema_version": 1
+}

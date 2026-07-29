@@ -1559,7 +1559,9 @@ fn main() -> ! {
             true, // register
             7,    // base nonce
             &router,
-            1_000u128,
+            // Keep the transfer nonzero while remaining exactly representable
+            // by the trusted six-decimal native-value display.
+            1_000_000_000_000u128,
             &[],
         );
         len = append_names_only_trailer(&mut PAYLOAD_BUF, len, chain_id, &router)
@@ -2097,7 +2099,7 @@ fn main() -> ! {
         let status = nsc_api::sign_userop_batch(&PAYLOAD_BUF[..len], &mut SIG_BUF);
         assert_eq!(
             status,
-            NscStatus::InternalError as u32,
+            NscStatus::InvalidPointer as u32,
             "known batch call with a proof for another deployment must refuse"
         );
         hprintln!("[NS][e2e]   → batch binding mismatch refused");
@@ -2409,7 +2411,7 @@ fn main() -> ! {
         let status = nsc_api::sign_userop(&PAYLOAD_BUF[..new_len], &mut SIG_BUF);
         assert_eq!(
             status,
-            NscStatus::InternalError as u32,
+            NscStatus::InvalidPointer as u32,
             "scenario 5n: known WETH deposit with a mainnet proof must refuse"
         );
         hprintln!("[NS][e2e]   → known-call binding mismatch refused");

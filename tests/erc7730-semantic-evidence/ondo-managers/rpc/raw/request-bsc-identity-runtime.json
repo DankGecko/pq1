@@ -1,0 +1,29 @@
+[
+  {
+    "id": "chain-id",
+    "jsonrpc": "2.0",
+    "method": "eth_chainId",
+    "params": []
+  },
+  {
+    "id": "block",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByHash",
+    "params": [
+      "0x298e6b16ec7c93069a4d7048ab44e41f2fae718b7014c1574a606fa7c58816cd",
+      false
+    ]
+  },
+  {
+    "id": "gm-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x96b525b1a93f31e65f4aaf18c53842ed28525d48",
+      {
+        "blockHash": "0x298e6b16ec7c93069a4d7048ab44e41f2fae718b7014c1574a606fa7c58816cd",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

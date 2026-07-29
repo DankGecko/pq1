@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "scope": "Historical deployment/runtime, source/ABI, immutable configuration, token metadata, and signed-input semantics for ten accepted Flying Tulip EpochRewardsVault and MintAndRedeem leaves.",
+  "upstream": {
+    "official_solver_integration": {
+      "url": "https://hackmd.io/@pata/S1i__PNtWx",
+      "artifact": "official/solver-integration.md"
+    },
+    "sourcify_api": "https://sourcify.dev/server/v2",
+    "verified_builds": [
+      {
+        "name": "epoch-prod",
+        "chain_id": 1,
+        "implementation": "0xea95e4636badc00881f8f73a0623b0fe8627b6da",
+        "verified_at": "2026-04-07T17:56:05Z",
+        "compiler_record": "compiler/epoch-prod.json"
+      },
+      {
+        "name": "epoch-dev",
+        "chain_id": 56,
+        "implementation": "0xeee75398b528699fe3b68cef4775ed725d2fc513",
+        "verified_at": "2026-05-16T20:56:39Z",
+        "compiler_record": "compiler/epoch-dev.json"
+      },
+      {
+        "name": "mint-prod",
+        "chain_id": 1,
+        "implementation": "0x8852b132b72613a16f1e3960978a3d45c0a7c3c6",
+        "verified_at": "2026-04-16T15:44:33Z",
+        "compiler_record": "compiler/mint-prod.json"
+      },
+      {
+        "name": "mint-dev",
+        "chain_id": 56,
+        "implementation": "0x2d027ac70e7ba26457df09f5d5eedc83b185afad",
+        "verified_at": "2026-06-04T19:38:11Z",
+        "compiler_record": "compiler/mint-dev.json"
+      }
+    ]
+  },
+  "descriptor_families": [
+    {
+      "source": "flyingtulip/calldata-EpochRewardsVault-dev.json",
+      "admitted_leaf_count": 3,
+      "admitted_formats": [
+        "deposit(uint256 assets, address receiver)",
+        "withdraw(uint256 assets, address receiver, address owner)",
+        "claim(address to)"
+      ]
+    },
+    {
+      "source": "flyingtulip/calldata-EpochRewardsVault.json",
+      "admitted_leaf_count": 2,
+      "admitted_formats": [
+        "deposit(uint256 assets, address receiver)",
+        "withdraw(uint256 assets, address receiver, address owner)",
+        "claim(address to)"
+      ]
+    },
+    {
+      "source": "flyingtulip/calldata-MintAndRedeem-dev.json",
+      "admitted_leaf_count": 3,
+      "admitted_formats": [
+        "mint(address collateralToken, uint256 collateralAmount, uint256 txDeadline, uint256 minFtUSDOut)",
+        "redeem(address collateralToken, uint256 ftUSDAmount, uint256 txDeadline, uint256 minCollateralOut)"
+      ]
+    },
+    {
+      "source": "flyingtulip/calldata-MintAndRedeem.json",
+      "admitted_leaf_count": 2,
+      "admitted_formats": [
+        "mint(address collateralToken, uint256 collateralAmount, uint256 txDeadline, uint256 minFtUSDOut)",
+        "redeem(address collateralToken, uint256 ftUSDAmount, uint256 txDeadline, uint256 minCollateralOut)"
+      ]
+    }
+  ],
+  "claims": [
+    "Each admitted descriptor deployment is pinned to a fixed block, EIP-1967 implementation slot, and exact proxy and implementation runtime bytes.",
+    "Every implementation runtime matches one exact Sourcify compiler template after only compiler-declared immutable spans are normalized.",
+    "EpochRewardsVault deposit and withdraw use the fixed-block ASSET binding; claim transfers FT and derives its amount from accrued reward and available on-chain balance.",
+    "MintAndRedeem mint and redeem bind collateral, ftUSD, slippage, and deadline operands; source states that a zero transaction deadline disables expiry.",
+    "Production ftUSD is Flying Tulip USD/ftUSD/6 at the exact Ethereum and Sonic fixed blocks; dev raw ftUSD values remain explicitly base units."
+  ],
+  "boundary": "Historical fixed-block source/runtime/configuration and signed-input meaning only. No live reward, price, fee, cap, collateral-enablement, queue, transaction-success, future proxy-upgrade/deployment, sibling-route, fallback, blind-signing, production, shipment, or irreversible-action authority.",
+  "artifacts": [
+    {
+      "path": "README.md",
+      "bytes": 1588,
+      "sha256": "5fcd5e6f22cee4af2c0da676e4525034ab947ea6acd3c8caaf2da5b384c79de9"
+    },
+    {
+      "path": "abi/epoch-dev.abi.json",
+      "bytes": 44620,
+      "sha256": "860bb9fd00f0e88f7295cd37c2990f535a99d1e714206c4cf4a982fd73c29a38"
+    },
+    {
+      "path": "abi/epoch-prod.abi.json",
+      "bytes": 45545,
+      "sha256": "2eefb97503e5cd973c6c9047d9f2e7ea5fee0b2f8d89d3fb5843f9e2c8f40c49"
+    },
+    {
+      "path": "abi/mint-dev.abi.json",
+      "bytes": 48478,
+      "sha256": "86ed85239f9958c190801e265b3a35e30df837627617f277430dfa16fee852ea"
+    },
+    {
+      "path": "abi/mint-prod.abi.json",
+      "bytes": 52362,
+      "sha256": "dc9a36666d284d203d5ea3ef9e483432a7111fe3fa1ba7ee6df0e26bfbeab76e"
+    },
+    {
+      "path": "compiler/epoch-dev.json",
+      "bytes": 51288,
+      "sha256": "809f73e72374b26b3d0d93bbea7666a7688cf1c1480cb3268c2ce35625609b25"
+    },
+    {
+      "path": "compiler/epoch-prod.json",
+      "bytes": 50919,
+      "sha256": "fc74a35c91d1e2b0075042567d9a0dbad4ec5debbc36bc0e75cd6cb9a530bc0e"
+    },
+    {
+      "path": "compiler/mint-dev.json",
+      "bytes": 44994,
+      "sha256": "b7b510924e9c0e71c446d5e1c34f12deda2b24aeb58e2d2f2bf5feb25fca9447"
+    },
+    {
+      "path": "compiler/mint-prod.json",
+      "bytes": 47265,
+      "sha256": "73aeefc4a6269173799d9d69fcd16423a70be3e535d3ab4a45e8702379afda07"
+    },
+    {
+      "path": "official/solver-integration.md",
+      "bytes": 12841,
+      "sha256": "0aba860a436f7c18566808c5817053df02c26c8198ead6f3d97a48a2e0407c09"
+    },
+    {
+      "path": "rpc/fixed-block-receipt.json",
+      "bytes": 10485,
+      "sha256": "acb16dedc8025262ce12647c2c60439eafb7f246348f2420579a5dbea7e16ecb"
+    },
+    {
+      "path": "runtime/epoch-dev-146-implementation.hex",
+      "bytes": 46671,
+      "sha256": "dfa4e0b8cab840d8fc30c8583e671f8b550b2dbc273558e9a49da86dd8e91494"
+    },
+    {
+      "path": "runtime/epoch-dev-146-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "runtime/epoch-dev-43114-implementation.hex",
+      "bytes": 47025,
+      "sha256": "f36d4ae240e09c69b22af7846848adfc721b5b926af0361e3a054aefc1c4c25d"
+    },
+    {
+      "path": "runtime/epoch-dev-43114-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "runtime/epoch-dev-56-implementation.hex",
+      "bytes": 47025,
+      "sha256": "79890ea1951d499a0625727d9cd9c9b30932bdf4a55c92c9568b0859e17156f9"
+    },
+    {
+      "path": "runtime/epoch-dev-56-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "runtime/epoch-prod-1-implementation.hex",
+      "bytes": 46671,
+      "sha256": "185f95ebfe72a37431c26688affbc52baeaa3092981b3827fe321efa79ffeb9f"
+    },
+    {
+      "path": "runtime/epoch-prod-1-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "runtime/epoch-prod-146-implementation.hex",
+      "bytes": 46671,
+      "sha256": "49097017b94a86402dc84bcaa0e9372af7490905c339023ee440c4b1254a4360"
+    },
+    {
+      "path": "runtime/epoch-prod-146-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "runtime/mint-dev-146-implementation.hex",
+      "bytes": 41513,
+      "sha256": "0882e28747ebf8728f1dac8f7760c2d9f3b7d3b1e32abaf238e1ad19e3f71eca"
+    },
+    {
+      "path": "runtime/mint-dev-146-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "runtime/mint-dev-43114-implementation.hex",
+      "bytes": 41513,
+      "sha256": "b5537f3db6d95babe54c26ab7d003539f2d827b36e3ebbb57c20cdd0f239355d"
+    },
+    {
+      "path": "runtime/mint-dev-43114-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "runtime/mint-dev-56-implementation.hex",
+      "bytes": 41513,
+      "sha256": "c8bdaf64092f5a80b13d06aafebfae6cd4d99013a71dd6b07f56792a525cd934"
+    },
+    {
+      "path": "runtime/mint-dev-56-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "runtime/mint-prod-1-implementation.hex",
+      "bytes": 43865,
+      "sha256": "2a3d560c2c8f96685f8ba631b50052523d4990ab07a3224c6fb009fd830ebbb2"
+    },
+    {
+      "path": "runtime/mint-prod-1-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "runtime/mint-prod-146-implementation.hex",
+      "bytes": 43865,
+      "sha256": "2a3d560c2c8f96685f8ba631b50052523d4990ab07a3224c6fb009fd830ebbb2"
+    },
+    {
+      "path": "runtime/mint-prod-146-proxy.hex",
+      "bytes": 155,
+      "sha256": "195b666c727dd89a87d8a331d2296e83888ea98e8e56dba56fd6c87de3e5a9ad"
+    },
+    {
+      "path": "source/EpochRewardsVault.dev.sol",
+      "bytes": 34502,
+      "sha256": "57350a5a64a698758f8c9bc669506733f363b9d181a72a26c16f928bcc538345"
+    },
+    {
+      "path": "source/EpochRewardsVault.prod.sol",
+      "bytes": 35162,
+      "sha256": "c95de3f03ef37a6be057bf7cb810cf0ef7ff427ad630dc851942a9d1baeb802f"
+    },
+    {
+      "path": "source/MintAndRedeem.dev.sol",
+      "bytes": 69579,
+      "sha256": "9d9fa037d400137541b1c8296df794caec2c0e076ab5e71a96c3c73ee63fd782"
+    },
+    {
+      "path": "source/MintAndRedeem.prod.sol",
+      "bytes": 73995,
+      "sha256": "e1e303cef7ab28292e493931cc8ef5ed6f996a464168b609877333a7fce9080e"
+    }
+  ]
+}

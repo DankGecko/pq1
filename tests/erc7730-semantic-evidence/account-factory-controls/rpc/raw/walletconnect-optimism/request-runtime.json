@@ -1,0 +1,50 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "eth_getCode",
+    "params": [
+      "0x521B4C065Bbdbe3E20B3727340730936912DfA46",
+      {
+        "blockHash": "0xe10eb45ddbcd0a98add70f7e1932f8ca4b75ceadc072265f6cacbc93d7e26b94",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "eth_getCode",
+    "params": [
+      "0x6845541121e555D1245fe17c6b44273B089C3844",
+      {
+        "blockHash": "0xe10eb45ddbcd0a98add70f7e1932f8ca4b75ceadc072265f6cacbc93d7e26b94",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "eth_getCode",
+    "params": [
+      "0xd2f149faa66dc4448176123f850c14ff14f978b3",
+      {
+        "blockHash": "0xe10eb45ddbcd0a98add70f7e1932f8ca4b75ceadc072265f6cacbc93d7e26b94",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "eth_getCode",
+    "params": [
+      "0xeF4461891DfB3AC8572cCf7C794664A8DD927945",
+      {
+        "blockHash": "0xe10eb45ddbcd0a98add70f7e1932f8ca4b75ceadc072265f6cacbc93d7e26b94",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

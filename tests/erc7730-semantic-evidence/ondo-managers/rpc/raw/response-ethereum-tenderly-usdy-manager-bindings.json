@@ -1,0 +1,12 @@
+[
+  {
+    "id": "usdy-manager-rusdy",
+    "jsonrpc": "2.0",
+    "result": "0x000000000000000000000000af37c1167910ebc994e266949387d2c7c326b879"
+  },
+  {
+    "id": "usdy-manager-rwa-token",
+    "jsonrpc": "2.0",
+    "result": "0x00000000000000000000000096f6ef951840721adbf46ac996b59e0235cb985c"
+  }
+]

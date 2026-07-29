@@ -1,0 +1,1121 @@
+{
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "mailbox_",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "target",
+          "type": "address"
+        }
+      ],
+      "name": "AddressEmptyCode",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "blockNumber",
+          "type": "uint256"
+        }
+      ],
+      "name": "CurrentBlockNumberOverflow",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "implementation",
+          "type": "address"
+        }
+      ],
+      "name": "ERC1967InvalidImplementation",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ERC1967NonPayable",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint64",
+          "name": "unlockAmountSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "maxExitAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "ExitAmountAboveMaximum",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint64",
+          "name": "unlockAmountSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "minExitAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "ExitAmountBelowMinimum",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ExitRequestCounterExhausted",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "FailedCall",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "claimedAmount",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "availableAmount",
+          "type": "uint256"
+        }
+      ],
+      "name": "FeeBalanceExceeded",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "minimumRequiredBalance",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "remainingBalance",
+          "type": "uint256"
+        }
+      ],
+      "name": "InsufficientExcessBalance",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidExitAmount",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint64",
+          "name": "minExitAmountSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "maxExitAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "InvalidExitAmountPolicy",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidInitialization",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidKasPayoutAddress",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidMailbox",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "expectedWei",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "actualWei",
+          "type": "uint256"
+        }
+      ],
+      "name": "InvalidMsgValue",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidThrottleWindowBlocks",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NativeTransferFailed",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NotInitializing",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnableInvalidOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "OwnableUnauthorizedAccount",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ReentrancyGuardReentrantCall",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "requestedAmount",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "availableAmount",
+          "type": "uint256"
+        }
+      ],
+      "name": "RescueAmountExceedsBalance",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "windowIndex",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "throttleMaxExitsPerWindow",
+          "type": "uint32"
+        }
+      ],
+      "name": "ThrottleExitCountExceeded",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "windowIndex",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "attemptedUnlockAmountSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "remainingUnlockAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "ThrottleUnlockAmountExceeded",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "windowIndex",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "throttleWindowBlocks",
+          "type": "uint32"
+        }
+      ],
+      "name": "ThrottleWindowEndOverflow",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "UUPSUnauthorizedCallContext",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "slot",
+          "type": "bytes32"
+        }
+      ],
+      "name": "UUPSUnsupportedProxiableUUID",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "caller",
+          "type": "address"
+        }
+      ],
+      "name": "UnauthorizedFeeWithdrawal",
+      "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amount",
+          "type": "uint256"
+        }
+      ],
+      "name": "BurnIKas",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "minExitAmountSompi",
+          "type": "uint64"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "maxExitAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "ExitAmountPolicyUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint32",
+          "name": "requestId",
+          "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes32",
+          "name": "messageId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "feeAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "ExitRequested",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amount",
+          "type": "uint256"
+        }
+      ],
+      "name": "FeeClaimed",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "feeClaimer",
+          "type": "address"
+        }
+      ],
+      "name": "FeeClaimerUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "feePolicyAddress",
+          "type": "address"
+        }
+      ],
+      "name": "FeePolicyUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "version",
+          "type": "uint64"
+        }
+      ],
+      "name": "Initialized",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "bytes32",
+          "name": "kaspaBridgeEndpoint",
+          "type": "bytes32"
+        }
+      ],
+      "name": "KaspaBridgeEndpointUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "previousOwner",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnershipTransferStarted",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "previousOwner",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnershipTransferred",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint32",
+          "name": "throttleWindowBlocks",
+          "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint32",
+          "name": "throttleMaxExitsPerWindow",
+          "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "throttleMaxUnlockAmountPerWindow",
+          "type": "uint64"
+        }
+      ],
+      "name": "ThrottleParamsUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "implementation",
+          "type": "address"
+        }
+      ],
+      "name": "Upgraded",
+      "type": "event"
+    },
+    {
+      "inputs": [],
+      "name": "UPGRADE_INTERFACE_VERSION",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "acceptOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "amountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "claimFees",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getConfig",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "kaspaBridgeEndpoint",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "address",
+          "name": "feePolicy",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "feeClaimer",
+          "type": "address"
+        },
+        {
+          "internalType": "uint32",
+          "name": "throttleWindowBlocks",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "throttleMaxExitsPerWindow",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "throttleMaxUnlockAmountPerWindowSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "minExitSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "maxExitSompi",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "requestId",
+          "type": "uint32"
+        }
+      ],
+      "name": "getExitRequest",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "exists",
+          "type": "bool"
+        },
+        {
+          "internalType": "uint32",
+          "name": "recordedAtBlock",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "feeAmountSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "unlockAmountSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "messageId",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "initialOwner",
+          "type": "address"
+        },
+        {
+          "internalType": "uint32",
+          "name": "throttleWindowBlocks",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "throttleMaxExitsPerWindow",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "throttleMaxUnlockAmountPerWindow",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "minExitAmountSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "maxExitAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "initialize",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "nextExitRequestId",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "pendingOwner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "proxiableUUID",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "originBurner",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "unlockAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "quoteFee",
+      "outputs": [
+        {
+          "internalType": "uint64",
+          "name": "feeAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "renounceOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "kasPayoutAddress",
+          "type": "string"
+        },
+        {
+          "internalType": "uint64",
+          "name": "unlockAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "requestExit",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "requestId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "messageId",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amountWei",
+          "type": "uint256"
+        }
+      ],
+      "name": "rescueExcessIKas",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint64",
+          "name": "minExitAmountSompi",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "maxExitAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "name": "setExitAmountPolicy",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "feeClaimer",
+          "type": "address"
+        }
+      ],
+      "name": "setFeeClaimer",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "feePolicyAddress",
+          "type": "address"
+        }
+      ],
+      "name": "setFeePolicy",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "kaspaBridgeEndpoint",
+          "type": "bytes32"
+        }
+      ],
+      "name": "setKaspaBridgeEndpoint",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "throttleWindowBlocks",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "throttleMaxExitsPerWindow",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "throttleMaxUnlockAmountPerWindow",
+          "type": "uint64"
+        }
+      ],
+      "name": "setThrottleParams",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "throttleStatus",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "windowIndex",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "windowEndsAtBlock",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "remainingExits",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "remainingUnlockAmountSompi",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "totalBurned",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "totalFeeCharged",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newImplementation",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        }
+      ],
+      "name": "upgradeToAndCall",
+      "outputs": [],
+      "stateMutability": "payable",
+      "type": "function"
+    }
+  ],
+  "additional_sources": [
+    {
+      "file_path": "lib/openzeppelin-contracts-upgradeable/contracts/access/Ownable2StepUpgradeable.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.1.0) (access/Ownable2Step.sol)\n\npragma solidity ^0.8.20;\n\nimport {OwnableUpgradeable} from \"./OwnableUpgradeable.sol\";\nimport {Initializable} from \"../proxy/utils/Initializable.sol\";\n\n/**\n * @dev Contract module which provides access control mechanism, where\n * there is an account (an owner) that can be granted exclusive access to\n * specific functions.\n *\n * This extension of the {Ownable} contract includes a two-step mechanism to transfer\n * ownership, where the new owner must call {acceptOwnership} in order to replace the\n * old one. This can help prevent common mistakes, such as transfers of ownership to\n * incorrect accounts, or to contracts that are unable to interact with the\n * permission system.\n *\n * The initial owner is specified at deployment time in the constructor for `Ownable`. This\n * can later be changed with {transferOwnership} and {acceptOwnership}.\n *\n * This module is used through inheritance. It will make available all functions\n * from parent (Ownable).\n */\nabstract contract Ownable2StepUpgradeable is Initializable, OwnableUpgradeable {\n    /// @custom:storage-location erc7201:openzeppelin.storage.Ownable2Step\n    struct Ownable2StepStorage {\n        address _pendingOwner;\n    }\n\n    // keccak256(abi.encode(uint256(keccak256(\"openzeppelin.storage.Ownable2Step\")) - 1)) & ~bytes32(uint256(0xff))\n    bytes32 private constant Ownable2StepStorageLocation = 0x237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c00;\n\n    function _getOwnable2StepStorage() private pure returns (Ownable2StepStorage storage $) {\n        assembly {\n            $.slot := Ownable2StepStorageLocation\n        }\n    }\n\n    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);\n\n    function __Ownable2Step_init() internal onlyInitializing {\n    }\n\n    function __Ownable2Step_init_unchained() internal onlyInitializing {\n    }\n    /**\n     * @dev Returns the address of the pending owner.\n     */\n    function pendingOwner() public view virtual returns (address) {\n        Ownable2StepStorage storage $ = _getOwnable2StepStorage();\n        return $._pendingOwner;\n    }\n\n    /**\n     * @dev Starts the ownership transfer of the contract to a new account. Replaces the pending transfer if there is one.\n     * Can only be called by the current owner.\n     *\n     * Setting `newOwner` to the zero address is allowed; this can be used to cancel an initiated ownership transfer.\n     */\n    function transferOwnership(address newOwner) public virtual override onlyOwner {\n        Ownable2StepStorage storage $ = _getOwnable2StepStorage();\n        $._pendingOwner = newOwner;\n        emit OwnershipTransferStarted(owner(), newOwner);\n    }\n\n    /**\n     * @dev Transfers ownership of the contract to a new account (`newOwner`) and deletes any pending owner.\n     * Internal function without access restriction.\n     */\n    function _transferOwnership(address newOwner) internal virtual override {\n        Ownable2StepStorage storage $ = _getOwnable2StepStorage();\n        delete $._pendingOwner;\n        super._transferOwnership(newOwner);\n    }\n\n    /**\n     * @dev The new owner accepts the ownership transfer.\n     */\n    function acceptOwnership() public virtual {\n        address sender = _msgSender();\n        if (pendingOwner() != sender) {\n            revert OwnableUnauthorizedAccount(sender);\n        }\n        _transferOwnership(sender);\n    }\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts-upgradeable/contracts/access/OwnableUpgradeable.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.0.0) (access/Ownable.sol)\n\npragma solidity ^0.8.20;\n\nimport {ContextUpgradeable} from \"../utils/ContextUpgradeable.sol\";\nimport {Initializable} from \"../proxy/utils/Initializable.sol\";\n\n/**\n * @dev Contract module which provides a basic access control mechanism, where\n * there is an account (an owner) that can be granted exclusive access to\n * specific functions.\n *\n * The initial owner is set to the address provided by the deployer. This can\n * later be changed with {transferOwnership}.\n *\n * This module is used through inheritance. It will make available the modifier\n * `onlyOwner`, which can be applied to your functions to restrict their use to\n * the owner.\n */\nabstract contract OwnableUpgradeable is Initializable, ContextUpgradeable {\n    /// @custom:storage-location erc7201:openzeppelin.storage.Ownable\n    struct OwnableStorage {\n        address _owner;\n    }\n\n    // keccak256(abi.encode(uint256(keccak256(\"openzeppelin.storage.Ownable\")) - 1)) & ~bytes32(uint256(0xff))\n    bytes32 private constant OwnableStorageLocation = 0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300;\n\n    function _getOwnableStorage() private pure returns (OwnableStorage storage $) {\n        assembly {\n            $.slot := OwnableStorageLocation\n        }\n    }\n\n    /**\n     * @dev The caller account is not authorized to perform an operation.\n     */\n    error OwnableUnauthorizedAccount(address account);\n\n    /**\n     * @dev The owner is not a valid owner account. (eg. `address(0)`)\n     */\n    error OwnableInvalidOwner(address owner);\n\n    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);\n\n    /**\n     * @dev Initializes the contract setting the address provided by the deployer as the initial owner.\n     */\n    function __Ownable_init(address initialOwner) internal onlyInitializing {\n        __Ownable_init_unchained(initialOwner);\n    }\n\n    function __Ownable_init_unchained(address initialOwner) internal onlyInitializing {\n        if (initialOwner == address(0)) {\n            revert OwnableInvalidOwner(address(0));\n        }\n        _transferOwnership(initialOwner);\n    }\n\n    /**\n     * @dev Throws if called by any account other than the owner.\n     */\n    modifier onlyOwner() {\n        _checkOwner();\n        _;\n    }\n\n    /**\n     * @dev Returns the address of the current owner.\n     */\n    function owner() public view virtual returns (address) {\n        OwnableStorage storage $ = _getOwnableStorage();\n        return $._owner;\n    }\n\n    /**\n     * @dev Throws if the sender is not the owner.\n     */\n    function _checkOwner() internal view virtual {\n        if (owner() != _msgSender()) {\n            revert OwnableUnauthorizedAccount(_msgSender());\n        }\n    }\n\n    /**\n     * @dev Leaves the contract without owner. It will not be possible to call\n     * `onlyOwner` functions. Can only be called by the current owner.\n     *\n     * NOTE: Renouncing ownership will leave the contract without an owner,\n     * thereby disabling any functionality that is only available to the owner.\n     */\n    function renounceOwnership() public virtual onlyOwner {\n        _transferOwnership(address(0));\n    }\n\n    /**\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\n     * Can only be called by the current owner.\n     */\n    function transferOwnership(address newOwner) public virtual onlyOwner {\n        if (newOwner == address(0)) {\n            revert OwnableInvalidOwner(address(0));\n        }\n        _transferOwnership(newOwner);\n    }\n\n    /**\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\n     * Internal function without access restriction.\n     */\n    function _transferOwnership(address newOwner) internal virtual {\n        OwnableStorage storage $ = _getOwnableStorage();\n        address oldOwner = $._owner;\n        $._owner = newOwner;\n        emit OwnershipTransferred(oldOwner, newOwner);\n    }\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.3.0) (proxy/utils/Initializable.sol)\n\npragma solidity ^0.8.20;\n\n/**\n * @dev This is a base contract to aid in writing upgradeable contracts, or any kind of contract that will be deployed\n * behind a proxy. Since proxied contracts do not make use of a constructor, it's common to move constructor logic to an\n * external initializer function, usually called `initialize`. It then becomes necessary to protect this initializer\n * function so it can only be called once. The {initializer} modifier provided by this contract will have this effect.\n *\n * The initialization functions use a version number. Once a version number is used, it is consumed and cannot be\n * reused. This mechanism prevents re-execution of each \"step\" but allows the creation of new initialization steps in\n * case an upgrade adds a module that needs to be initialized.\n *\n * For example:\n *\n * [.hljs-theme-light.nopadding]\n * ```solidity\n * contract MyToken is ERC20Upgradeable {\n *     function initialize() initializer public {\n *         __ERC20_init(\"MyToken\", \"MTK\");\n *     }\n * }\n *\n * contract MyTokenV2 is MyToken, ERC20PermitUpgradeable {\n *     function initializeV2() reinitializer(2) public {\n *         __ERC20Permit_init(\"MyToken\");\n *     }\n * }\n * ```\n *\n * TIP: To avoid leaving the proxy in an uninitialized state, the initializer function should be called as early as\n * possible by providing the encoded function call as the `_data` argument to {ERC1967Proxy-constructor}.\n *\n * CAUTION: When used with inheritance, manual care must be taken to not invoke a parent initializer twice, or to ensure\n * that all initializers are idempotent. This is not verified automatically as constructors are by Solidity.\n *\n * [CAUTION]\n * ====\n * Avoid leaving a contract uninitialized.\n *\n * An uninitialized contract can be taken over by an attacker. This applies to both a proxy and its implementation\n * contract, which may impact the proxy. To prevent the implementation contract from being used, you should invoke\n * the {_disableInitializers} function in the constructor to automatically lock it when it is deployed:\n *\n * [.hljs-theme-light.nopadding]\n * ```\n * /// @custom:oz-upgrades-unsafe-allow constructor\n * constructor() {\n *     _disableInitializers();\n * }\n * ```\n * ====\n */\nabstract contract Initializable {\n    /**\n     * @dev Storage of the initializable contract.\n     *\n     * It's implemented on a custom ERC-7201 namespace to reduce the risk of storage collisions\n     * when using with upgradeable contracts.\n     *\n     * @custom:storage-location erc7201:openzeppelin.storage.Initializable\n     */\n    struct InitializableStorage {\n        /**\n         * @dev Indicates that the contract has been initialized.\n         */\n        uint64 _initialized;\n        /**\n         * @dev Indicates that the contract is in the process of being initialized.\n         */\n        bool _initializing;\n    }\n\n    // keccak256(abi.encode(uint256(keccak256(\"openzeppelin.storage.Initializable\")) - 1)) & ~bytes32(uint256(0xff))\n    bytes32 private constant INITIALIZABLE_STORAGE = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;\n\n    /**\n     * @dev The contract is already initialized.\n     */\n    error InvalidInitialization();\n\n    /**\n     * @dev The contract is not initializing.\n     */\n    error NotInitializing();\n\n    /**\n     * @dev Triggered when the contract has been initialized or reinitialized.\n     */\n    event Initialized(uint64 version);\n\n    /**\n     * @dev A modifier that defines a protected initializer function that can be invoked at most once. In its scope,\n     * `onlyInitializing` functions can be used to initialize parent contracts.\n     *\n     * Similar to `reinitializer(1)`, except that in the context of a constructor an `initializer` may be invoked any\n     * number of times. This behavior in the constructor can be useful during testing and is not expected to be used in\n     * production.\n     *\n     * Emits an {Initialized} event.\n     */\n    modifier initializer() {\n        // solhint-disable-next-line var-name-mixedcase\n        InitializableStorage storage $ = _getInitializableStorage();\n\n        // Cache values to avoid duplicated sloads\n        bool isTopLevelCall = !$._initializing;\n        uint64 initialized = $._initialized;\n\n        // Allowed calls:\n        // - initialSetup: the contract is not in the initializing state and no previous version was\n        //                 initialized\n        // - construction: the contract is initialized at version 1 (no reinitialization) and the\n        //                 current contract is just being deployed\n        bool initialSetup = initialized == 0 && isTopLevelCall;\n        bool construction = initialized == 1 && address(this).code.length == 0;\n\n        if (!initialSetup && !construction) {\n            revert InvalidInitialization();\n        }\n        $._initialized = 1;\n        if (isTopLevelCall) {\n            $._initializing = true;\n        }\n        _;\n        if (isTopLevelCall) {\n            $._initializing = false;\n            emit Initialized(1);\n        }\n    }\n\n    /**\n     * @dev A modifier that defines a protected reinitializer function that can be invoked at most once, and only if the\n     * contract hasn't been initialized to a greater version before. In its scope, `onlyInitializing` functions can be\n     * used to initialize parent contracts.\n     *\n     * A reinitializer may be used after the original initialization step. This is essential to configure modules that\n     * are added through upgrades and that require initialization.\n     *\n     * When `version` is 1, this modifier is similar to `initializer`, except that functions marked with `reinitializer`\n     * cannot be nested. If one is invoked in the context of another, execution will revert.\n     *\n     * Note that versions can jump in increments greater than 1; this implies that if multiple reinitializers coexist in\n     * a contract, executing them in the right order is up to the developer or operator.\n     *\n     * WARNING: Setting the version to 2**64 - 1 will prevent any future reinitialization.\n     *\n     * Emits an {Initialized} event.\n     */\n    modifier reinitializer(uint64 version) {\n        // solhint-disable-next-line var-name-mixedcase\n        InitializableStorage storage $ = _getInitializableStorage();\n\n        if ($._initializing || $._initialized >= version) {\n            revert InvalidInitialization();\n        }\n        $._initialized = version;\n        $._initializing = true;\n        _;\n        $._initializing = false;\n        emit Initialized(version);\n    }\n\n    /**\n     * @dev Modifier to protect an initialization function so that it can only be invoked by functions with the\n     * {initializer} and {reinitializer} modifiers, directly or indirectly.\n     */\n    modifier onlyInitializing() {\n        _checkInitializing();\n        _;\n    }\n\n    /**\n     * @dev Reverts if the contract is not in an initializing state. See {onlyInitializing}.\n     */\n    function _checkInitializing() internal view virtual {\n        if (!_isInitializing()) {\n            revert NotInitializing();\n        }\n    }\n\n    /**\n     * @dev Locks the contract, preventing any future reinitialization. This cannot be part of an initializer call.\n     * Calling this in the constructor of a contract will prevent that contract from being initialized or reinitialized\n     * to any version. It is recommended to use this to lock implementation contracts that are designed to be called\n     * through proxies.\n     *\n     * Emits an {Initialized} event the first time it is successfully executed.\n     */\n    function _disableInitializers() internal virtual {\n        // solhint-disable-next-line var-name-mixedcase\n        InitializableStorage storage $ = _getInitializableStorage();\n\n        if ($._initializing) {\n            revert InvalidInitialization();\n        }\n        if ($._initialized != type(uint64).max) {\n            $._initialized = type(uint64).max;\n            emit Initialized(type(uint64).max);\n        }\n    }\n\n    /**\n     * @dev Returns the highest version that has been initialized. See {reinitializer}.\n     */\n    function _getInitializedVersion() internal view returns (uint64) {\n        return _getInitializableStorage()._initialized;\n    }\n\n    /**\n     * @dev Returns `true` if the contract is currently initializing. See {onlyInitializing}.\n     */\n    function _isInitializing() internal view returns (bool) {\n        return _getInitializableStorage()._initializing;\n    }\n\n    /**\n     * @dev Pointer to storage slot. Allows integrators to override it with a custom storage location.\n     *\n     * NOTE: Consider following the ERC-7201 formula to derive storage locations.\n     */\n    function _initializableStorageSlot() internal pure virtual returns (bytes32) {\n        return INITIALIZABLE_STORAGE;\n    }\n\n    /**\n     * @dev Returns a pointer to the storage namespace.\n     */\n    // solhint-disable-next-line var-name-mixedcase\n    function _getInitializableStorage() private pure returns (InitializableStorage storage $) {\n        bytes32 slot = _initializableStorageSlot();\n        assembly {\n            $.slot := slot\n        }\n    }\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.3.0) (proxy/utils/UUPSUpgradeable.sol)\n\npragma solidity ^0.8.22;\n\nimport {IERC1822Proxiable} from \"@openzeppelin/contracts/interfaces/draft-IERC1822.sol\";\nimport {ERC1967Utils} from \"@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol\";\nimport {Initializable} from \"./Initializable.sol\";\n\n/**\n * @dev An upgradeability mechanism designed for UUPS proxies. The functions included here can perform an upgrade of an\n * {ERC1967Proxy}, when this contract is set as the implementation behind such a proxy.\n *\n * A security mechanism ensures that an upgrade does not turn off upgradeability accidentally, although this risk is\n * reinstated if the upgrade retains upgradeability but removes the security mechanism, e.g. by replacing\n * `UUPSUpgradeable` with a custom implementation of upgrades.\n *\n * The {_authorizeUpgrade} function must be overridden to include access restriction to the upgrade mechanism.\n */\nabstract contract UUPSUpgradeable is Initializable, IERC1822Proxiable {\n    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable\n    address private immutable __self = address(this);\n\n    /**\n     * @dev The version of the upgrade interface of the contract. If this getter is missing, both `upgradeTo(address)`\n     * and `upgradeToAndCall(address,bytes)` are present, and `upgradeTo` must be used if no function should be called,\n     * while `upgradeToAndCall` will invoke the `receive` function if the second argument is the empty byte string.\n     * If the getter returns `\"5.0.0\"`, only `upgradeToAndCall(address,bytes)` is present, and the second argument must\n     * be the empty byte string if no function should be called, making it impossible to invoke the `receive` function\n     * during an upgrade.\n     */\n    string public constant UPGRADE_INTERFACE_VERSION = \"5.0.0\";\n\n    /**\n     * @dev The call is from an unauthorized context.\n     */\n    error UUPSUnauthorizedCallContext();\n\n    /**\n     * @dev The storage `slot` is unsupported as a UUID.\n     */\n    error UUPSUnsupportedProxiableUUID(bytes32 slot);\n\n    /**\n     * @dev Check that the execution is being performed through a delegatecall call and that the execution context is\n     * a proxy contract with an implementation (as defined in ERC-1967) pointing to self. This should only be the case\n     * for UUPS and transparent proxies that are using the current contract as their implementation. Execution of a\n     * function through ERC-1167 minimal proxies (clones) would not normally pass this test, but is not guaranteed to\n     * fail.\n     */\n    modifier onlyProxy() {\n        _checkProxy();\n        _;\n    }\n\n    /**\n     * @dev Check that the execution is not being performed through a delegate call. This allows a function to be\n     * callable on the implementing contract but not through proxies.\n     */\n    modifier notDelegated() {\n        _checkNotDelegated();\n        _;\n    }\n\n    function __UUPSUpgradeable_init() internal onlyInitializing {\n    }\n\n    function __UUPSUpgradeable_init_unchained() internal onlyInitializing {\n    }\n    /**\n     * @dev Implementation of the ERC-1822 {proxiableUUID} function. This returns the storage slot used by the\n     * implementation. It is used to validate the implementation's compatibility when performing an upgrade.\n     *\n     * IMPORTANT: A proxy pointing at a proxiable contract should not be considered proxiable itself, because this risks\n     * bricking a proxy that upgrades to it, by delegating to itself until out of gas. Thus it is critical that this\n     * function revert if invoked through a proxy. This is guaranteed by the `notDelegated` modifier.\n     */\n    function proxiableUUID() external view virtual notDelegated returns (bytes32) {\n        return ERC1967Utils.IMPLEMENTATION_SLOT;\n    }\n\n    /**\n     * @dev Upgrade the implementation of the proxy to `newImplementation`, and subsequently execute the function call\n     * encoded in `data`.\n     *\n     * Calls {_authorizeUpgrade}.\n     *\n     * Emits an {Upgraded} event.\n     *\n     * @custom:oz-upgrades-unsafe-allow-reachable delegatecall\n     */\n    function upgradeToAndCall(address newImplementation, bytes memory data) public payable virtual onlyProxy {\n        _authorizeUpgrade(newImplementation);\n        _upgradeToAndCallUUPS(newImplementation, data);\n    }\n\n    /**\n     * @dev Reverts if the execution is not performed via delegatecall or the execution\n     * context is not of a proxy with an ERC-1967 compliant implementation pointing to self.\n     */\n    function _checkProxy() internal view virtual {\n        if (\n            address(this) == __self || // Must be called through delegatecall\n            ERC1967Utils.getImplementation() != __self // Must be called through an active proxy\n        ) {\n            revert UUPSUnauthorizedCallContext();\n        }\n    }\n\n    /**\n     * @dev Reverts if the execution is performed via delegatecall.\n     * See {notDelegated}.\n     */\n    function _checkNotDelegated() internal view virtual {\n        if (address(this) != __self) {\n            // Must not be called through delegatecall\n            revert UUPSUnauthorizedCallContext();\n        }\n    }\n\n    /**\n     * @dev Function that should revert when `msg.sender` is not authorized to upgrade the contract. Called by\n     * {upgradeToAndCall}.\n     *\n     * Normally, this function will use an xref:access.adoc[access control] modifier such as {Ownable-onlyOwner}.\n     *\n     * ```solidity\n     * function _authorizeUpgrade(address) internal onlyOwner {}\n     * ```\n     */\n    function _authorizeUpgrade(address newImplementation) internal virtual;\n\n    /**\n     * @dev Performs an implementation upgrade with a security check for UUPS proxies, and additional setup call.\n     *\n     * As a security check, {proxiableUUID} is invoked in the new implementation, and the return value\n     * is expected to be the implementation slot in ERC-1967.\n     *\n     * Emits an {IERC1967-Upgraded} event.\n     */\n    function _upgradeToAndCallUUPS(address newImplementation, bytes memory data) private {\n        try IERC1822Proxiable(newImplementation).proxiableUUID() returns (bytes32 slot) {\n            if (slot != ERC1967Utils.IMPLEMENTATION_SLOT) {\n                revert UUPSUnsupportedProxiableUUID(slot);\n            }\n            ERC1967Utils.upgradeToAndCall(newImplementation, data);\n        } catch {\n            // The implementation is not UUPS\n            revert ERC1967Utils.ERC1967InvalidImplementation(newImplementation);\n        }\n    }\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts-upgradeable/contracts/utils/ContextUpgradeable.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.0.1) (utils/Context.sol)\n\npragma solidity ^0.8.20;\nimport {Initializable} from \"../proxy/utils/Initializable.sol\";\n\n/**\n * @dev Provides information about the current execution context, including the\n * sender of the transaction and its data. While these are generally available\n * via msg.sender and msg.data, they should not be accessed in such a direct\n * manner, since when dealing with meta-transactions the account sending and\n * paying for execution may not be the actual sender (as far as an application\n * is concerned).\n *\n * This contract is only required for intermediate, library-like contracts.\n */\nabstract contract ContextUpgradeable is Initializable {\n    function __Context_init() internal onlyInitializing {\n    }\n\n    function __Context_init_unchained() internal onlyInitializing {\n    }\n    function _msgSender() internal view virtual returns (address) {\n        return msg.sender;\n    }\n\n    function _msgData() internal view virtual returns (bytes calldata) {\n        return msg.data;\n    }\n\n    function _contextSuffixLength() internal view virtual returns (uint256) {\n        return 0;\n    }\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts-upgradeable/contracts/utils/ReentrancyGuardUpgradeable.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.1.0) (utils/ReentrancyGuard.sol)\n\npragma solidity ^0.8.20;\nimport {Initializable} from \"../proxy/utils/Initializable.sol\";\n\n/**\n * @dev Contract module that helps prevent reentrant calls to a function.\n *\n * Inheriting from `ReentrancyGuard` will make the {nonReentrant} modifier\n * available, which can be applied to functions to make sure there are no nested\n * (reentrant) calls to them.\n *\n * Note that because there is a single `nonReentrant` guard, functions marked as\n * `nonReentrant` may not call one another. This can be worked around by making\n * those functions `private`, and then adding `external` `nonReentrant` entry\n * points to them.\n *\n * TIP: If EIP-1153 (transient storage) is available on the chain you're deploying at,\n * consider using {ReentrancyGuardTransient} instead.\n *\n * TIP: If you would like to learn more about reentrancy and alternative ways\n * to protect against it, check out our blog post\n * https://blog.openzeppelin.com/reentrancy-after-istanbul/[Reentrancy After Istanbul].\n */\nabstract contract ReentrancyGuardUpgradeable is Initializable {\n    // Booleans are more expensive than uint256 or any type that takes up a full\n    // word because each write operation emits an extra SLOAD to first read the\n    // slot's contents, replace the bits taken up by the boolean, and then write\n    // back. This is the compiler's defense against contract upgrades and\n    // pointer aliasing, and it cannot be disabled.\n\n    // The values being non-zero value makes deployment a bit more expensive,\n    // but in exchange the refund on every call to nonReentrant will be lower in\n    // amount. Since refunds are capped to a percentage of the total\n    // transaction's gas, it is best to keep them low in cases like this one, to\n    // increase the likelihood of the full refund coming into effect.\n    uint256 private constant NOT_ENTERED = 1;\n    uint256 private constant ENTERED = 2;\n\n    /// @custom:storage-location erc7201:openzeppelin.storage.ReentrancyGuard\n    struct ReentrancyGuardStorage {\n        uint256 _status;\n    }\n\n    // keccak256(abi.encode(uint256(keccak256(\"openzeppelin.storage.ReentrancyGuard\")) - 1)) & ~bytes32(uint256(0xff))\n    bytes32 private constant ReentrancyGuardStorageLocation = 0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00;\n\n    function _getReentrancyGuardStorage() private pure returns (ReentrancyGuardStorage storage $) {\n        assembly {\n            $.slot := ReentrancyGuardStorageLocation\n        }\n    }\n\n    /**\n     * @dev Unauthorized reentrant call.\n     */\n    error ReentrancyGuardReentrantCall();\n\n    function __ReentrancyGuard_init() internal onlyInitializing {\n        __ReentrancyGuard_init_unchained();\n    }\n\n    function __ReentrancyGuard_init_unchained() internal onlyInitializing {\n        ReentrancyGuardStorage storage $ = _getReentrancyGuardStorage();\n        $._status = NOT_ENTERED;\n    }\n\n    /**\n     * @dev Prevents a contract from calling itself, directly or indirectly.\n     * Calling a `nonReentrant` function from another `nonReentrant`\n     * function is not supported. It is possible to prevent this from happening\n     * by making the `nonReentrant` function external, and making it call a\n     * `private` function that does the actual work.\n     */\n    modifier nonReentrant() {\n        _nonReentrantBefore();\n        _;\n        _nonReentrantAfter();\n    }\n\n    function _nonReentrantBefore() private {\n        ReentrancyGuardStorage storage $ = _getReentrancyGuardStorage();\n        // On the first call to nonReentrant, _status will be NOT_ENTERED\n        if ($._status == ENTERED) {\n            revert ReentrancyGuardReentrantCall();\n        }\n\n        // Any calls to nonReentrant after this point will fail\n        $._status = ENTERED;\n    }\n\n    function _nonReentrantAfter() private {\n        ReentrancyGuardStorage storage $ = _getReentrancyGuardStorage();\n        // By storing the original value once again, a refund is triggered (see\n        // https://eips.ethereum.org/EIPS/eip-2200)\n        $._status = NOT_ENTERED;\n    }\n\n    /**\n     * @dev Returns true if the reentrancy guard is currently set to \"entered\", which indicates there is a\n     * `nonReentrant` function in the call stack.\n     */\n    function _reentrancyGuardEntered() internal view returns (bool) {\n        ReentrancyGuardStorage storage $ = _getReentrancyGuardStorage();\n        return $._status == ENTERED;\n    }\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts/contracts/interfaces/IERC1967.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.0.0) (interfaces/IERC1967.sol)\n\npragma solidity ^0.8.20;\n\n/**\n * @dev ERC-1967: Proxy Storage Slots. This interface contains the events defined in the ERC.\n */\ninterface IERC1967 {\n    /**\n     * @dev Emitted when the implementation is upgraded.\n     */\n    event Upgraded(address indexed implementation);\n\n    /**\n     * @dev Emitted when the admin account has changed.\n     */\n    event AdminChanged(address previousAdmin, address newAdmin);\n\n    /**\n     * @dev Emitted when the beacon is changed.\n     */\n    event BeaconUpgraded(address indexed beacon);\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts/contracts/interfaces/draft-IERC1822.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.1.0) (interfaces/draft-IERC1822.sol)\n\npragma solidity ^0.8.20;\n\n/**\n * @dev ERC-1822: Universal Upgradeable Proxy Standard (UUPS) documents a method for upgradeability through a simplified\n * proxy whose upgrades are fully controlled by the current implementation.\n */\ninterface IERC1822Proxiable {\n    /**\n     * @dev Returns the storage slot that the proxiable contract assumes is being used to store the implementation\n     * address.\n     *\n     * IMPORTANT: A proxy pointing at a proxiable contract should not be considered proxiable itself, because this risks\n     * bricking a proxy that upgrades to it, by delegating to itself until out of gas. Thus it is critical that this\n     * function revert if invoked through a proxy.\n     */\n    function proxiableUUID() external view returns (bytes32);\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Utils.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.2.0) (proxy/ERC1967/ERC1967Utils.sol)\n\npragma solidity ^0.8.22;\n\nimport {IBeacon} from \"../beacon/IBeacon.sol\";\nimport {IERC1967} from \"../../interfaces/IERC1967.sol\";\nimport {Address} from \"../../utils/Address.sol\";\nimport {StorageSlot} from \"../../utils/StorageSlot.sol\";\n\n/**\n * @dev This library provides getters and event emitting update functions for\n * https://eips.ethereum.org/EIPS/eip-1967[ERC-1967] slots.\n */\nlibrary ERC1967Utils {\n    /**\n     * @dev Storage slot with the address of the current implementation.\n     * This is the keccak-256 hash of \"eip1967.proxy.implementation\" subtracted by 1.\n     */\n    // solhint-disable-next-line private-vars-leading-underscore\n    bytes32 internal constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;\n\n    /**\n     * @dev The `implementation` of the proxy is invalid.\n     */\n    error ERC1967InvalidImplementation(address implementation);\n\n    /**\n     * @dev The `admin` of the proxy is invalid.\n     */\n    error ERC1967InvalidAdmin(address admin);\n\n    /**\n     * @dev The `beacon` of the proxy is invalid.\n     */\n    error ERC1967InvalidBeacon(address beacon);\n\n    /**\n     * @dev An upgrade function sees `msg.value > 0` that may be lost.\n     */\n    error ERC1967NonPayable();\n\n    /**\n     * @dev Returns the current implementation address.\n     */\n    function getImplementation() internal view returns (address) {\n        return StorageSlot.getAddressSlot(IMPLEMENTATION_SLOT).value;\n    }\n\n    /**\n     * @dev Stores a new address in the ERC-1967 implementation slot.\n     */\n    function _setImplementation(address newImplementation) private {\n        if (newImplementation.code.length == 0) {\n            revert ERC1967InvalidImplementation(newImplementation);\n        }\n        StorageSlot.getAddressSlot(IMPLEMENTATION_SLOT).value = newImplementation;\n    }\n\n    /**\n     * @dev Performs implementation upgrade with additional setup call if data is nonempty.\n     * This function is payable only if the setup call is performed, otherwise `msg.value` is rejected\n     * to avoid stuck value in the contract.\n     *\n     * Emits an {IERC1967-Upgraded} event.\n     */\n    function upgradeToAndCall(address newImplementation, bytes memory data) internal {\n        _setImplementation(newImplementation);\n        emit IERC1967.Upgraded(newImplementation);\n\n        if (data.length > 0) {\n            Address.functionDelegateCall(newImplementation, data);\n        } else {\n            _checkNonPayable();\n        }\n    }\n\n    /**\n     * @dev Storage slot with the admin of the contract.\n     * This is the keccak-256 hash of \"eip1967.proxy.admin\" subtracted by 1.\n     */\n    // solhint-disable-next-line private-vars-leading-underscore\n    bytes32 internal constant ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;\n\n    /**\n     * @dev Returns the current admin.\n     *\n     * TIP: To get this value clients can read directly from the storage slot shown below (specified by ERC-1967) using\n     * the https://eth.wiki/json-rpc/API#eth_getstorageat[`eth_getStorageAt`] RPC call.\n     * `0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103`\n     */\n    function getAdmin() internal view returns (address) {\n        return StorageSlot.getAddressSlot(ADMIN_SLOT).value;\n    }\n\n    /**\n     * @dev Stores a new address in the ERC-1967 admin slot.\n     */\n    function _setAdmin(address newAdmin) private {\n        if (newAdmin == address(0)) {\n            revert ERC1967InvalidAdmin(address(0));\n        }\n        StorageSlot.getAddressSlot(ADMIN_SLOT).value = newAdmin;\n    }\n\n    /**\n     * @dev Changes the admin of the proxy.\n     *\n     * Emits an {IERC1967-AdminChanged} event.\n     */\n    function changeAdmin(address newAdmin) internal {\n        emit IERC1967.AdminChanged(getAdmin(), newAdmin);\n        _setAdmin(newAdmin);\n    }\n\n    /**\n     * @dev The storage slot of the UpgradeableBeacon contract which defines the implementation for this proxy.\n     * This is the keccak-256 hash of \"eip1967.proxy.beacon\" subtracted by 1.\n     */\n    // solhint-disable-next-line private-vars-leading-underscore\n    bytes32 internal constant BEACON_SLOT = 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50;\n\n    /**\n     * @dev Returns the current beacon.\n     */\n    function getBeacon() internal view returns (address) {\n        return StorageSlot.getAddressSlot(BEACON_SLOT).value;\n    }\n\n    /**\n     * @dev Stores a new beacon in the ERC-1967 beacon slot.\n     */\n    function _setBeacon(address newBeacon) private {\n        if (newBeacon.code.length == 0) {\n            revert ERC1967InvalidBeacon(newBeacon);\n        }\n\n        StorageSlot.getAddressSlot(BEACON_SLOT).value = newBeacon;\n\n        address beaconImplementation = IBeacon(newBeacon).implementation();\n        if (beaconImplementation.code.length == 0) {\n            revert ERC1967InvalidImplementation(beaconImplementation);\n        }\n    }\n\n    /**\n     * @dev Change the beacon and trigger a setup call if data is nonempty.\n     * This function is payable only if the setup call is performed, otherwise `msg.value` is rejected\n     * to avoid stuck value in the contract.\n     *\n     * Emits an {IERC1967-BeaconUpgraded} event.\n     *\n     * CAUTION: Invoking this function has no effect on an instance of {BeaconProxy} since v5, since\n     * it uses an immutable beacon without looking at the value of the ERC-1967 beacon slot for\n     * efficiency.\n     */\n    function upgradeBeaconToAndCall(address newBeacon, bytes memory data) internal {\n        _setBeacon(newBeacon);\n        emit IERC1967.BeaconUpgraded(newBeacon);\n\n        if (data.length > 0) {\n            Address.functionDelegateCall(IBeacon(newBeacon).implementation(), data);\n        } else {\n            _checkNonPayable();\n        }\n    }\n\n    /**\n     * @dev Reverts if `msg.value` is not zero. It can be used to avoid `msg.value` stuck in the contract\n     * if an upgrade doesn't perform an initialization call.\n     */\n    function _checkNonPayable() private {\n        if (msg.value > 0) {\n            revert ERC1967NonPayable();\n        }\n    }\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts/contracts/proxy/beacon/IBeacon.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.0.0) (proxy/beacon/IBeacon.sol)\n\npragma solidity ^0.8.20;\n\n/**\n * @dev This is the interface that {BeaconProxy} expects of its beacon.\n */\ninterface IBeacon {\n    /**\n     * @dev Must return an address that can be used as a delegate call target.\n     *\n     * {UpgradeableBeacon} will check that this address is a contract.\n     */\n    function implementation() external view returns (address);\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts/contracts/utils/Address.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.2.0) (utils/Address.sol)\n\npragma solidity ^0.8.20;\n\nimport {Errors} from \"./Errors.sol\";\n\n/**\n * @dev Collection of functions related to the address type\n */\nlibrary Address {\n    /**\n     * @dev There's no code at `target` (it is not a contract).\n     */\n    error AddressEmptyCode(address target);\n\n    /**\n     * @dev Replacement for Solidity's `transfer`: sends `amount` wei to\n     * `recipient`, forwarding all available gas and reverting on errors.\n     *\n     * https://eips.ethereum.org/EIPS/eip-1884[EIP1884] increases the gas cost\n     * of certain opcodes, possibly making contracts go over the 2300 gas limit\n     * imposed by `transfer`, making them unable to receive funds via\n     * `transfer`. {sendValue} removes this limitation.\n     *\n     * https://consensys.net/diligence/blog/2019/09/stop-using-soliditys-transfer-now/[Learn more].\n     *\n     * IMPORTANT: because control is transferred to `recipient`, care must be\n     * taken to not create reentrancy vulnerabilities. Consider using\n     * {ReentrancyGuard} or the\n     * https://solidity.readthedocs.io/en/v0.8.20/security-considerations.html#use-the-checks-effects-interactions-pattern[checks-effects-interactions pattern].\n     */\n    function sendValue(address payable recipient, uint256 amount) internal {\n        if (address(this).balance < amount) {\n            revert Errors.InsufficientBalance(address(this).balance, amount);\n        }\n\n        (bool success, bytes memory returndata) = recipient.call{value: amount}(\"\");\n        if (!success) {\n            _revert(returndata);\n        }\n    }\n\n    /**\n     * @dev Performs a Solidity function call using a low level `call`. A\n     * plain `call` is an unsafe replacement for a function call: use this\n     * function instead.\n     *\n     * If `target` reverts with a revert reason or custom error, it is bubbled\n     * up by this function (like regular Solidity function calls). However, if\n     * the call reverted with no returned reason, this function reverts with a\n     * {Errors.FailedCall} error.\n     *\n     * Returns the raw returned data. To convert to the expected return value,\n     * use https://solidity.readthedocs.io/en/latest/units-and-global-variables.html?highlight=abi.decode#abi-encoding-and-decoding-functions[`abi.decode`].\n     *\n     * Requirements:\n     *\n     * - `target` must be a contract.\n     * - calling `target` with `data` must not revert.\n     */\n    function functionCall(address target, bytes memory data) internal returns (bytes memory) {\n        return functionCallWithValue(target, data, 0);\n    }\n\n    /**\n     * @dev Same as {xref-Address-functionCall-address-bytes-}[`functionCall`],\n     * but also transferring `value` wei to `target`.\n     *\n     * Requirements:\n     *\n     * - the calling contract must have an ETH balance of at least `value`.\n     * - the called Solidity function must be `payable`.\n     */\n    function functionCallWithValue(address target, bytes memory data, uint256 value) internal returns (bytes memory) {\n        if (address(this).balance < value) {\n            revert Errors.InsufficientBalance(address(this).balance, value);\n        }\n        (bool success, bytes memory returndata) = target.call{value: value}(data);\n        return verifyCallResultFromTarget(target, success, returndata);\n    }\n\n    /**\n     * @dev Same as {xref-Address-functionCall-address-bytes-}[`functionCall`],\n     * but performing a static call.\n     */\n    function functionStaticCall(address target, bytes memory data) internal view returns (bytes memory) {\n        (bool success, bytes memory returndata) = target.staticcall(data);\n        return verifyCallResultFromTarget(target, success, returndata);\n    }\n\n    /**\n     * @dev Same as {xref-Address-functionCall-address-bytes-}[`functionCall`],\n     * but performing a delegate call.\n     */\n    function functionDelegateCall(address target, bytes memory data) internal returns (bytes memory) {\n        (bool success, bytes memory returndata) = target.delegatecall(data);\n        return verifyCallResultFromTarget(target, success, returndata);\n    }\n\n    /**\n     * @dev Tool to verify that a low level call to smart-contract was successful, and reverts if the target\n     * was not a contract or bubbling up the revert reason (falling back to {Errors.FailedCall}) in case\n     * of an unsuccessful call.\n     */\n    function verifyCallResultFromTarget(\n        address target,\n        bool success,\n        bytes memory returndata\n    ) internal view returns (bytes memory) {\n        if (!success) {\n            _revert(returndata);\n        } else {\n            // only check if target is a contract if the call was successful and the return data is empty\n            // otherwise we already know that it was a contract\n            if (returndata.length == 0 && target.code.length == 0) {\n                revert AddressEmptyCode(target);\n            }\n            return returndata;\n        }\n    }\n\n    /**\n     * @dev Tool to verify that a low level call was successful, and reverts if it wasn't, either by bubbling the\n     * revert reason or with a default {Errors.FailedCall} error.\n     */\n    function verifyCallResult(bool success, bytes memory returndata) internal pure returns (bytes memory) {\n        if (!success) {\n            _revert(returndata);\n        } else {\n            return returndata;\n        }\n    }\n\n    /**\n     * @dev Reverts with returndata if present. Otherwise reverts with {Errors.FailedCall}.\n     */\n    function _revert(bytes memory returndata) private pure {\n        // Look for revert reason and bubble it up if present\n        if (returndata.length > 0) {\n            // The easiest way to bubble the revert reason is using memory via assembly\n            assembly (\"memory-safe\") {\n                let returndata_size := mload(returndata)\n                revert(add(32, returndata), returndata_size)\n            }\n        } else {\n            revert Errors.FailedCall();\n        }\n    }\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts/contracts/utils/Errors.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.1.0) (utils/Errors.sol)\n\npragma solidity ^0.8.20;\n\n/**\n * @dev Collection of common custom errors used in multiple contracts\n *\n * IMPORTANT: Backwards compatibility is not guaranteed in future versions of the library.\n * It is recommended to avoid relying on the error API for critical functionality.\n *\n * _Available since v5.1._\n */\nlibrary Errors {\n    /**\n     * @dev The ETH balance of the account is not enough to perform the operation.\n     */\n    error InsufficientBalance(uint256 balance, uint256 needed);\n\n    /**\n     * @dev A call to an address target failed. The target may have reverted.\n     */\n    error FailedCall();\n\n    /**\n     * @dev The deployment failed.\n     */\n    error FailedDeployment();\n\n    /**\n     * @dev A necessary precompile is missing.\n     */\n    error MissingPrecompile(address);\n}\n"
+    },
+    {
+      "file_path": "lib/openzeppelin-contracts/contracts/utils/StorageSlot.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.1.0) (utils/StorageSlot.sol)\n// This file was procedurally generated from scripts/generate/templates/StorageSlot.js.\n\npragma solidity ^0.8.20;\n\n/**\n * @dev Library for reading and writing primitive types to specific storage slots.\n *\n * Storage slots are often used to avoid storage conflict when dealing with upgradeable contracts.\n * This library helps with reading and writing to such slots without the need for inline assembly.\n *\n * The functions in this library return Slot structs that contain a `value` member that can be used to read or write.\n *\n * Example usage to set ERC-1967 implementation slot:\n * ```solidity\n * contract ERC1967 {\n *     // Define the slot. Alternatively, use the SlotDerivation library to derive the slot.\n *     bytes32 internal constant _IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;\n *\n *     function _getImplementation() internal view returns (address) {\n *         return StorageSlot.getAddressSlot(_IMPLEMENTATION_SLOT).value;\n *     }\n *\n *     function _setImplementation(address newImplementation) internal {\n *         require(newImplementation.code.length > 0);\n *         StorageSlot.getAddressSlot(_IMPLEMENTATION_SLOT).value = newImplementation;\n *     }\n * }\n * ```\n *\n * TIP: Consider using this library along with {SlotDerivation}.\n */\nlibrary StorageSlot {\n    struct AddressSlot {\n        address value;\n    }\n\n    struct BooleanSlot {\n        bool value;\n    }\n\n    struct Bytes32Slot {\n        bytes32 value;\n    }\n\n    struct Uint256Slot {\n        uint256 value;\n    }\n\n    struct Int256Slot {\n        int256 value;\n    }\n\n    struct StringSlot {\n        string value;\n    }\n\n    struct BytesSlot {\n        bytes value;\n    }\n\n    /**\n     * @dev Returns an `AddressSlot` with member `value` located at `slot`.\n     */\n    function getAddressSlot(bytes32 slot) internal pure returns (AddressSlot storage r) {\n        assembly (\"memory-safe\") {\n            r.slot := slot\n        }\n    }\n\n    /**\n     * @dev Returns a `BooleanSlot` with member `value` located at `slot`.\n     */\n    function getBooleanSlot(bytes32 slot) internal pure returns (BooleanSlot storage r) {\n        assembly (\"memory-safe\") {\n            r.slot := slot\n        }\n    }\n\n    /**\n     * @dev Returns a `Bytes32Slot` with member `value` located at `slot`.\n     */\n    function getBytes32Slot(bytes32 slot) internal pure returns (Bytes32Slot storage r) {\n        assembly (\"memory-safe\") {\n            r.slot := slot\n        }\n    }\n\n    /**\n     * @dev Returns a `Uint256Slot` with member `value` located at `slot`.\n     */\n    function getUint256Slot(bytes32 slot) internal pure returns (Uint256Slot storage r) {\n        assembly (\"memory-safe\") {\n            r.slot := slot\n        }\n    }\n\n    /**\n     * @dev Returns a `Int256Slot` with member `value` located at `slot`.\n     */\n    function getInt256Slot(bytes32 slot) internal pure returns (Int256Slot storage r) {\n        assembly (\"memory-safe\") {\n            r.slot := slot\n        }\n    }\n\n    /**\n     * @dev Returns a `StringSlot` with member `value` located at `slot`.\n     */\n    function getStringSlot(bytes32 slot) internal pure returns (StringSlot storage r) {\n        assembly (\"memory-safe\") {\n            r.slot := slot\n        }\n    }\n\n    /**\n     * @dev Returns an `StringSlot` representation of the string storage pointer `store`.\n     */\n    function getStringSlot(string storage store) internal pure returns (StringSlot storage r) {\n        assembly (\"memory-safe\") {\n            r.slot := store.slot\n        }\n    }\n\n    /**\n     * @dev Returns a `BytesSlot` with member `value` located at `slot`.\n     */\n    function getBytesSlot(bytes32 slot) internal pure returns (BytesSlot storage r) {\n        assembly (\"memory-safe\") {\n            r.slot := slot\n        }\n    }\n\n    /**\n     * @dev Returns an `BytesSlot` representation of the bytes storage pointer `store`.\n     */\n    function getBytesSlot(bytes storage store) internal pure returns (BytesSlot storage r) {\n        assembly (\"memory-safe\") {\n            r.slot := store.slot\n        }\n    }\n}\n"
+    },
+    {
+      "file_path": "src/kasExitBridge/KasExitBridgeBurnProxy.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\npragma solidity 0.8.30;\n\n/// @notice Minimal selfdestruct-to-self helper used for the accepted BurnFish-style native burn path.\ncontract KasExitBridgeBurnProxy {\n    constructor() payable {\n        selfdestruct(payable(address(this)));\n    }\n}\n"
+    },
+    {
+      "file_path": "src/kasExitBridge/interfaces/IFeePolicy.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\npragma solidity 0.8.30;\n\ninterface IFeePolicy {\n    function computeFee(address burner, uint64 unlockAmountSompi) external view returns (uint64 feeAmountSompi);\n}\n"
+    },
+    {
+      "file_path": "src/kasExitBridge/interfaces/IMailbox.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\npragma solidity 0.8.30;\n\ninterface IMailbox {\n    function dispatch(uint32 destinationDomain, bytes32 recipientAddress, bytes calldata messageBody)\n        external\n        payable\n        returns (bytes32 messageId);\n}\n"
+    },
+    {
+      "file_path": "src/kasExitBridge/libraries/KasExitBridgeMessageLib.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\npragma solidity 0.8.30;\n\nlibrary KasExitBridgeMessageLib {\n    bytes1 internal constant BODY_FORMAT_V1_HEADER = 0x11;\n\n    function encodeBodyV1(\n        uint32 requestId,\n        uint64 unlockAmountSompi,\n        address originBurner,\n        string memory kasPayoutAddress\n    ) internal pure returns (bytes memory) {\n        bytes memory kasPayoutAddressBytes = bytes(kasPayoutAddress);\n\n        return abi.encodePacked(\n            BODY_FORMAT_V1_HEADER,\n            bytes4(requestId),\n            bytes8(unlockAmountSompi),\n            bytes20(originBurner),\n            bytes1(uint8(kasPayoutAddressBytes.length)),\n            kasPayoutAddressBytes\n        );\n    }\n}\n"
+    },
+    {
+      "file_path": "src/kasExitBridge/libraries/KasExitBridgeStorage.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\npragma solidity 0.8.30;\n\nlibrary KasExitBridgeStorage {\n    /// @custom:storage-location erc7201:igra.kas-exit-bridge\n    struct Layout {\n        uint64 chargedFeeSompi;\n        uint64 minExitAmountSompi;\n        uint64 maxExitAmountSompi;\n        uint32 exitRequestCounter;\n        uint64 throttleMaxUnlockAmountPerWindow;\n        uint64 unlockAmountUsedInCurrentWindow;\n        uint32 throttleWindowBlocks;\n        uint32 throttleMaxExitsPerWindow;\n        uint32 exitsUsedInCurrentWindow;\n        uint32 currentWindowIndex;\n        uint64 totalBurnedSompi;\n        address feePolicyAddress;\n        address feeClaimer;\n        uint64 claimedFeeSompi;\n        bytes32 kaspaBridgeEndpoint;\n        ExitRequestRecord[8191] records;\n    }\n\n    struct ExitRequestRecord {\n        uint32 requestId;\n        uint32 recordedAtBlock;\n        uint64 feeAmountSompi;\n        uint64 unlockAmountSompi;\n        bytes32 messageId;\n    }\n\n    // keccak256(abi.encode(uint256(keccak256(\"igra.kas-exit-bridge\")) - 1)) & ~bytes32(uint256(0xff))\n    bytes32 private constant LAYOUT_STORAGE_SLOT = 0x3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5000;\n\n    function layout() internal pure returns (Layout storage $) {\n        assembly {\n            $.slot := LAYOUT_STORAGE_SLOT\n        }\n    }\n}\n"
+    },
+    {
+      "file_path": "src/kasExitBridge/libraries/KaspaAddressLib.sol",
+      "source_code": "// SPDX-License-Identifier: MIT\npragma solidity 0.8.30;\n\nlibrary KaspaAddressLib {\n    bytes6 private constant KASPA_PREFIX = \"kaspa:\";\n\n    function verifyKaspaAddress(string memory addr) internal view returns (bool) {\n        bytes memory addrBytes = bytes(addr);\n        uint256 length = addrBytes.length;\n\n        if (length <= KASPA_PREFIX.length || length > 67) {\n            return false;\n        }\n\n        for (uint256 i = 0; i < KASPA_PREFIX.length; ++i) {\n            if (addrBytes[i] != KASPA_PREFIX[i]) {\n                return false;\n            }\n        }\n\n        for (uint256 i = KASPA_PREFIX.length; i < length; ++i) {\n            bytes1 char = addrBytes[i];\n            if (\n                char != \"q\" && char != \"p\" && char != \"z\" && char != \"r\" && char != \"y\" && char != \"9\" && char != \"x\"\n                    && char != \"8\" && char != \"g\" && char != \"f\" && char != \"2\" && char != \"t\" && char != \"v\" && char != \"d\"\n                    && char != \"w\" && char != \"0\" && char != \"s\" && char != \"3\" && char != \"j\" && char != \"n\" && char != \"5\"\n                    && char != \"4\" && char != \"k\" && char != \"h\" && char != \"c\" && char != \"e\" && char != \"6\" && char != \"m\"\n                    && char != \"u\" && char != \"a\" && char != \"7\" && char != \"l\"\n            ) {\n                return false;\n            }\n        }\n\n        return true;\n    }\n}\n"
+    }
+  ],
+  "can_be_visualized_via_sol2uml": true,
+  "certified": false,
+  "compiler_settings": {
+    "evmVersion": "cancun",
+    "libraries": {},
+    "metadata": {
+      "appendCBOR": true,
+      "bytecodeHash": "ipfs",
+      "useLiteralContent": false
+    },
+    "optimizer": {
+      "enabled": true,
+      "runs": 1000000
+    },
+    "outputSelection": {
+      "*": {
+        "": [
+          "*"
+        ],
+        "*": [
+          "*"
+        ]
+      }
+    },
+    "remappings": [
+      "solmate/=lib/solmate/src/",
+      "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+      "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
+      "erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/",
+      "forge-std/=lib/openzeppelin-contracts/lib/forge-std/src/",
+      "halmos-cheatcodes/=lib/openzeppelin-contracts/lib/halmos-cheatcodes/src/",
+      "openzeppelin-contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/",
+      "openzeppelin-contracts/=lib/openzeppelin-contracts/"
+    ],
+    "viaIR": true
+  },
+  "compiler_version": "v0.8.30+commit.73712a01",
+  "constructor_args": null,
+  "creation_bytecode": null,
+  "creation_status": "success",
+  "decoded_constructor_args": null,
+  "deployed_bytecode": "0x60806040526004361015610011575f80fd5b5f3560e01c8063190c1eed1461224d5780631a6b28cd146121c457806329eaa03c146120b95780634f1ef28614611da957806352d1902d14611cec57806353f9efa014611c555780635f8b1cce14611182578063604e7af714611122578063715018a614610fe257806379ba509714610f415780638266e27f14610eca57806383594be514610e4a5780638da5cb5b14610dda578063ad3cb1cc14610d59578063b246ae1c14610cf6578063c3accd4814610c0d578063c3f909d414610ac7578063ce7732a214610770578063d165a5a6146105a7578063d29550f0146103bc578063d89135cd1461030f578063e30c39781461029f578063f2fde38b146101845763f7aa656814610121575f80fd5b346101805760407ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3601126101805760043567ffffffffffffffff811681036101805761017e9061017061258b565b906101796128ca565b6133fb565b005b5f80fd5b346101805760207ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3601126101805773ffffffffffffffffffffffffffffffffffffffff6101d0612568565b6101d86128ca565b16807fffffffffffffffffffffffff00000000000000000000000000000000000000007f237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c005416177f237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c005573ffffffffffffffffffffffffffffffffffffffff7f9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c19930054167f38d16b8cac22d99fc7c124b9cd0de2d3fa1faef420bfe791d8c362d765e227005f80a3005b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261018057602073ffffffffffffffffffffffffffffffffffffffff7f237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c005416604051908152f35b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3601126101805767ffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500254166402540be4008102908082046402540be400149015171561038f57602090604051908152f35b7f4e487b71000000000000000000000000000000000000000000000000000000005f52601160045260245ffd5b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc360112610180576103f26130fe565b7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5001549063ffffffff61042a818460801c16809361280e565b1690600182019081831161038f578082029180830482149015171561038f577fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff820191821161038f5763ffffffff821161057857508260e01c8214805f146105715763ffffffff8460c01c16905b1561056a5767ffffffffffffffff8460401c16905b63ffffffff8560a01c16908115801561055a575b156105295750509063ffffffff60809467ffffffffffffffff93845f925b16806105055750508184935b604051968752166020860152166040840152166060820152f35b8186168111610518575050815f936104eb565b83916105239161270d565b936104eb565b63ffffffff9093929316900363ffffffff811161038f5760809467ffffffffffffffff938463ffffffff93926104df565b508163ffffffff821610156104c1565b5f906104ad565b5f90610498565b827f83687de6000000000000000000000000000000000000000000000000000000005f5260045260245260445ffd5b346101805760407ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc360112610180576105de612568565b602435906105ea6128ca565b6105f2612853565b47808311610741575f8367ffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5000541667ffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50035460a01c1690818111610706575b505061066c9192612801565b908082106106d8575f80808087875af16106846126de565b50156106b05760017f9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f0055005b7ff4b3b1bc000000000000000000000000000000000000000000000000000000005f5260045ffd5b7fe8cbdd0a000000000000000000000000000000000000000000000000000000005f5260045260245260445ffd5b67ffffffffffffffff935061071b925061270d565b166402540be4008102908082046402540be400149015171561038f578361066c86610660565b827ffe192b15000000000000000000000000000000000000000000000000000000005f5260045260245260445ffd5b346101805760c07ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc360112610180576107a7612568565b6107af612666565b6044359163ffffffff83168303610180576064359067ffffffffffffffff82168203610180576084359067ffffffffffffffff821682036101805760a4359267ffffffffffffffff84168403610180577ff0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00549567ffffffffffffffff60ff8860401c1615971680159081610abf575b6001149081610ab5575b159081610aac575b50610a84578660017fffffffffffffffffffffffffffffffffffffffffffffffff00000000000000007ff0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a005416177ff0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a0055610a0e575b6108cc613535565b6108d4613535565b73ffffffffffffffffffffffffffffffffffffffff8316156109e25761094995610900610179946132ec565b610908613535565b610910613535565b610918613535565b60017f9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f0055610944613535565b61318f565b61094f57005b7fffffffffffffffffffffffffffffffffffffffffffffff00ffffffffffffffff7ff0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a0054167ff0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00557fc7f505b2f371ae2175ee4913f4499e1f2633a7b5936321eed1cdaeb6115181d2602060405160018152a1005b7f1e4fbdf7000000000000000000000000000000000000000000000000000000005f525f60045260245ffd5b680100000000000000007fffffffffffffffffffffffffffffffffffffffffffffff00ffffffffffffffff7ff0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a005416177ff0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00556108c4565b7ff92ee8a9000000000000000000000000000000000000000000000000000000005f5260045ffd5b90501588610850565b303b159150610848565b88915061083e565b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261018057610100610b0061313f565b67ffffffffffffffff73ffffffffffffffffffffffffffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50025460401c168173ffffffffffffffffffffffffffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500354167f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500154907f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500054936040519687526020870152604086015263ffffffff8160801c16606086015263ffffffff8160a01c1660808601521660a0840152818160401c1660c084015260801c1660e0820152f35b346101805760207ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc360112610180577f8e717675664f91f03c6f34b320ad1637309b3a4df77ea4eab03b5c08a5c116ed602073ffffffffffffffffffffffffffffffffffffffff610c7c612568565b610c846128ca565b16807fffffffffffffffffffffffff00000000000000000000000000000000000000007f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50035416177f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500355604051908152a1005b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261018057602063ffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50005460c01c16604051908152f35b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261018057610dd6604051610d986040826125a2565b600581527f352e302e300000000000000000000000000000000000000000000000000000006020820152604051918291602083526020830190612679565b0390f35b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261018057602073ffffffffffffffffffffffffffffffffffffffff7f9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c1993005416604051908152f35b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3601126101805767ffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500054166402540be4008102908082046402540be400149015171561038f57602090604051908152f35b346101805760207ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3601126101805760a063ffffffff67ffffffffffffffff80610f1a610f15612653565b612790565b95926040979194975197151588521660208701521660408501521660608301526080820152f35b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc360112610180573373ffffffffffffffffffffffffffffffffffffffff7f237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c00541603610fb65761017e336132ec565b7f118cdaa7000000000000000000000000000000000000000000000000000000005f523360045260245ffd5b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc360112610180576110186128ca565b7fffffffffffffffffffffffff00000000000000000000000000000000000000007f237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c0054167f237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c00555f73ffffffffffffffffffffffffffffffffffffffff7f9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300547fffffffffffffffffffffffff000000000000000000000000000000000000000081167f9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c19930055167f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e08280a3005b346101805760607ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261018057611159612653565b611161612666565b6044359067ffffffffffffffff821682036101805761017e926109446128ca565b60407ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3601126101805760043567ffffffffffffffff811161018057366023820112156101805780600401359067ffffffffffffffff82116101805760248101906024833692010111610180576111f761258b565b90611200612853565b61121361120e36858461261d565b6129ed565b15611c2d5767ffffffffffffffff8216918215611c05576112326130fe565b907f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50015463ffffffff8160801c168015611bdd5761126f908461280e565b9060e01c63ffffffff821603611b6c575b507f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5000549167ffffffffffffffff8360401c1667ffffffffffffffff8460801c169080151580611b63575b611b34575080151580611b2b575b611afc57507f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5001549063ffffffff8260a01c168063ffffffff8460c01c161015611aca575067ffffffffffffffff8216918215159283611a71575b505061137a8373ffffffffffffffffffffffffffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50025460401c16339061290a565b9367ffffffffffffffff85169788880180891161038f576402540be4008102908082046402540be400149015171561038f57803403611a42575063ffffffff8260c01c169763ffffffff8914611a1a576402540be40081029081046402540be4000361038f57604051600380820182811067ffffffffffffffff8211176119ed5782916136268339039082f0156119e25760426020938461150d6116539b7fffffffff00000000000000000000000000000000000000000000000000000000967f7f3d33c9552e49f29503b294c870baa48928b63caef2d26864bc254552cf89bc846116009867ffffffffffffffff8f61149790827f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500254166126bc565b167fffffffffffffffffffffffffffffffffffffffffffffffff00000000000000007f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50025416177f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500255604051908152a1369161261d565b7fff00000000000000000000000000000000000000000000000000000000000000815160f81b166040519687947f110000000000000000000000000000000000000000000000000000000000000085870152841b1660218501527fffffffffffffffff0000000000000000000000000000000000000000000000008b60c01b1660258501527fffffffffffffffffffffffffffffffffffffffff0000000000000000000000003360601b16602d85015260418401528051918291018484015e81015f8382015203017fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe081018352826125a2565b61160861313f565b60405197889283927ffa31de01000000000000000000000000000000000000000000000000000000008452634b414b5060048501526024840152606060448401526064830190612679565b03815f73ffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000003a867fcffec2b790970eebdc9023e75b0a172aa7165af19485156119e2575f956119a1575b5092606092604097928660017f064ac3ea658d20889e8cb29da979fd0057393c8e448f32a582088de69a07438b976116d8611fff8c0661272f565b5080547fffffffffffffffff00000000000000000000000000000000ffffffffffffffff8d167fffffffffffffffff0000000000000000000000000000000000000000000000009091161760209290921b67ffffffff000000001691909117868d1b6fffffffffffffffff00000000000000001617608086901b77ffffffffffffffff000000000000000000000000000000001617815501557f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500080547fffffffff00000000ffffffffffffffffffffffffffffffffffffffffffffffff9081166001808c0160c090811b7bffffffff000000000000000000000000000000000000000000000000908116939093179094557f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5001805493841693851c63ffffffff1690910190931b161790556118e7575b507fffffffffffffffffffffffffffffffffffffffffffffffff000000000000000067ffffffffffffffff6118807f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500054938285166126bc565b169116177f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50005585519085825284602083015286820152a160017f9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f005582519182526020820152f35b61191e9067ffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5001548a1c166126bc565b7fffffffffffffffffffffffffffffffff0000000000000000ffffffffffffffff6fffffffffffffffff00000000000000007f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500154928a1b169116177f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50015587611827565b9296919450926020833d6020116119da575b816119c0602093836125a2565b81010312610180579151909590939192909190606061169d565b3d91506119b3565b6040513d5f823e3d90fd5b7f4e487b71000000000000000000000000000000000000000000000000000000005f52604160045260245ffd5b7fc65b70d4000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f1f89f671000000000000000000000000000000000000000000000000000000005f526004523460245260445ffd5b611a8a67ffffffffffffffff91828460401c169061270d565b1690818811156113325787907f27916f3b000000000000000000000000000000000000000000000000000000005f5260e01c60045260245260445260645ffd5b827f17d22043000000000000000000000000000000000000000000000000000000005f5260e01c60045260245260445ffd5b857fb896d8c6000000000000000000000000000000000000000000000000000000005f5260045260245260445ffd5b508086116112d8565b867f315b3805000000000000000000000000000000000000000000000000000000005f5260045260245260445ffd5b508087106112ca565b7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5001805477ffffffffffffffff0000000000000000ffffffffffffffff1660e09290921b7fffffffff000000000000000000000000000000000000000000000000000000001691909117905585611280565b7f882d031d000000000000000000000000000000000000000000000000000000005f5260045ffd5b7ff841ff98000000000000000000000000000000000000000000000000000000005f5260045ffd5b7fa390befb000000000000000000000000000000000000000000000000000000005f5260045ffd5b346101805760407ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc360112610180576020611cda611c91612568565b611c9961258b565b9073ffffffffffffffffffffffffffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50025460401c1661290a565b67ffffffffffffffff60405191168152f35b34610180575f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3601126101805773ffffffffffffffffffffffffffffffffffffffff7f00000000000000000000000000d39e05a20b2c4f6d0d6cfc3c5718066b861334163003611d815760206040517f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc8152f35b7fe07c8dba000000000000000000000000000000000000000000000000000000005f5260045ffd5b60407ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261018057611ddb612568565b60243567ffffffffffffffff8111610180573660238201121561018057611e0c90369060248160040135910161261d565b73ffffffffffffffffffffffffffffffffffffffff7f00000000000000000000000000d39e05a20b2c4f6d0d6cfc3c5718066b86133416803014908115612077575b50611d8157611e5b6128ca565b73ffffffffffffffffffffffffffffffffffffffff8216916040517f52d1902d000000000000000000000000000000000000000000000000000000008152602081600481875afa5f9181612043575b50611edb57837f4c9c8ce3000000000000000000000000000000000000000000000000000000005f5260045260245ffd5b807f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc8592036120185750813b15611fed57807fffffffffffffffffffffffff00000000000000000000000000000000000000007f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc5416177f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc557fbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b5f80a2815115611fbc575f8083602061017e95519101845af4611fb66126de565b9161358c565b505034611fc557005b7fb398979f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f4c9c8ce3000000000000000000000000000000000000000000000000000000005f5260045260245ffd5b7faa1d49a4000000000000000000000000000000000000000000000000000000005f5260045260245ffd5b9091506020813d60201161206f575b8161205f602093836125a2565b8101031261018057519085611eaa565b3d9150612052565b905073ffffffffffffffffffffffffffffffffffffffff7f360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc5416141583611e4e565b346101805760207ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc360112610180577f58f31955d4609cbb798d52cdb7a49ebc72cc340711c5aed5d844825cfb1b63676020612113612568565b61211b6128ca565b7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5002547fffffffff0000000000000000000000000000000000000000ffffffffffffffff7bffffffffffffffffffffffffffffffffffffffff00000000000000008360401b169116177f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f50025573ffffffffffffffffffffffffffffffffffffffff60405191168152a1005b346101805760207ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc360112610180577f3acf5fbc4f030bbc9713ae06aa0517c8670bac97db93d16da73faa985241fe4b60206004356122216128ca565b807f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500455604051908152a1005b346101805760407ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc36011261018057612284612568565b61228c61258b565b612294612853565b73ffffffffffffffffffffffffffffffffffffffff7f9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300541633141580612514575b6124e85767ffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500054166402540be4008102908082046402540be400149015171561038f577f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5003549067ffffffffffffffff8260a01c16906402540be40082028281046402540be400148315171561038f578181106124da5750505f5b4790808210156124d25750925b67ffffffffffffffff81166124cc575067ffffffffffffffff6402540be400840416905b67ffffffffffffffff8216936402540be4008502948086046402540be400149015171561038f5780851161249d575f808080888a897fffffffff0000000000000000ffffffffffffffffffffffffffffffffffffffff7bffffffffffffffff00000000000000000000000000000000000000006124258c8c6126bc565b60a01b169116177f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5003557f20ca5094f3a20c321cbe4123d0f01b276b81df0fa24cd4d83d9253956035d8636040805173ffffffffffffffffffffffffffffffffffffffff84168152846020820152a15af16106846126de565b847f580dc68c000000000000000000000000000000000000000000000000000000005f5260045260245260445ffd5b906123a8565b905092612384565b6124e391612801565b612377565b7f46b90dd1000000000000000000000000000000000000000000000000000000005f523360045260245ffd5b5073ffffffffffffffffffffffffffffffffffffffff7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500354168033149081159161255f575b506122d5565b90501583612559565b6004359073ffffffffffffffffffffffffffffffffffffffff8216820361018057565b6024359067ffffffffffffffff8216820361018057565b90601f7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0910116810190811067ffffffffffffffff8211176119ed57604052565b67ffffffffffffffff81116119ed57601f017fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe01660200190565b929192612629826125e3565b9161263760405193846125a2565b829481845281830111610180578281602093845f960137010152565b6004359063ffffffff8216820361018057565b6024359063ffffffff8216820361018057565b907fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0601f602080948051918291828752018686015e5f8582860101520116010190565b9067ffffffffffffffff8091169116019067ffffffffffffffff821161038f57565b3d15612708573d906126ef826125e3565b916126fd60405193846125a2565b82523d5f602084013e565b606090565b9067ffffffffffffffff8091169116039067ffffffffffffffff821161038f57565b611fff8110156127635760011b7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500501905f90565b7f4e487b71000000000000000000000000000000000000000000000000000000005f52603260045260245ffd5b63ffffffff16906127a4611fff830661272f565b5060018101549283159081156127ef575b506127e1575460019263ffffffff8260201c169267ffffffffffffffff808460401c169360801c169190565b505f91508190819081908190565b905063ffffffff82541614155f6127b5565b9190820391821161038f57565b9063ffffffff169081156128265763ffffffff160490565b7f4e487b71000000000000000000000000000000000000000000000000000000005f52601260045260245ffd5b60027f9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f0054146128a25760027f9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f0055565b7f3ee5aeb5000000000000000000000000000000000000000000000000000000005f5260045ffd5b73ffffffffffffffffffffffffffffffffffffffff7f9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c19930054163303610fb657565b73ffffffffffffffffffffffffffffffffffffffff169081156129d557604473ffffffffffffffffffffffffffffffffffffffff9160209367ffffffffffffffff60405196879586947f1950568c0000000000000000000000000000000000000000000000000000000086521660048501521660248301525afa9081156119e2575f91612995575090565b90506020813d6020116129cd575b816129b0602093836125a2565b81010312610180575167ffffffffffffffff811681036101805790565b3d91506129a3565b5050505f90565b908151811015612763570160200190565b805190600682118015906130f4575b6130ee575f5b6006811015612a8d577fff00000000000000000000000000000000000000000000000000000000000000612a3682846129dc565b51167fff000000000000000000000000000000000000000000000000000000000000007f6b617370613a0000000000000000000000000000000000000000000000000000831a60f81b16036129d557600101612a02565b5060065b828110612aa057505050600190565b7fff00000000000000000000000000000000000000000000000000000000000000612acb82846129dc565b51167f710000000000000000000000000000000000000000000000000000000000000081141590816130c3575b81613098575b8161306d575b81613042575b81613017575b81612fec575b81612fc1575b81612f96575b81612f6b575b81612f40575b81612f15575b81612eea575b81612ebf575b81612e94575b81612e69575b81612e3e575b81612e13575b81612de8575b81612dbd575b81612d92575b81612d67575b81612d3c575b81612d11575b81612ce6575b81612cbb575b81612c90575b81612c65575b81612c3a575b81612c0f575b81612be4575b81612bb9575b506129d557600101612a91565b7f6c00000000000000000000000000000000000000000000000000000000000000915014155f612bac565b7f37000000000000000000000000000000000000000000000000000000000000008114159150612ba6565b7f61000000000000000000000000000000000000000000000000000000000000008114159150612ba0565b7f75000000000000000000000000000000000000000000000000000000000000008114159150612b9a565b7f6d000000000000000000000000000000000000000000000000000000000000008114159150612b94565b7f36000000000000000000000000000000000000000000000000000000000000008114159150612b8e565b7f65000000000000000000000000000000000000000000000000000000000000008114159150612b88565b7f63000000000000000000000000000000000000000000000000000000000000008114159150612b82565b7f68000000000000000000000000000000000000000000000000000000000000008114159150612b7c565b7f6b000000000000000000000000000000000000000000000000000000000000008114159150612b76565b7f34000000000000000000000000000000000000000000000000000000000000008114159150612b70565b7f35000000000000000000000000000000000000000000000000000000000000008114159150612b6a565b7f6e000000000000000000000000000000000000000000000000000000000000008114159150612b64565b7f6a000000000000000000000000000000000000000000000000000000000000008114159150612b5e565b7f33000000000000000000000000000000000000000000000000000000000000008114159150612b58565b7f73000000000000000000000000000000000000000000000000000000000000008114159150612b52565b7f30000000000000000000000000000000000000000000000000000000000000008114159150612b4c565b7f77000000000000000000000000000000000000000000000000000000000000008114159150612b46565b7f64000000000000000000000000000000000000000000000000000000000000008114159150612b40565b7f76000000000000000000000000000000000000000000000000000000000000008114159150612b3a565b7f74000000000000000000000000000000000000000000000000000000000000008114159150612b34565b7f32000000000000000000000000000000000000000000000000000000000000008114159150612b2e565b7f66000000000000000000000000000000000000000000000000000000000000008114159150612b28565b7f67000000000000000000000000000000000000000000000000000000000000008114159150612b22565b7f38000000000000000000000000000000000000000000000000000000000000008114159150612b1c565b7f78000000000000000000000000000000000000000000000000000000000000008114159150612b16565b7f39000000000000000000000000000000000000000000000000000000000000008114159150612b10565b7f79000000000000000000000000000000000000000000000000000000000000008114159150612b0a565b7f72000000000000000000000000000000000000000000000000000000000000008114159150612b04565b7f7a000000000000000000000000000000000000000000000000000000000000008114159150612afe565b7f70000000000000000000000000000000000000000000000000000000000000008114159150612af8565b50505f90565b50604382116129fc565b63ffffffff43116131135763ffffffff431690565b7fdcf8b81e000000000000000000000000000000000000000000000000000000005f524360045260245ffd5b7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500454801561316a5790565b507f12f926e6d45ae9ace4f1fae2b542f7391bb6af8a321ee48dc60aa57507a56cf390565b9163ffffffff8316908115611bdd5763ffffffff60609361326d7f15b56df716ab7646812c3df54bf2dd9ae96e4d5979f8d7a26be6f5d21a2579099667ffffffffffffffff6131dc6130fe565b7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500180547fffffffffffffffff0000000000000000ffffffffffffffff000000000000000016608085901b73ffffffff00000000000000000000000000000000161760a087901b77ffffffff00000000000000000000000000000000000000001617929097169182179096559461280e565b7f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f5001805477ffffffffffffffff0000000000000000ffffffffffffffff1660e09290921b7fffffffff00000000000000000000000000000000000000000000000000000000169190911790556040805194855291166020840152820152a1565b7fffffffffffffffffffffffff00000000000000000000000000000000000000007f237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c0054167f237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c005573ffffffffffffffffffffffffffffffffffffffff807f9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c19930054921691827fffffffffffffffffffffffff00000000000000000000000000000000000000008216177f9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c19930055167f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e05f80a3565b67ffffffffffffffff81169081151580613522575b8061350f575b6134d5577f3228536d19420a76198be5737436df365bbb6f35f66f5dd6d6bc4618378f500080547fffffffffffffffff00000000000000000000000000000000ffffffffffffffff16604092831b6fffffffffffffffff00000000000000001617608085901b77ffffffffffffffff0000000000000000000000000000000016179055805191825267ffffffffffffffff90921660208201527f3e292cef190db155b017d56739865e8091e888280717f2659d844f7246aec69f9190a1565b67ffffffffffffffff83837f7bd9e339000000000000000000000000000000000000000000000000000000005f526004521660245260445ffd5b5067ffffffffffffffff83168211613416565b5067ffffffffffffffff83161515613410565b60ff7ff0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a005460401c161561356457565b7fd7e6bcf8000000000000000000000000000000000000000000000000000000005f5260045ffd5b906135c957508051156135a157805190602001fd5b7fd6bda275000000000000000000000000000000000000000000000000000000005f5260045ffd5b8151158061361c575b6135da575090565b73ffffffffffffffffffffffffffffffffffffffff907f9996b315000000000000000000000000000000000000000000000000000000005f521660045260245ffd5b50803b156135d256fe30fffea2646970667358221220385e765380fdacd9ce72c58310a1869dfb53f91eab42bfd6d80893bb88284e5064736f6c634300081e0033",
+  "evm_version": "cancun",
+  "external_libraries": [],
+  "file_path": "src/KasExitBridge.sol",
+  "implementations": [],
+  "is_blueprint": false,
+  "is_changed_bytecode": false,
+  "is_fully_verified": true,
+  "is_partially_verified": false,
+  "is_verified": true,
+  "is_verified_via_eth_bytecode_db": false,
+  "is_verified_via_sourcify": false,
+  "is_verified_via_verifier_alliance": false,
+  "language": "solidity",
+  "license_type": "none",
+  "name": "KasExitBridge",
+  "optimization_enabled": true,
+  "optimization_runs": 1000000,
+  "proxy_type": null,
+  "source_code": "// SPDX-License-Identifier: MIT\npragma solidity 0.8.30;\n\nimport {IFeePolicy} from \"./kasExitBridge/interfaces/IFeePolicy.sol\";\nimport {IMailbox} from \"./kasExitBridge/interfaces/IMailbox.sol\";\nimport {KasExitBridgeBurnProxy} from \"./kasExitBridge/KasExitBridgeBurnProxy.sol\";\nimport {KaspaAddressLib} from \"./kasExitBridge/libraries/KaspaAddressLib.sol\";\nimport {KasExitBridgeMessageLib} from \"./kasExitBridge/libraries/KasExitBridgeMessageLib.sol\";\nimport {KasExitBridgeStorage} from \"./kasExitBridge/libraries/KasExitBridgeStorage.sol\";\n\nimport {Ownable2StepUpgradeable} from \"@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol\";\nimport {ReentrancyGuardUpgradeable} from \"@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol\";\nimport {UUPSUpgradeable} from \"@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol\";\n\n/// @notice Igra Exit bridge that burns iKAS, records canonical exit requests, and dispatches\n/// Hyperlane messages for Kaspa-side unlocks.\n/// @dev Intended for deployment behind a UUPS proxy and administration through Ownable2Step.\n/// The owner controls throttle, fee, and endpoint configuration, while fee withdrawals are limited\n/// to the owner or an explicitly configured fee claimer. The contract trusts the immutable\n/// Hyperlane Mailbox passed to the implementation constructor and any configured fee policy to\n/// behave according to their interfaces. Request records are stored in a fixed-size ring buffer,\n/// and the Kaspa bridge endpoint falls back to a default constant until the owner overrides it.\ncontract KasExitBridge is Ownable2StepUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgradeable {\n    uint256 internal constant SOMPI_SCALE = 1e10;\n    uint32 internal constant KASPA_DOMAIN = 1_262_570_320;\n    bytes32 internal constant DEFAULT_KASPA_BRIDGE_ENDPOINT =\n        0x12f926e6d45ae9ace4f1fae2b542f7391bb6af8a321ee48dc60aa57507a56cf3;\n    uint256 private constant RING_BUFFER_SIZE = 8191;\n\n    IMailbox internal immutable MAILBOX;\n\n    event ExitRequested(uint32 requestId, bytes32 messageId, uint64 feeAmountSompi);\n    event BurnIKas(uint256 amount);\n    event ThrottleParamsUpdated(\n        uint32 throttleWindowBlocks, uint32 throttleMaxExitsPerWindow, uint64 throttleMaxUnlockAmountPerWindow\n    );\n    event ExitAmountPolicyUpdated(uint64 minExitAmountSompi, uint64 maxExitAmountSompi);\n    event FeePolicyUpdated(address feePolicyAddress);\n    event FeeClaimerUpdated(address feeClaimer);\n    event FeeClaimed(address to, uint256 amount);\n    event KaspaBridgeEndpointUpdated(bytes32 kaspaBridgeEndpoint);\n\n    error InvalidMailbox();\n    error InvalidKasPayoutAddress();\n    error InvalidExitAmount();\n    error ExitAmountBelowMinimum(uint64 unlockAmountSompi, uint64 minExitAmountSompi);\n    error ExitAmountAboveMaximum(uint64 unlockAmountSompi, uint64 maxExitAmountSompi);\n    error InvalidThrottleWindowBlocks();\n    error ThrottleExitCountExceeded(uint32 windowIndex, uint32 throttleMaxExitsPerWindow);\n    error ThrottleUnlockAmountExceeded(\n        uint32 windowIndex, uint64 attemptedUnlockAmountSompi, uint64 remainingUnlockAmountSompi\n    );\n    error InvalidMsgValue(uint256 expectedWei, uint256 actualWei);\n    error ExitRequestCounterExhausted();\n    error CurrentBlockNumberOverflow(uint256 blockNumber);\n    error ThrottleWindowEndOverflow(uint32 windowIndex, uint32 throttleWindowBlocks);\n    error UnauthorizedFeeWithdrawal(address caller);\n    error FeeBalanceExceeded(uint256 claimedAmount, uint256 availableAmount);\n    error RescueAmountExceedsBalance(uint256 requestedAmount, uint256 availableAmount);\n    error InsufficientExcessBalance(uint256 minimumRequiredBalance, uint256 remainingBalance);\n    error InvalidExitAmountPolicy(uint64 minExitAmountSompi, uint64 maxExitAmountSompi);\n    error NativeTransferFailed();\n\n    /// @custom:oz-upgrades-unsafe-allow constructor\n    constructor(address mailbox_) {\n        if (mailbox_ == address(0)) revert InvalidMailbox();\n        MAILBOX = IMailbox(mailbox_);\n        _disableInitializers();\n    }\n\n    /// @notice Initializes owner, throttle, and exit amount policy.\n    /// @param initialOwner Initial contract owner.\n    /// @param throttleWindowBlocks Number of blocks per throttle window.\n    /// @param throttleMaxExitsPerWindow Max exits allowed per window.\n    /// @param throttleMaxUnlockAmountPerWindow Max unlock amount per window in Sompi (0 = unbounded).\n    /// @param minExitAmountSompi Minimum exit amount in Sompi (0 = disabled).\n    /// @param maxExitAmountSompi Maximum exit amount in Sompi (0 = disabled).\n    function initialize(\n        address initialOwner,\n        uint32 throttleWindowBlocks,\n        uint32 throttleMaxExitsPerWindow,\n        uint64 throttleMaxUnlockAmountPerWindow,\n        uint64 minExitAmountSompi,\n        uint64 maxExitAmountSompi\n    ) external initializer {\n        __Ownable_init(initialOwner);\n        __Ownable2Step_init();\n        __ReentrancyGuard_init();\n        __UUPSUpgradeable_init();\n\n        _setThrottleParams(\n            KasExitBridgeStorage.layout(),\n            throttleWindowBlocks,\n            throttleMaxExitsPerWindow,\n            throttleMaxUnlockAmountPerWindow,\n            true\n        );\n        _setExitAmountPolicy(KasExitBridgeStorage.layout(), minExitAmountSompi, maxExitAmountSompi, true);\n    }\n\n    /// @notice Returns current bridge configuration.\n    /// @return kaspaBridgeEndpoint Effective Kaspa endpoint (default if not overridden).\n    /// @return feePolicy Fee policy contract address.\n    /// @return feeClaimer Authorized fee claimer address.\n    /// @return throttleWindowBlocks Blocks per throttle window.\n    /// @return throttleMaxExitsPerWindow Max exits per window.\n    /// @return throttleMaxUnlockAmountPerWindowSompi Max unlock amount per window in Sompi.\n    /// @return minExitSompi Minimum exit amount in Sompi.\n    /// @return maxExitSompi Maximum exit amount in Sompi.\n    function getConfig()\n        external\n        view\n        returns (\n            bytes32 kaspaBridgeEndpoint,\n            address feePolicy,\n            address feeClaimer,\n            uint32 throttleWindowBlocks,\n            uint32 throttleMaxExitsPerWindow,\n            uint64 throttleMaxUnlockAmountPerWindowSompi,\n            uint64 minExitSompi,\n            uint64 maxExitSompi\n        )\n    {\n        KasExitBridgeStorage.Layout storage l = KasExitBridgeStorage.layout();\n        kaspaBridgeEndpoint = _effectiveKaspaBridgeEndpoint(l);\n        feePolicy = l.feePolicyAddress;\n        feeClaimer = l.feeClaimer;\n        throttleWindowBlocks = l.throttleWindowBlocks;\n        throttleMaxExitsPerWindow = l.throttleMaxExitsPerWindow;\n        throttleMaxUnlockAmountPerWindowSompi = l.throttleMaxUnlockAmountPerWindow;\n        minExitSompi = l.minExitAmountSompi;\n        maxExitSompi = l.maxExitAmountSompi;\n    }\n\n    /// @notice Returns the next exit request id to be assigned.\n    function nextExitRequestId() external view returns (uint32) {\n        return KasExitBridgeStorage.layout().exitRequestCounter;\n    }\n\n    /// @notice Quotes fee for an exit request.\n    /// @param originBurner Request sender address.\n    /// @param unlockAmountSompi Requested unlock amount in Sompi.\n    /// @return feeAmountSompi Fee amount in Sompi.\n    function quoteFee(address originBurner, uint64 unlockAmountSompi) external view returns (uint64 feeAmountSompi) {\n        return _quoteFee(KasExitBridgeStorage.layout().feePolicyAddress, originBurner, unlockAmountSompi);\n    }\n\n    /// @notice Returns a recorded exit request if still present in ring buffer.\n    /// @param requestId Exit request id.\n    /// @return exists True if record exists and was not overwritten.\n    function getExitRequest(uint32 requestId)\n        external\n        view\n        returns (\n            bool exists,\n            uint32 recordedAtBlock,\n            uint64 feeAmountSompi,\n            uint64 unlockAmountSompi,\n            bytes32 messageId\n        )\n    {\n        KasExitBridgeStorage.ExitRequestRecord storage record =\n            KasExitBridgeStorage.layout().records[requestId % RING_BUFFER_SIZE];\n        if (record.messageId == bytes32(0) || record.requestId != requestId) {\n            return (false, 0, 0, 0, bytes32(0));\n        }\n\n        return (true, record.recordedAtBlock, record.feeAmountSompi, record.unlockAmountSompi, record.messageId);\n    }\n\n    /// @notice Returns current throttle window status and remaining capacity.\n    function throttleStatus()\n        external\n        view\n        returns (uint32 windowIndex, uint32 windowEndsAtBlock, uint32 remainingExits, uint64 remainingUnlockAmountSompi)\n    {\n        KasExitBridgeStorage.Layout storage l = KasExitBridgeStorage.layout();\n        uint32 currentBlock = _currentBlockNumber();\n        uint32 throttleWindowBlocks = l.throttleWindowBlocks;\n        windowIndex = currentBlock / throttleWindowBlocks;\n\n        uint256 windowEndsAtBlock256 = (uint256(windowIndex) + 1) * uint256(throttleWindowBlocks) - 1;\n        if (windowEndsAtBlock256 > type(uint32).max) {\n            revert ThrottleWindowEndOverflow(windowIndex, throttleWindowBlocks);\n        }\n        windowEndsAtBlock = uint32(windowEndsAtBlock256);\n\n        uint32 usedExits = windowIndex == l.currentWindowIndex ? l.exitsUsedInCurrentWindow : 0;\n        uint64 usedUnlockAmountSompi = windowIndex == l.currentWindowIndex ? l.unlockAmountUsedInCurrentWindow : 0;\n        uint32 throttleMaxExitsPerWindow = l.throttleMaxExitsPerWindow;\n\n        if (throttleMaxExitsPerWindow == 0 || usedExits >= throttleMaxExitsPerWindow) {\n            remainingExits = 0;\n        } else {\n            remainingExits = throttleMaxExitsPerWindow - usedExits;\n        }\n\n        uint64 throttleMaxUnlockAmountPerWindow = l.throttleMaxUnlockAmountPerWindow;\n        if (throttleMaxUnlockAmountPerWindow == 0) {\n            remainingUnlockAmountSompi = type(uint64).max;\n        } else if (usedUnlockAmountSompi >= throttleMaxUnlockAmountPerWindow) {\n            remainingUnlockAmountSompi = 0;\n        } else {\n            remainingUnlockAmountSompi = throttleMaxUnlockAmountPerWindow - usedUnlockAmountSompi;\n        }\n    }\n\n    /// @notice Returns total burned iKAS in wei units.\n    function totalBurned() external view returns (uint256) {\n        return uint256(KasExitBridgeStorage.layout().totalBurnedSompi) * SOMPI_SCALE;\n    }\n\n    /// @notice Returns total charged fees in wei units.\n    function totalFeeCharged() external view returns (uint256) {\n        return uint256(KasExitBridgeStorage.layout().chargedFeeSompi) * SOMPI_SCALE;\n    }\n\n    /// @notice Requests an exit by burning iKAS and dispatching a message.\n    /// @dev Burned/charged Sompi totals use `uint64` by design as a protocol-lifetime bound;\n    /// this cap is not expected to be reachable due to constrained supply.\n    /// @param kasPayoutAddress Kaspa payout address.\n    /// @param unlockAmountSompi Unlock amount in Sompi.\n    /// @return requestId Assigned request id.\n    /// @return messageId Hyperlane message id.\n    function requestExit(string calldata kasPayoutAddress, uint64 unlockAmountSompi)\n        external\n        payable\n        nonReentrant\n        returns (uint32 requestId, bytes32 messageId)\n    {\n        if (!KaspaAddressLib.verifyKaspaAddress(kasPayoutAddress)) revert InvalidKasPayoutAddress();\n        if (unlockAmountSompi == 0) revert InvalidExitAmount();\n\n        KasExitBridgeStorage.Layout storage l = KasExitBridgeStorage.layout();\n        uint32 currentBlock = _currentBlockNumber();\n        _syncThrottleWindow(l, currentBlock);\n\n        uint64 minExitAmountSompi = l.minExitAmountSompi;\n        uint64 maxExitAmountSompi = l.maxExitAmountSompi;\n        if (minExitAmountSompi != 0 && unlockAmountSompi < minExitAmountSompi) {\n            revert ExitAmountBelowMinimum(unlockAmountSompi, minExitAmountSompi);\n        }\n        if (maxExitAmountSompi != 0 && unlockAmountSompi > maxExitAmountSompi) {\n            revert ExitAmountAboveMaximum(unlockAmountSompi, maxExitAmountSompi);\n        }\n\n        uint32 throttleMaxExitsPerWindow = l.throttleMaxExitsPerWindow;\n        if (l.exitsUsedInCurrentWindow >= throttleMaxExitsPerWindow) {\n            revert ThrottleExitCountExceeded(l.currentWindowIndex, throttleMaxExitsPerWindow);\n        }\n\n        uint64 throttleMaxUnlockAmountPerWindow = l.throttleMaxUnlockAmountPerWindow;\n        if (throttleMaxUnlockAmountPerWindow != 0) {\n            uint64 usedUnlockAmountSompi = l.unlockAmountUsedInCurrentWindow;\n            uint64 remainingUnlockAmountSompi = throttleMaxUnlockAmountPerWindow - usedUnlockAmountSompi;\n            if (unlockAmountSompi > remainingUnlockAmountSompi) {\n                revert ThrottleUnlockAmountExceeded(l.currentWindowIndex, unlockAmountSompi, remainingUnlockAmountSompi);\n            }\n        }\n\n        uint64 feeAmountSompi = _quoteFee(l.feePolicyAddress, msg.sender, unlockAmountSompi);\n        uint256 expectedMsgValueWei = (uint256(unlockAmountSompi) + uint256(feeAmountSompi)) * SOMPI_SCALE;\n        if (msg.value != expectedMsgValueWei) {\n            revert InvalidMsgValue(expectedMsgValueWei, msg.value);\n        }\n\n        requestId = l.exitRequestCounter;\n        if (requestId == type(uint32).max) revert ExitRequestCounterExhausted();\n\n        uint256 burnAmountWei = uint256(unlockAmountSompi) * SOMPI_SCALE;\n        new KasExitBridgeBurnProxy{value: burnAmountWei}();\n        // Sompi totals are bounded by practical supply constraints and cannot exceed uint64 max.\n        l.totalBurnedSompi += unlockAmountSompi;\n        emit BurnIKas(burnAmountWei);\n\n        bytes memory body =\n            KasExitBridgeMessageLib.encodeBodyV1(requestId, unlockAmountSompi, msg.sender, kasPayoutAddress);\n        messageId = MAILBOX.dispatch(KASPA_DOMAIN, _effectiveKaspaBridgeEndpoint(l), body);\n\n        KasExitBridgeStorage.ExitRequestRecord storage record = l.records[requestId % RING_BUFFER_SIZE];\n        record.requestId = requestId;\n        record.recordedAtBlock = currentBlock;\n        record.feeAmountSompi = feeAmountSompi;\n        record.unlockAmountSompi = unlockAmountSompi;\n        record.messageId = messageId;\n\n        unchecked {\n            l.exitRequestCounter = requestId + 1;\n            l.exitsUsedInCurrentWindow += 1;\n        }\n\n        if (throttleMaxUnlockAmountPerWindow != 0) {\n            l.unlockAmountUsedInCurrentWindow += unlockAmountSompi;\n        }\n        // Fee amounts are accounted in Sompi and cannot exceed uint64 max.\n        l.chargedFeeSompi += feeAmountSompi;\n\n        emit ExitRequested(requestId, messageId, feeAmountSompi);\n    }\n\n    /// @notice Updates throttle parameters.\n    function setThrottleParams(\n        uint32 throttleWindowBlocks,\n        uint32 throttleMaxExitsPerWindow,\n        uint64 throttleMaxUnlockAmountPerWindow\n    ) external onlyOwner {\n        _setThrottleParams(\n            KasExitBridgeStorage.layout(),\n            throttleWindowBlocks,\n            throttleMaxExitsPerWindow,\n            throttleMaxUnlockAmountPerWindow,\n            true\n        );\n    }\n\n    /// @notice Updates min/max exit amount policy.\n    function setExitAmountPolicy(uint64 minExitAmountSompi, uint64 maxExitAmountSompi) external onlyOwner {\n        _setExitAmountPolicy(KasExitBridgeStorage.layout(), minExitAmountSompi, maxExitAmountSompi, true);\n    }\n\n    /// @notice Sets fee policy contract.\n    function setFeePolicy(address feePolicyAddress) external onlyOwner {\n        KasExitBridgeStorage.layout().feePolicyAddress = feePolicyAddress;\n        emit FeePolicyUpdated(feePolicyAddress);\n    }\n\n    /// @notice Sets authorized fee claimer.\n    function setFeeClaimer(address feeClaimer) external onlyOwner {\n        KasExitBridgeStorage.layout().feeClaimer = feeClaimer;\n        emit FeeClaimerUpdated(feeClaimer);\n    }\n\n    /// @notice Sets Kaspa bridge endpoint (zero resets to default endpoint).\n    function setKaspaBridgeEndpoint(bytes32 kaspaBridgeEndpoint) external onlyOwner {\n        KasExitBridgeStorage.layout().kaspaBridgeEndpoint = kaspaBridgeEndpoint;\n        emit KaspaBridgeEndpointUpdated(kaspaBridgeEndpoint);\n    }\n\n    /// @notice Claims charged fees.\n    /// @dev If `amountSompi` is zero, claims the maximum currently available whole Sompi.\n    /// @param to Recipient address.\n    /// @param amountSompi Amount to claim in Sompi (0 = max available).\n    function claimFees(address to, uint64 amountSompi) external nonReentrant {\n        KasExitBridgeStorage.Layout storage l = KasExitBridgeStorage.layout();\n        address caller = msg.sender;\n        if (caller != owner() && (caller != l.feeClaimer || l.feeClaimer == address(0))) {\n            revert UnauthorizedFeeWithdrawal(caller);\n        }\n\n        uint256 availableFeesWei = _availableFeesWei(l);\n        uint64 availableFeesSompi = uint64(availableFeesWei / SOMPI_SCALE);\n        uint64 claimAmountSompi = amountSompi == 0 ? availableFeesSompi : amountSompi;\n        uint256 claimAmountWei = uint256(claimAmountSompi) * SOMPI_SCALE;\n        if (claimAmountWei > availableFeesWei) {\n            revert FeeBalanceExceeded(claimAmountWei, availableFeesWei);\n        }\n\n        l.claimedFeeSompi += claimAmountSompi;\n\n        emit FeeClaimed(to, claimAmountWei);\n\n        (bool success,) = to.call{value: claimAmountWei}(\"\");\n        if (!success) revert NativeTransferFailed();\n    }\n\n    /// @notice Rescues excess iKAS sent directly to this contract.\n    /// @dev Enforces a minimum remaining balance based on fee accounting.\n    /// @param to Recipient address.\n    /// @param amountWei Amount to rescue in wei.\n    function rescueExcessIKas(address to, uint256 amountWei) external onlyOwner nonReentrant {\n        KasExitBridgeStorage.Layout storage l = KasExitBridgeStorage.layout();\n        uint256 balanceWei = address(this).balance;\n        if (amountWei > balanceWei) {\n            revert RescueAmountExceedsBalance(amountWei, balanceWei);\n        }\n\n        uint256 minimumRequiredBalanceWei = 0;\n        if (l.chargedFeeSompi > l.claimedFeeSompi) {\n            minimumRequiredBalanceWei = uint256(l.chargedFeeSompi - l.claimedFeeSompi) * SOMPI_SCALE;\n        }\n\n        uint256 remainingBalanceWei = balanceWei - amountWei;\n        if (remainingBalanceWei < minimumRequiredBalanceWei) {\n            revert InsufficientExcessBalance(minimumRequiredBalanceWei, remainingBalanceWei);\n        }\n\n        (bool success,) = to.call{value: amountWei}(\"\");\n        if (!success) revert NativeTransferFailed();\n    }\n\n    function _availableFeesWei(KasExitBridgeStorage.Layout storage l) private view returns (uint256 availableFeesWei) {\n        uint256 chargedFeeWei = uint256(l.chargedFeeSompi) * SOMPI_SCALE;\n        uint256 claimedFeeWei = uint256(l.claimedFeeSompi) * SOMPI_SCALE;\n        uint256 unclaimedFeeWei = claimedFeeWei >= chargedFeeWei ? 0 : chargedFeeWei - claimedFeeWei;\n        uint256 balanceWei = address(this).balance;\n        return balanceWei < unclaimedFeeWei ? balanceWei : unclaimedFeeWei;\n    }\n\n    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}\n\n    function _setThrottleParams(\n        KasExitBridgeStorage.Layout storage l,\n        uint32 throttleWindowBlocks,\n        uint32 throttleMaxExitsPerWindow,\n        uint64 throttleMaxUnlockAmountPerWindow,\n        bool shouldEmit\n    ) private {\n        if (throttleWindowBlocks == 0) revert InvalidThrottleWindowBlocks();\n\n        uint32 currentBlock = _currentBlockNumber();\n        l.throttleWindowBlocks = throttleWindowBlocks;\n        l.throttleMaxExitsPerWindow = throttleMaxExitsPerWindow;\n        l.throttleMaxUnlockAmountPerWindow = throttleMaxUnlockAmountPerWindow;\n        l.currentWindowIndex = currentBlock / throttleWindowBlocks;\n        l.exitsUsedInCurrentWindow = 0;\n        l.unlockAmountUsedInCurrentWindow = 0;\n\n        if (shouldEmit) {\n            emit ThrottleParamsUpdated(\n                throttleWindowBlocks, throttleMaxExitsPerWindow, throttleMaxUnlockAmountPerWindow\n            );\n        }\n    }\n\n    function _setExitAmountPolicy(\n        KasExitBridgeStorage.Layout storage l,\n        uint64 minExitAmountSompi,\n        uint64 maxExitAmountSompi,\n        bool shouldEmit\n    ) private {\n        if (minExitAmountSompi != 0 && maxExitAmountSompi != 0 && minExitAmountSompi > maxExitAmountSompi) {\n            revert InvalidExitAmountPolicy(minExitAmountSompi, maxExitAmountSompi);\n        }\n\n        l.minExitAmountSompi = minExitAmountSompi;\n        l.maxExitAmountSompi = maxExitAmountSompi;\n\n        if (shouldEmit) {\n            emit ExitAmountPolicyUpdated(minExitAmountSompi, maxExitAmountSompi);\n        }\n    }\n\n    function _syncThrottleWindow(KasExitBridgeStorage.Layout storage l, uint32 currentBlock) private {\n        uint32 throttleWindowBlocks = l.throttleWindowBlocks;\n        if (throttleWindowBlocks == 0) revert InvalidThrottleWindowBlocks();\n\n        uint32 liveWindowIndex = currentBlock / throttleWindowBlocks;\n        if (liveWindowIndex != l.currentWindowIndex) {\n            l.currentWindowIndex = liveWindowIndex;\n            l.exitsUsedInCurrentWindow = 0;\n            l.unlockAmountUsedInCurrentWindow = 0;\n        }\n    }\n\n    function _effectiveKaspaBridgeEndpoint(KasExitBridgeStorage.Layout storage l) private view returns (bytes32) {\n        bytes32 kaspaBridgeEndpoint = l.kaspaBridgeEndpoint;\n        if (kaspaBridgeEndpoint == bytes32(0)) {\n            return DEFAULT_KASPA_BRIDGE_ENDPOINT;\n        }\n\n        return kaspaBridgeEndpoint;\n    }\n\n    function _quoteFee(address feePolicyAddress, address originBurner, uint64 unlockAmountSompi)\n        private\n        view\n        returns (uint64 feeAmountSompi)\n    {\n        if (feePolicyAddress == address(0)) {\n            return 0;\n        }\n\n        return IFeePolicy(feePolicyAddress).computeFee(originBurner, unlockAmountSompi);\n    }\n\n    function _currentBlockNumber() private view returns (uint32 currentBlock) {\n        uint256 blockNumber = block.number;\n        if (blockNumber > type(uint32).max) revert CurrentBlockNumberOverflow(blockNumber);\n        return uint32(blockNumber);\n    }\n}\n",
+  "sourcify_repo_url": null,
+  "verified_at": "2026-04-18T10:07:22.965820Z",
+  "verified_twin_address_hash": null
+}

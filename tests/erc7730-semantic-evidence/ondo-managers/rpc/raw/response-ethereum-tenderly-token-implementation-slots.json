@@ -1,0 +1,17 @@
+[
+  {
+    "id": "ousg-token-implementation-slot",
+    "jsonrpc": "2.0",
+    "result": "0x0000000000000000000000001ceb44b6e515abf009e0ccb6ddafd723886cf3ff"
+  },
+  {
+    "id": "rusdy-token-implementation-slot",
+    "jsonrpc": "2.0",
+    "result": "0x00000000000000000000000058910371d0b52dcf9d2e0a1af4e0078c58436908"
+  },
+  {
+    "id": "usdy-token-implementation-slot",
+    "jsonrpc": "2.0",
+    "result": "0x000000000000000000000000ea0f7eebdc2ae40edfe33bf03d332f8a7f617528"
+  }
+]

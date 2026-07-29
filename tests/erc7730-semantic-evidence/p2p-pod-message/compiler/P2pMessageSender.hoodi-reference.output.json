@@ -1,0 +1,59 @@
+{
+  "contracts": {
+    "src/P2pMessageSender.sol": {
+      "P2pMessageSender": {
+        "abi": [
+          {
+            "anonymous": false,
+            "inputs": [
+              {
+                "indexed": true,
+                "internalType": "address",
+                "name": "sender",
+                "type": "address"
+              },
+              {
+                "indexed": true,
+                "internalType": "string",
+                "name": "hash",
+                "type": "string"
+              },
+              {
+                "indexed": false,
+                "internalType": "string",
+                "name": "text",
+                "type": "string"
+              }
+            ],
+            "name": "Message",
+            "type": "event"
+          },
+          {
+            "inputs": [
+              {
+                "internalType": "string",
+                "name": "text",
+                "type": "string"
+              }
+            ],
+            "name": "send",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+          }
+        ],
+        "evm": {
+          "deployedBytecode": {
+            "object": "60808060405260043610156011575f80fd5b5f3560e01c6366792ba1146023575f80fd5b3460cc57602036600319011260cc576004359067ffffffffffffffff9081831160cc573660238401121560cc57826004013591821160cc576024830192602483369201011160cc578082847f5c0bf6ba470f83fe17f0b8fd9fdf4799eaeb1b63bbf39e4868fc7e0798e7abeb9337808381015f81520390209282604051916020835281602084015260408301375f604084830101526040813394601f80199101168101030190a3005b5f80fdfea26469706673582212206fb79951dde301d5b30260167069e1c990040928f8bc4a4bd1a7d9f71cf4030b64736f6c63430008180033"
+          }
+        },
+        "metadata": "{\"compiler\":{\"version\":\"0.8.24+commit.e11b9ed9\"},\"language\":\"Solidity\",\"output\":{\"abi\":[{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"sender\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"string\",\"name\":\"hash\",\"type\":\"string\"},{\"indexed\":false,\"internalType\":\"string\",\"name\":\"text\",\"type\":\"string\"}],\"name\":\"Message\",\"type\":\"event\"},{\"inputs\":[{\"internalType\":\"string\",\"name\":\"text\",\"type\":\"string\"}],\"name\":\"send\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"}],\"devdoc\":{\"kind\":\"dev\",\"methods\":{},\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"version\":1}},\"settings\":{\"compilationTarget\":{\"src/P2pMessageSender.sol\":\"P2pMessageSender\"},\"evmVersion\":\"shanghai\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\"},\"optimizer\":{\"enabled\":true,\"runs\":200},\"remappings\":[],\"viaIR\":true},\"sources\":{\"src/P2pMessageSender.sol\":{\"keccak256\":\"0xcb4ded94c0cc257e1892b38452386e74b22231814985105b5abd0783d5556155\",\"license\":\"MIT\",\"urls\":[\"bzz-raw://3bf384f0c83a7becea5a1dcef9f5c755e6e97d545c95b262b4ee1d032ed49bc5\",\"dweb:/ipfs/QmdeoZU98UYgD1G7W5UxGqJLvg5LKAbAMz3daPXS89o6PQ\"]}},\"version\":1}"
+      }
+    }
+  },
+  "sources": {
+    "src/P2pMessageSender.sol": {
+      "id": 0
+    }
+  }
+}

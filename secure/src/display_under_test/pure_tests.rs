@@ -16,12 +16,14 @@
 use core::cmp::min;
 
 use super::primitives::{
-    chain_name, format_u64, hex_nibble, native_ticker, try_write_amount_single_row,
-    write_addr_full, write_addr_full_or_name, write_amount_two_rows, write_calldata_hash_rows,
-    write_chain, write_data_len_row, write_erc20_header, write_eth_two_rows, write_fee_budget_row,
-    write_gas, write_gwei, write_line, write_native_amount_two_rows, write_native_currency_row,
-    write_native_fee_budget_row, write_nonce_row, write_selector_row, write_tip_row,
-    write_token_amount_two_rows, write_token_name, AmountFit,
+    build_legacy_fee_pages, chain_name, format_u64, hex_nibble,
+    legacy_fee_rows_are_exactly_renderable, native_ticker, token_amount_is_exactly_renderable,
+    try_write_amount_single_row, write_addr_full, write_addr_full_or_name, write_amount_two_rows,
+    write_calldata_hash_rows, write_chain, write_data_len_row, write_erc20_header,
+    write_eth_two_rows, write_fee_budget_row, write_gas, write_gwei, write_line,
+    write_native_amount_two_rows, write_native_currency_row, write_native_fee_budget_row,
+    write_nonce_row, write_selector_row, write_tip_row, write_token_amount_two_rows,
+    write_token_name, AmountFit,
 };
 use super::{Pages, MAX_PAGES};
 
@@ -266,7 +268,7 @@ fn positive_write_chain_losslessly_splits_large_u64_ids() {
 #[test]
 fn positive_write_gas_renders_parens() {
     let mut row = [b' '; DISPLAY_COLS];
-    write_gas(&mut row, 21_000);
+    assert!(write_gas(&mut row, 21_000));
     let s = row_str(&row);
     assert_eq!(s, "(gas: 21000)");
 }
@@ -487,6 +489,53 @@ fn positive_write_token_amount_two_rows_full() {
     // Fixed-width fractional digits → "1.000000 USDC" on row 1.
     let s = row_str(&r1);
     assert_eq!(s, "1.000000 USDC");
+}
+
+#[test]
+fn legacy_token_adjacent_low_digits_render_exactly_without_collision() {
+    let meta = Erc20Metadata {
+        chain_id: 1,
+        contract: [0xBB; 20],
+        decimals: 8,
+        name: b"Wrapped Bitcoin",
+        symbol: b"WBTC",
+    };
+
+    for (raw, expected) in [
+        (100_000_001, "1.00000001 WBTC"),
+        (100_000_002, "1.00000002 WBTC"),
+    ] {
+        let amount = u256_from_u64(raw);
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        assert!(token_amount_is_exactly_renderable(&amount, &meta));
+        assert_eq!(
+            write_token_amount_two_rows(&mut r1, &mut r2, &amount, &meta),
+            AmountFit::Full
+        );
+        assert_eq!(row_str(&r1), expected);
+        assert_eq!(row_str(&r2), "");
+    }
+}
+
+#[test]
+fn legacy_token_base_unit_fallback_never_truncates_symbol() {
+    let meta = Erc20Metadata {
+        chain_id: 1,
+        contract: [0xBC; 20],
+        decimals: 18,
+        name: b"Long symbol token",
+        symbol: b"ABCDEFGHIJK",
+    };
+    let amount = u256_from_u64(1);
+    let mut r1 = [b' '; DISPLAY_COLS];
+    let mut r2 = [b' '; DISPLAY_COLS];
+
+    assert!(!token_amount_is_exactly_renderable(&amount, &meta));
+    assert_eq!(
+        write_token_amount_two_rows(&mut r1, &mut r2, &amount, &meta),
+        AmountFit::Overflow
+    );
 }
 
 // ===========================================================================
@@ -1071,13 +1120,37 @@ fn negative_write_gas_overflow_paints_marker_not_wrong_digits() {
     let mut row = [b' '; DISPLAY_COLS];
     // (gas: ) = 6 + ")" = 7. We have 16-7 = 9 cols for the number,
     // so 10^9-ish triggers the overflow marker.
-    write_gas(&mut row, u64::MAX); // 20 digits, can't fit
+    assert!(!write_gas(&mut row, u64::MAX)); // 20 digits, can't fit
     let s = row_str(&row);
     assert!(
         s.contains("!OVF"),
         "u64::MAX gas must surface !OVF, got {:?}",
         s
     );
+}
+
+#[test]
+fn legacy_fee_gate_refuses_a_lossy_gas_marker_even_when_fees_are_zero() {
+    let zero = u256_from_u64(0);
+    let mut row = [b' '; DISPLAY_COLS];
+
+    assert!(write_gas(&mut row, 999_999_999));
+    assert_eq!(row_str(&row), "(gas: 999999999)");
+    assert!(legacy_fee_rows_are_exactly_renderable(
+        &zero,
+        &zero,
+        999_999_999,
+        1,
+    ));
+
+    assert!(!write_gas(&mut row, 1_000_000_000));
+    assert_eq!(row_str(&row), "(gas: !OVF)");
+    assert!(!legacy_fee_rows_are_exactly_renderable(
+        &zero,
+        &zero,
+        1_000_000_000,
+        1,
+    ));
 }
 
 #[test]
@@ -1121,6 +1194,15 @@ fn negative_write_gwei_overflow_falls_to_explicit_marker() {
         "overflow must paint the explicit '!OVERFLOW' marker, got {:?}",
         s
     );
+}
+
+#[test]
+fn legacy_gwei_adjacent_wei_render_exactly_without_collision() {
+    for (raw, expected) in [(1, "0.000000001 gwei"), (2, "0.000000002 gwei")] {
+        let mut row = [b' '; DISPLAY_COLS];
+        assert!(write_gwei(&mut row, &u256_from_u64(raw)));
+        assert_eq!(row_str(&row), expected);
+    }
 }
 
 // --- Anti-spoof: full 40-hex address rendering -----------------------------
@@ -2111,19 +2193,29 @@ fn negative_no_non_ascii_anywhere_in_renderer_outputs() {
 fn positive_write_tip_and_fee_budget_render() {
     let mut tip_row = [b' '; DISPLAY_COLS];
     let tip = u256_from_u64(1_500_000_000); // 1.5 gwei
-    write_tip_row(&mut tip_row, &tip);
+    assert!(write_tip_row(&mut tip_row, &tip));
     let s = row_str(&tip_row);
-    assert!(s.starts_with("Tip:"), "expected Tip: prefix, got {:?}", s);
+    assert_eq!(s, "1.5 gwei");
     assert!(s.contains("gwei"), "expected 'gwei' unit, got {:?}", s);
 
     let mut fee_row = [b' '; DISPLAY_COLS];
-    write_fee_budget_row(&mut fee_row, &u256_from_u64(30_000_000_000), 21_000);
+    assert!(write_fee_budget_row(
+        &mut fee_row,
+        &u256_from_u64(30_000_000_000),
+        21_000
+    ));
     let s = row_str(&fee_row);
-    assert!(s.starts_with("Max:"), "expected Max: prefix, got {:?}", s);
+    assert_eq!(s, "0.00063 ETH");
     assert!(s.contains("ETH"), "expected ETH unit, got {:?}", s);
 
-    write_native_fee_budget_row(&mut fee_row, &u256_from_u64(30_000_000_000), 21_000, 56);
+    assert!(write_native_fee_budget_row(
+        &mut fee_row,
+        &u256_from_u64(30_000_000_000),
+        21_000,
+        56
+    ));
     let s = row_str(&fee_row);
+    assert_eq!(s, "0.00063 BNB");
     assert!(s.contains("BNB"), "expected BNB unit, got {s:?}");
     assert!(
         !s.contains("ETH"),
@@ -2132,24 +2224,98 @@ fn positive_write_tip_and_fee_budget_render() {
 }
 
 #[test]
-fn negative_write_fee_budget_saturates_on_multiplication_overflow() {
-    // saturating_mul_u64 returns U256::MAX on overflow rather than
-    // wrapping. The render must surface "Max: " with a non-empty value
-    // (clamped, not zero) — a wrong-by-modulus rendering would mislead
-    // the user about fee exposure.
+fn legacy_tip_uses_full_row_for_common_exact_values() {
+    for (raw, expected) in [
+        (123_456_000_000, "123.456 gwei"),
+        (12_345_678, "0.012345678 gwei"),
+    ] {
+        let mut row = [b' '; DISPLAY_COLS];
+        assert!(write_tip_row(&mut row, &u256_from_u64(raw)));
+        assert_eq!(row_str(&row), expected);
+    }
+}
+
+#[test]
+fn legacy_fee_budget_exact_fit_boundary_refuses_rounding() {
+    let one_wei = u256_from_u64(1);
+    let exact_fee = u256_from_u64(1_000);
+    let too_wide_fee = u256_from_u64(1_001);
+    let exact_gas = 999_999_999;
+    let mut row = [b' '; DISPLAY_COLS];
+
+    assert!(write_fee_budget_row(&mut row, &exact_fee, exact_gas));
+    assert_eq!(row_str(&row), "999999999000 wei");
+    assert!(legacy_fee_rows_are_exactly_renderable(
+        &exact_fee,
+        &one_wei,
+        exact_gas,
+        1,
+    ));
+
+    assert!(!write_fee_budget_row(
+        &mut row,
+        &too_wide_fee,
+        exact_gas
+    ));
+    assert_eq!(row_str(&row), "!OVF");
+    assert!(!legacy_fee_rows_are_exactly_renderable(
+        &too_wide_fee,
+        &one_wei,
+        exact_gas,
+        1,
+    ));
+}
+
+#[test]
+fn legacy_fee_budget_common_low_fee_values_remain_available() {
+    let one_gwei = u256_from_u64(1_000_000_000);
+    let mut row = [b' '; DISPLAY_COLS];
+
+    assert!(write_fee_budget_row(&mut row, &one_gwei, 21_000));
+    assert_eq!(row_str(&row), "0.000021 ETH");
+    assert!(legacy_fee_rows_are_exactly_renderable(
+        &one_gwei,
+        &u256_from_u64(0),
+        21_000,
+        1,
+    ));
+
+    assert!(write_native_fee_budget_row(&mut row, &one_gwei, 21_000, 56,));
+    assert_eq!(row_str(&row), "0.000021 BNB");
+}
+
+#[test]
+fn legacy_fee_budget_unknown_chain_refuses_scale_but_accepts_raw_envelope() {
+    let one_gwei = u256_from_u64(1_000_000_000);
+    let mut row = [b' '; DISPLAY_COLS];
+
+    assert!(!write_native_fee_budget_row(
+        &mut row, &one_gwei, 21_000, 4_242_424,
+    ));
+    assert_eq!(row_str(&row), "!NO SCALE");
+    assert!(legacy_fee_rows_are_exactly_renderable(
+        &one_gwei,
+        &u256_from_u64(0),
+        21_000,
+        4_242_424,
+    ));
+    let rendered = build_legacy_fee_pages(&one_gwei, &u256_from_u64(0), 21_000, 4_242_424);
+    assert!(rendered.exact);
+    assert_eq!(row_str(&rendered.pages[0][0]), "Base: max / tip");
+    assert_eq!(row_str(&rendered.pages[0][1]), "1000000000");
+    assert_eq!(row_str(&rendered.pages[1][0]), "Worst-case/base:");
+    assert_eq!(row_str(&rendered.pages[1][1]), "21000000000000");
+}
+
+#[test]
+fn negative_write_fee_budget_refuses_on_multiplication_overflow() {
+    // saturating_mul_u64 reports overflow rather than wrapping. The render
+    // must refuse and paint an exact marker — a wrong-by-modulus value would
+    // mislead the user about fee exposure.
     let mut row = [b' '; DISPLAY_COLS];
     let pathological = U256([0xFFu8; 32]);
-    write_fee_budget_row(&mut row, &pathological, u64::MAX);
-    let s = row_str(&row);
-    assert!(
-        s.starts_with("Max:"),
-        "fee budget row must still carry the 'Max:' prefix, got {:?}",
-        s
-    );
-    // Either the marker or a clamped-MAX render is acceptable; what's
-    // forbidden is a quiet "Max: 0 ETH" (which would be the wrap-around
-    // bug we're guarding against).
-    assert_ne!(s, "Max: 0 ETH");
+    assert!(!write_fee_budget_row(&mut row, &pathological, u64::MAX));
+    assert_eq!(row_str(&row), "!OVF");
 }
 
 #[test]

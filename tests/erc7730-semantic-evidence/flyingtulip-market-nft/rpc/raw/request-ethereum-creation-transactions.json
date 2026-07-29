@@ -1,0 +1,10 @@
+[
+  {
+    "id": "put-old",
+    "jsonrpc": "2.0",
+    "method": "eth_getTransactionByHash",
+    "params": [
+      "0x02503d253171f72e0840151fafe3665cb1866aeba0dbbd51408a69568ff17257"
+    ]
+  }
+]

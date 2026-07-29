@@ -182,6 +182,25 @@ fn wsteth_meta() -> Erc20Metadata<'static> {
     }
 }
 
+#[test]
+fn exact_preflight_refuses_safe_erc20_value_too_wide_for_exact_display() {
+    let amount = 1_000_000_000_000_000_000_001u128; // 10^21 + 1.
+    let mut raw = erc20_transfer([0x21; 20], 0);
+    raw[52..68].copy_from_slice(&amount.to_be_bytes());
+    let meta = Erc20Metadata {
+        chain_id: CHAIN_ID,
+        contract: TOKEN,
+        decimals: 18,
+        name: b"Dust token",
+        symbol: b"DUST",
+    };
+
+    assert!(
+        render_raw_with_context(TOKEN, 0, &raw, None, Some(&meta)).is_err(),
+        "Safe must refuse when neither the scaled amount nor signed base units fit exactly"
+    );
+}
+
 fn bound_cow_stub() -> VerifiedCowswapV3 {
     // The renderer accepts this type only after `verify_and_bind_trailer` has
     // bound it to the selected Safe presign bytes. This focused renderer test

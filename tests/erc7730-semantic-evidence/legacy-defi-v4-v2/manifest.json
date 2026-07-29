@@ -1,0 +1,372 @@
+{
+  "schema_version": 1,
+  "scope": "1inch AggregationRouterV4 Clipper and Aave V2 LendingPool deployed semantics for the exact admitted static routes",
+  "captured_at_utc": "2026-07-27T15:45:48Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/497",
+  "boundary": "Historical fixed-block evidence only; no future-upgrade monitoring, token/reserve metadata, quote quality, execution-success, hardware, production, shipment, fallback, or blind-signing authority.",
+  "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+  "oneinch": {
+    "chain_id": 1,
+    "address": "0x1111111254fb6c44bAC0beD2854e76F90643097d",
+    "block_number_hex": "0x1863b00",
+    "block_hash": "0xc764a3327787002b64c36ae2776c0f25a9c9e7fa8e94dc1748c04550adba4bfd",
+    "parent_hash": "0xd874b44ee0035a420b0bc099fd9d231a6b57f47c9e9d77d1976db1bd9e2327aa",
+    "state_root": "0x093297f3201225733791d1ea446c4387d94b2fb51f0d49b7311207669c8682b3",
+    "timestamp_hex": "0x6a5e1eab",
+    "providers": [
+      {
+        "name": "drpc",
+        "url": "https://eth.drpc.org"
+      },
+      {
+        "name": "mevblocker",
+        "url": "https://rpc.mevblocker.io"
+      }
+    ],
+    "verification": "verification/Sourcify.oneinch-v4.ethereum.json",
+    "runtime": "runtime/AggregationRouterV4.ethereum.hex",
+    "admitted_signatures": [
+      "clipperSwap(address,address,uint256,uint256)",
+      "clipperSwapTo(address,address,address,uint256,uint256)"
+    ],
+    "refused_declared_signatures": [
+      "clipperSwapToWithPermit(address,address,address,uint256,uint256,bytes)"
+    ]
+  },
+  "aave": {
+    "address_book": {
+      "repository": "https://github.com/aave-dao/aave-address-book",
+      "commit": "4ae19b95f84b077c28633ca1d0f9a6750a3ea1d4",
+      "tree": "0eaba341a910ce91acc15063ae676eaf480b8290"
+    },
+    "auxiliary_protocol_source": {
+      "repository": "https://github.com/aave/protocol-v2",
+      "commit": "ce53c4a8c8620125063168620eba0a8a92854eb8",
+      "tree": "3a07aba11e970d4e793a1cf7c47728bcbfc93c75",
+      "load_bearing": false
+    },
+    "admitted_signatures": [
+      "borrow(address,uint256,uint256,uint16,address)",
+      "deposit(address,uint256,address,uint16)",
+      "repay(address,uint256,uint256,address)",
+      "setUserUseReserveAsCollateral(address,bool)",
+      "swapBorrowRateMode(address,uint256)",
+      "withdraw(address,uint256,address)"
+    ],
+    "deployments": [
+      {
+        "slug": "ethereum",
+        "chain_id": 1,
+        "proxy": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
+        "implementation": "0x02D84abD89Ee9DB409572f19B6e1596c301F3c81",
+        "addresses_provider": "0xB53C1a33016B2DC2fF3653530bfF1848a515c8c5",
+        "revision": 5,
+        "block_number_hex": "0x1863b00",
+        "block_hash": "0xc764a3327787002b64c36ae2776c0f25a9c9e7fa8e94dc1748c04550adba4bfd",
+        "parent_hash": "0xd874b44ee0035a420b0bc099fd9d231a6b57f47c9e9d77d1976db1bd9e2327aa",
+        "state_root": "0x093297f3201225733791d1ea446c4387d94b2fb51f0d49b7311207669c8682b3",
+        "timestamp_hex": "0x6a5e1eab",
+        "providers": [
+          {
+            "name": "drpc",
+            "url": "https://eth.drpc.org"
+          },
+          {
+            "name": "mevblocker",
+            "url": "https://rpc.mevblocker.io"
+          }
+        ],
+        "implementation_verification": "verification/Sourcify.aave-v2.ethereum.implementation.json",
+        "proxy_verification": "verification/Sourcify.aave-v2.ethereum.proxy.json"
+      },
+      {
+        "slug": "polygon",
+        "chain_id": 137,
+        "proxy": "0x8dFf5E27EA6b7AC08EbFdf9eB090F32ee9a30fcf",
+        "implementation": "0x1685D81212580DD4cDA287616C2f6F4794927e18",
+        "addresses_provider": "0xd05e3E715d945B59290df0ae8eF85c1BdB684744",
+        "revision": 3,
+        "block_number_hex": "0x566f900",
+        "block_hash": "0x2a97804fa59fe15b1ff8fe068997e5a21f15d68d89fb987c38fdd24a46f976d4",
+        "parent_hash": "0xe709a64c01aff1d4d3a1a7dc01885f046f41ea52a498b42374070652a8d64e0e",
+        "state_root": "0x7ed67b4580567664d2dbaef23cee559fb52bf56ecde41088ee33262916310e9c",
+        "timestamp_hex": "0x6a5fb365",
+        "providers": [
+          {
+            "name": "tenderly",
+            "url": "https://polygon.gateway.tenderly.co"
+          },
+          {
+            "name": "drpc",
+            "url": "https://polygon.drpc.org"
+          }
+        ],
+        "implementation_verification": "verification/Sourcify.aave-v2.polygon.implementation.json",
+        "proxy_verification": "verification/Sourcify.aave-v2.polygon.proxy.json"
+      },
+      {
+        "slug": "avalanche",
+        "chain_id": 43114,
+        "proxy": "0x4F01AeD16D97E3aB5ab2B501154DC9bb0F1A5A2C",
+        "implementation": "0x102Bf2C03c1901AdBA191457A8c4A4eF18b40029",
+        "addresses_provider": "0xb6A86025F0FE1862B372cb0ca18CE3EDe02A318f",
+        "revision": 3,
+        "block_number_hex": "0x56af2c2",
+        "block_hash": "0x21bfb1f3a7ede20bfa372e278ec6208717f998dbab172b1f3f9644691a751b09",
+        "parent_hash": "0xebdb075343c14eabf3b057d340a2963606412b10957aa67ce5f3e612961fb258",
+        "state_root": "0x7cc66da296163440a0974e76d5374ed20e9ccf870c247250b96edecd4cb77ca8",
+        "timestamp_hex": "0x6a5fb8c7",
+        "providers": [
+          {
+            "name": "tenderly",
+            "url": "https://avalanche.gateway.tenderly.co"
+          },
+          {
+            "name": "thirdweb",
+            "url": "https://43114.rpc.thirdweb.com"
+          }
+        ],
+        "implementation_verification": "verification/Routescan.aave-v2.avalanche.implementation.json",
+        "proxy_verification": "verification/Sourcify.aave-v2.avalanche.proxy.json"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "aef725384b17e00cb4dd8a4d79b1fa69a3be112a05f53200e07f375dfb79efc1"
+    },
+    {
+      "path": "abi/AaveV2.routes.avalanche.abi.json",
+      "sha256": "084438473a9a0793ac5bc846d31be708fba2bbf734298a81fa9a0ffed1f3441b"
+    },
+    {
+      "path": "abi/AaveV2.routes.ethereum.abi.json",
+      "sha256": "3484102646ec62ad1a4e72c6dccb6ecbea7782c1665a203d05ab7662edee75f7"
+    },
+    {
+      "path": "abi/AaveV2.routes.polygon.abi.json",
+      "sha256": "3484102646ec62ad1a4e72c6dccb6ecbea7782c1665a203d05ab7662edee75f7"
+    },
+    {
+      "path": "abi/AggregationRouterV4.clipper.abi.json",
+      "sha256": "08597faf90ac0befb481fe40f1944ea4d1914294bd5286503a8ce9cd36aeb2f6"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "af60e3d3546b23195d4208d794fa98546f9b95517e2fb7f27ad4148e470a9bad"
+    },
+    {
+      "path": "rpc/raw/aave-avalanche/request-identity.json",
+      "sha256": "9dce484a7cbb7cf1abffa40a7f8ec1c784ab28a08d708a853f65502f108cfebc"
+    },
+    {
+      "path": "rpc/raw/aave-avalanche/request-links.json",
+      "sha256": "ab2dfb3594a496b9dc960fce8452794a0bd2bc70a97f083e69117176ea45ecd7"
+    },
+    {
+      "path": "rpc/raw/aave-avalanche/request-runtime.json",
+      "sha256": "8840d2338563ef770d919b931c9d6d290355b4f54715e0b0cfdc4af0f3fc0f3e"
+    },
+    {
+      "path": "rpc/raw/aave-avalanche/response-tenderly-identity.json",
+      "sha256": "8e128719cd9c13dd2df415116817085d9d64a839ec311ca278b1864cded0bc4d"
+    },
+    {
+      "path": "rpc/raw/aave-avalanche/response-tenderly-links.json",
+      "sha256": "32fb76fc952692e364ab78a94f5a35509cfd7179753de9725447c7045f3b8226"
+    },
+    {
+      "path": "rpc/raw/aave-avalanche/response-tenderly-runtime.json",
+      "sha256": "1aedf54ea2cc2455550efb95c60a8507773b20b8012ac29b00048588fbb0c94c"
+    },
+    {
+      "path": "rpc/raw/aave-avalanche/response-thirdweb-identity.json",
+      "sha256": "65f2f351b5faddeb53590d8bdb872468ae6efa910ce4150c3b93a8343c6b2e8d"
+    },
+    {
+      "path": "rpc/raw/aave-avalanche/response-thirdweb-links.json",
+      "sha256": "161c0eeb339c5987b32805de0c871d68df0075e32250f58c5402e5fcc4cf42b2"
+    },
+    {
+      "path": "rpc/raw/aave-avalanche/response-thirdweb-runtime.json",
+      "sha256": "2901e36a78ab5a75ab3449b902449ee06311983c90efaec8cae32866b025506a"
+    },
+    {
+      "path": "rpc/raw/aave-ethereum/request-identity.json",
+      "sha256": "c17f47daed0ac709f9f1c15e53d298e213ffc854b06c991c490166c6dcffa36f"
+    },
+    {
+      "path": "rpc/raw/aave-ethereum/request-links.json",
+      "sha256": "ca18a6483a5629bfabef3208687259becfdd83fd475f968d654bdd5b4735b075"
+    },
+    {
+      "path": "rpc/raw/aave-ethereum/request-runtime.json",
+      "sha256": "d1652e925fa53aec75b362c88d50970e6fd1eaf5ff276674c23f8ba8e671397a"
+    },
+    {
+      "path": "rpc/raw/aave-ethereum/response-drpc-identity.json",
+      "sha256": "b8cc4e556f5cddc2b31c422771787f98e7f23fdbc23db311c882986cfe4c4795"
+    },
+    {
+      "path": "rpc/raw/aave-ethereum/response-drpc-links.json",
+      "sha256": "f659edcd28d17645f89ce511f02259ffd02ba5b15c4d9ce8c3739a350dd78176"
+    },
+    {
+      "path": "rpc/raw/aave-ethereum/response-drpc-runtime.json",
+      "sha256": "1e9367df45e1754d3a2288359d5547eeef87011c61c00ef5b5cecfb36f73dc8e"
+    },
+    {
+      "path": "rpc/raw/aave-ethereum/response-mevblocker-identity.json",
+      "sha256": "373f113336c158293ebfc5c7277067f36367cbdcb6d9dcdfdc4530e5b563448e"
+    },
+    {
+      "path": "rpc/raw/aave-ethereum/response-mevblocker-links.json",
+      "sha256": "4d6fc602684d7b8324f47ae689f27e5751bf923b116d58b95d7dd897dd34e6e8"
+    },
+    {
+      "path": "rpc/raw/aave-ethereum/response-mevblocker-runtime.json",
+      "sha256": "e0230f36229d2cb842399a034f2c20a3dbaf022b3d0b977e560567dea86f7224"
+    },
+    {
+      "path": "rpc/raw/aave-polygon/request-identity.json",
+      "sha256": "3f65462630aa157eb9017c8bdc9c5efbe35367daf4d1564c965bbb96695eb606"
+    },
+    {
+      "path": "rpc/raw/aave-polygon/request-links.json",
+      "sha256": "af5b2823fda23769741c6481337999ddb05e243f6e24f3aeff2273c894f735c6"
+    },
+    {
+      "path": "rpc/raw/aave-polygon/request-runtime.json",
+      "sha256": "fba17dab3d0b1796e56992fa48e653a5144f54257a7d2770f29db63252218ac9"
+    },
+    {
+      "path": "rpc/raw/aave-polygon/response-drpc-identity.json",
+      "sha256": "81070bd77d1e36e02be2f979e133fb20ce019a2278c5e316ac214397d3328957"
+    },
+    {
+      "path": "rpc/raw/aave-polygon/response-drpc-links.json",
+      "sha256": "bbdde7c9f0a4c27798a734d29c9d30094766d2d118f29baade05477363be18b9"
+    },
+    {
+      "path": "rpc/raw/aave-polygon/response-drpc-runtime.json",
+      "sha256": "26e5ee2ab0f7ded6b232ccc6031ca8c0bc1a03221d2cbb19c61adbb3cd9d0bad"
+    },
+    {
+      "path": "rpc/raw/aave-polygon/response-tenderly-identity.json",
+      "sha256": "6bfd538bd6dbc224970ffaf54147f9254a7fffa2ebea3f8a871a5b7e95385377"
+    },
+    {
+      "path": "rpc/raw/aave-polygon/response-tenderly-links.json",
+      "sha256": "bbdde7c9f0a4c27798a734d29c9d30094766d2d118f29baade05477363be18b9"
+    },
+    {
+      "path": "rpc/raw/aave-polygon/response-tenderly-runtime.json",
+      "sha256": "26e5ee2ab0f7ded6b232ccc6031ca8c0bc1a03221d2cbb19c61adbb3cd9d0bad"
+    },
+    {
+      "path": "rpc/raw/oneinch-ethereum/request-identity.json",
+      "sha256": "7ef76e7007a45f370f8fa00799a4c54e95d7c014f98e7d4d057be1523f959f73"
+    },
+    {
+      "path": "rpc/raw/oneinch-ethereum/request-runtime.json",
+      "sha256": "6ffe99cf17e7da888131db9048dabd73b6eee12a05a6ad0e95b53dc9d4ff74ee"
+    },
+    {
+      "path": "rpc/raw/oneinch-ethereum/response-drpc-identity.json",
+      "sha256": "55d402f4e43f46dbb14dbf557fe924f88c617bea79d852c5b49e0c4f594d7942"
+    },
+    {
+      "path": "rpc/raw/oneinch-ethereum/response-drpc-runtime.json",
+      "sha256": "e101cdbdbb7b49a9261237ce45a01ea69b77bd5eff1bc2b0129812fe8addde1e"
+    },
+    {
+      "path": "rpc/raw/oneinch-ethereum/response-mevblocker-identity.json",
+      "sha256": "0087e1837cf02c3cd929017c9216036183b441fb091dc855f2badab882beee31"
+    },
+    {
+      "path": "rpc/raw/oneinch-ethereum/response-mevblocker-runtime.json",
+      "sha256": "e34a5e050aee1de041381359af0fc5a549cb433965bdeda1147504e9ec8e4915"
+    },
+    {
+      "path": "runtime/AaveV2PoolImplementation.avalanche.hex",
+      "sha256": "fb04eeab46617ff3a08d407de9b12ca75555acbe1d8795ebd6b8b865fa5485fd"
+    },
+    {
+      "path": "runtime/AaveV2PoolImplementation.ethereum.hex",
+      "sha256": "515569f9ec141896a7cf7cb2899172b6c56e39b0c2e04583765af84194852561"
+    },
+    {
+      "path": "runtime/AaveV2PoolImplementation.polygon.hex",
+      "sha256": "66c2b3342a60253f4c34506d383a8384fed5bab0451328b79dffc2477921ef2b"
+    },
+    {
+      "path": "runtime/AaveV2PoolProxy.avalanche.hex",
+      "sha256": "a9d4c954271a744a45ebad2ffbd451e3dccce05ce1bb557cfe00ebcb2100b76e"
+    },
+    {
+      "path": "runtime/AaveV2PoolProxy.ethereum.hex",
+      "sha256": "549523efcc714b437593e48bd195637357d196144eb99b9821fdf56d95245b1d"
+    },
+    {
+      "path": "runtime/AaveV2PoolProxy.polygon.hex",
+      "sha256": "c9e5ac492f1ab3343dd1d6c4e634f9de7ebe8869bc4e242eca245b8e6ec48264"
+    },
+    {
+      "path": "runtime/AggregationRouterV4.ethereum.hex",
+      "sha256": "29bb2469f0ac4f6546f75630f221e057eacb1b152220cc2d7e138e0a4c42e586"
+    },
+    {
+      "path": "source/AaveV2Avalanche.sol",
+      "sha256": "aa9ff67c2c2b7b5ab1679f11d95014a00d0243be4753ce4c24eb7bac1614da05"
+    },
+    {
+      "path": "source/AaveV2Ethereum.sol",
+      "sha256": "ea9f57a43bda50d5cbe0eda177d614e8b7f5d5902270737539926e7c91904dbc"
+    },
+    {
+      "path": "source/AaveV2Polygon.sol",
+      "sha256": "109a3904f24d23a63d972a0d38e08deba6560f5b0aec3e61f496ec4e5ca3c5ab"
+    },
+    {
+      "path": "source/DataTypes.sol",
+      "sha256": "42073065b4a701e29d2a1b541060487c46e61fbd991235e24862a2fa270e8455"
+    },
+    {
+      "path": "source/ILendingPool.sol",
+      "sha256": "37c69077c0ca06d708395260ad6f45317e12d54aade2ae97b9b0b11266d6ab74"
+    },
+    {
+      "path": "source/LendingPool.sol",
+      "sha256": "9777cfba3a787ce4e328f32bdacde9d55ebc65b2e210fba725ceacfa6a1dc9ed"
+    },
+    {
+      "path": "verification/Routescan.aave-v2.avalanche.implementation.json",
+      "sha256": "f7e26c96d0fb8e9d745e5ba0658cabe296f8a5259fa20b734d7fc72f16e9a749"
+    },
+    {
+      "path": "verification/Sourcify.aave-v2.avalanche.proxy.json",
+      "sha256": "d9332e36776bea85749438bba70e9f0d30c561ac22181b2b8e3c56ed5ff16f57"
+    },
+    {
+      "path": "verification/Sourcify.aave-v2.ethereum.implementation.json",
+      "sha256": "079dfd1fde91c08785a0750817fc4d00aaa4f8c9a6cc0497c5498b1661853cc7"
+    },
+    {
+      "path": "verification/Sourcify.aave-v2.ethereum.proxy.json",
+      "sha256": "4918f730b6b23ed48091411fa6a14200065890358fb0a98c71071f9caba5dfa4"
+    },
+    {
+      "path": "verification/Sourcify.aave-v2.polygon.implementation.json",
+      "sha256": "42630671a1bc512bd345f8ed477958e55e6d8a198d7b23e630db834854364c66"
+    },
+    {
+      "path": "verification/Sourcify.aave-v2.polygon.proxy.json",
+      "sha256": "cc9e906df96a2cf4323547ef41d8b2648adf3ce522f203aced63df44f6d8acbe"
+    },
+    {
+      "path": "verification/Sourcify.oneinch-v4.ethereum.json",
+      "sha256": "f98dd1aba0354dc7b95bdea8e1101ec5b698c05b8214f6a04954b0bb58161527"
+    }
+  ]
+}

@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 814401,
-    "sha256": "9bdd194fd060c26f4e555f49050dc526015ec853325a803e531c8c8f29eb3079"
+    "bytes": 979277,
+    "sha256": "e87406e66d897ea90653134d8850fbd7fe0c9ca7d02857a057feb501c86b306c"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -45,6 +45,76 @@
     },
     {
       "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x0d1e9de1"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x136439dd"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x2eae418c"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x3fb99ca5"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x50ff7225"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x595c6a67"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x5a26fbf4"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x715018a6"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x724af423"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x9b4e4634"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0xa1ca780b"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0xcd6dc687"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0xf2fde38b"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0xfabc1cbc"
+    },
+    {
+      "chain_id": 1,
       "contract": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
       "selector": "0x2e1a7d4d"
     },
@@ -59,6 +129,11 @@
       "selector": "0x0d2c7c16"
     },
     {
+      "chain_id": 10,
+      "contract": "0x1293a54e160d1cd7075487898d65266081a15458",
+      "selector": "0x31f01ed7"
+    },
+    {
       "chain_id": 56,
       "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
       "selector": "0x05b1ea03"
@@ -77,6 +152,11 @@
       "chain_id": 100,
       "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
       "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 137,
+      "contract": "0x09959798b95d00a3183d20fac298e4594e599eab",
+      "selector": "0x31f01ed7"
     },
     {
       "chain_id": 137,
@@ -140,6 +220,11 @@
     },
     {
       "chain_id": 8453,
+      "contract": "0x09959798b95d00a3183d20fac298e4594e599eab",
+      "selector": "0x31f01ed7"
+    },
+    {
+      "chain_id": 8453,
       "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
       "selector": "0x05b1ea03"
     },
@@ -157,6 +242,11 @@
       "chain_id": 42161,
       "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
       "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 42161,
+      "contract": "0x1293a54e160d1cd7075487898d65266081a15458",
+      "selector": "0x31f01ed7"
     },
     {
       "chain_id": 42220,
@@ -209,9 +299,94 @@
       "selector": "0x0d2c7c16"
     },
     {
+      "chain_id": 84532,
+      "contract": "0xc3d46e0266d95215589de639cc4e93b79f88fc6c",
+      "selector": "0x31f01ed7"
+    },
+    {
+      "chain_id": 421614,
+      "contract": "0xc3d46e0266d95215589de639cc4e93b79f88fc6c",
+      "selector": "0x31f01ed7"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x0d1e9de1"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x136439dd"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x2eae418c"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x3fb99ca5"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x50ff7225"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x595c6a67"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x5a26fbf4"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x715018a6"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x724af423"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x9b4e4634"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0xa1ca780b"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0xcd6dc687"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0xf2fde38b"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0xfabc1cbc"
+    },
+    {
       "chain_id": 11155111,
       "contract": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
       "selector": "0x2e1a7d4d"
+    },
+    {
+      "chain_id": 11155420,
+      "contract": "0x5fb63d9e076a314023f2d1ab5dbfd7045c281eba",
+      "selector": "0x31f01ed7"
     },
     {
       "chain_id": 1313161554,
@@ -285,16 +460,16 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 33,
-      "bytes": 2393803,
-      "sha256": "7f806c64996e4e0d6e5df7a8ef5be5668cd3eaef1490002c0df83eb46cce2677"
+      "files": 50,
+      "bytes": 2932671,
+      "sha256": "6c72154cdcd5b764306aaa4abb02dc2a04b71fe016acfb379aba267dcfae1065"
     },
     {
       "path": "pqsigner-erc7730",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 29,
-      "bytes": 1124378,
-      "sha256": "597a76b20899a5bc40b89deddb9be1d89ddff2e991df85d72a50501474327e9e"
+      "bytes": 1150695,
+      "sha256": "8af1a6f80fc03b68312d27066d7bb5bbf7df63d693dcd9d40faad80804c41457"
     },
     {
       "path": "pqsigner-fi",
@@ -307,8 +482,8 @@
       "path": "proto",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 9,
-      "bytes": 178385,
-      "sha256": "6ae3f10813aef9617657492967746693126598e9a6156c45f8d5ff445bbec745"
+      "bytes": 179755,
+      "sha256": "0c2bd43810ea3d4f5475c6ee720ec898a8bfb32120af691afe82bb4064c8a68e"
     },
     {
       "path": "shared",
@@ -321,8 +496,8 @@
       "path": "tx-core",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 11,
-      "bytes": 112421,
-      "sha256": "32b0163ae7d8d730877fc685716b144cd56308f1a1005dd1d69d127cec5acf6d"
+      "bytes": 117864,
+      "sha256": "bd137ffe6fba7c4a48ef923667908d3e2854df9c003309024905c7582c492568"
     },
     {
       "path": "tx",
@@ -335,14 +510,14 @@
       "path": "xtask",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
-      "bytes": 313678,
-      "sha256": "3a2b3a5bfb670f9345edeba6d8e364f1729d49abc679f9105b2c4ace9e728277"
+      "bytes": 313679,
+      "sha256": "dac6246e62228ea5b95b18adfc67a9ea333127b31522f72a37c044317fd94c73"
     }
   ],
   "capability_inputs": [
     {
       "path": "secure/data/erc20.json",
-      "sha256": "93dc4ef3c2cbcff7d605e08ff144e00149c921d6d64077361469a54df3e29785"
+      "sha256": "951e9bc271abc1c228375b1755bcf9c34688fac47f2b194948a95b249f72980e"
     }
   ],
   "replacements": [
@@ -354,18 +529,25 @@
       "replacement_sha256": "fb81b5d7cdb61ee9bc43aa054434aaede83451fdf52eb5c0913c886558793e19"
     },
     {
+      "path": "registry/1inch/calldata-AggregationRouterV4-eth.json",
+      "upstream_bytes": 2399,
+      "upstream_sha256": "69a85920ba106f81d895c07a7683505c439d65d6f10fff13f1c665d38a3bb95f",
+      "replacement_bytes": 4586,
+      "replacement_sha256": "85b745f1483ab077e79f9cdbf8552f1c7e28f99878f112c59330c8ed7c6e900b"
+    },
+    {
       "path": "registry/1inch/calldata-AggregationRouterV6-zksync.json",
       "upstream_bytes": 327,
       "upstream_sha256": "72d94b4e2640ae6eb60356112f50c09ab9df35c080ad5c4fc1e6b16c8cd38428",
-      "replacement_bytes": 3897,
-      "replacement_sha256": "43e72d300338fde9bb90e11b98e7e57d656c7ed55584d8ca81c3e3da248dfae5"
+      "replacement_bytes": 4061,
+      "replacement_sha256": "477b1842fcc0fdc6f5293a347b972db866178ad1a740e8f042b65cfde3420f08"
     },
     {
       "path": "registry/1inch/calldata-AggregationRouterV6.json",
       "upstream_bytes": 3604,
       "upstream_sha256": "0c469dd75542c6abe680812eaa8238b64854dcaca091a59c217f5b52083eaced",
-      "replacement_bytes": 9194,
-      "replacement_sha256": "9697cacec5f40a928301f46c7e264f4e05bc670d207dc3fbb8b0128c2629568d"
+      "replacement_bytes": 9866,
+      "replacement_sha256": "b001aa4f0729e78394cae5ea6bcf464484932bc12757b9836e2bfafffdefee2d"
     },
     {
       "path": "registry/aave/calldata-WrappedTokenGatewayV3.json",
@@ -378,8 +560,8 @@
       "path": "registry/aave/calldata-lpv2.json",
       "upstream_bytes": 4967,
       "upstream_sha256": "f0f15002c5b5749a51ddc1641e40ec67afd51c93238c2901312100e59369c385",
-      "replacement_bytes": 5171,
-      "replacement_sha256": "1367b18f927cb31748de242e80db75ef2beccb4839df0b513390e7985258a55e"
+      "replacement_bytes": 7868,
+      "replacement_sha256": "bbdfda34c6b018d5db72b833b07bc1da3ce3625151317b7fa4b66c7dd23d2039"
     },
     {
       "path": "registry/aave/calldata-lpv3.json",
@@ -387,6 +569,41 @@
       "upstream_sha256": "19afdd033c627a5e24bdc70af93e70e0068bb0760d100ddd297377bb8c4cc659",
       "replacement_bytes": 11697,
       "replacement_sha256": "9d6105d4fc42f2d3993a8badfc6084035b5e5eab71a92c13d56bbc4b89e0c469"
+    },
+    {
+      "path": "registry/avvatar-labs-alia/calldata-AgentIdentityRegistry-base.json",
+      "upstream_bytes": 37427,
+      "upstream_sha256": "92ee0286674ee2ec84be831a5d8cff957651464c3895e27c938d586fa0a5ffa1",
+      "replacement_bytes": 40520,
+      "replacement_sha256": "c1ca013abed03b04c2f4ae616363e47402b8bcebb7485f421e3df27758c08c90"
+    },
+    {
+      "path": "registry/avvatar-labs-alia/calldata-AssetIdentityRegistry-base.json",
+      "upstream_bytes": 22579,
+      "upstream_sha256": "e16463c410ae7cacf7f8634c28f976fc8f444f7e7a8d001462c8af698cb09dfd",
+      "replacement_bytes": 24904,
+      "replacement_sha256": "dddc454d63c8c62bd2d0be06973e8d5f1454f052f8de74572c31cabe29db50d8"
+    },
+    {
+      "path": "registry/avvatar-labs-alia/calldata-ScoreEngineV2-base.json",
+      "upstream_bytes": 36590,
+      "upstream_sha256": "94db74f607ad6f231014bf54746ef34c6a88e3bd3a4f70b6c07a5a7c6e1f9491",
+      "replacement_bytes": 37877,
+      "replacement_sha256": "213ebf3757bc6497b0c773d970772be65eecc8623224fc92f084bbdd42cf07ba"
+    },
+    {
+      "path": "registry/benqi/calldata-sAVAX.json",
+      "upstream_bytes": 1535,
+      "upstream_sha256": "33ea0a5a3ab575e3803f8378c67b286a2ab3accc08410b120a75d45e6d0ae102",
+      "replacement_bytes": 4724,
+      "replacement_sha256": "2570d212f7c3e716495f4be23bc93dfb4c5785e76f84e416afa8cf319ced5906"
+    },
+    {
+      "path": "registry/celo/calldata-celo_accounts.json",
+      "upstream_bytes": 9998,
+      "upstream_sha256": "c2a51a8ac86d6b762991b39c0c30bdfa9303426f1a463471598c604c35bc7108",
+      "replacement_bytes": 12671,
+      "replacement_sha256": "53705bc2656b0eac4393dccd239cf58ebd8050bdee89051cfa3ee30e41438c12"
     },
     {
       "path": "registry/celo/calldata-celo_election.json",
@@ -417,11 +634,116 @@
       "replacement_sha256": "1e12f68359f189af4e1197d23e5f9ea99cf18da81819487d738ebe42d73d1c3a"
     },
     {
+      "path": "registry/corestake/calldata-coreagent.json",
+      "upstream_bytes": 2043,
+      "upstream_sha256": "cf42c2d36cd53c55f0d0416131de8a6f69643d9b4bb716fa46a855c8d0246e1a",
+      "replacement_bytes": 3322,
+      "replacement_sha256": "d746d43c5b65c4da789cfac36705b097acf139359af14a5bdbd71be125c66404"
+    },
+    {
+      "path": "registry/corestake/calldata-corestake.json",
+      "upstream_bytes": 1222,
+      "upstream_sha256": "be894b47398b426623de376a86d3a24d53bb72f34d3bb4900b99152fa3f20bef",
+      "replacement_bytes": 2915,
+      "replacement_sha256": "8f4e3a86b288560c35d3fba2776274b9d48fbafd749fe1e008be063241f32cef"
+    },
+    {
+      "path": "registry/corestake/calldata-stakehub.json",
+      "upstream_bytes": 375,
+      "upstream_sha256": "a8c85943a61be2133030c709980bbbcede07608f59d49293276e1b8af53a6923",
+      "replacement_bytes": 1520,
+      "replacement_sha256": "9b325c4c555061d1a070808c7f8f5a42f731dc734bb590cea0f32be03f44d6f9"
+    },
+    {
+      "path": "registry/degate/eip712-degate.json",
+      "upstream_bytes": 2896,
+      "upstream_sha256": "9acddbab5a022ca4a9437a6b0490edb3272157d8f56a01f3bc598939d58138f2",
+      "replacement_bytes": 5165,
+      "replacement_sha256": "d5fd82c49c662d0ecda669be2c3e6a05501eb70b5dba9c19156e5b130b21f4a7"
+    },
+    {
+      "path": "registry/ethena/calldata-ethena.json",
+      "upstream_bytes": 1420,
+      "upstream_sha256": "da12844aa9f109e6f8f3e0579239d9deaf34b7aaf4ec33496f7ac41588a89830",
+      "replacement_bytes": 3567,
+      "replacement_sha256": "21c5c6b35735e02e2f000ec3417379f48a4fe4323f6e5c2b961fd33f93cb179c"
+    },
+    {
+      "path": "registry/fellow-fund/calldata-fellow-fund.json",
+      "upstream_bytes": 2446,
+      "upstream_sha256": "bb8c8bb6a6523611131405a234d10b60f82b23280ae99c1c0004a90a7e4294ee",
+      "replacement_bytes": 4137,
+      "replacement_sha256": "ebeabe9a8324dab3032b59285fff5b8cf6c582c16074edd1d1590724e08b657f"
+    },
+    {
+      "path": "registry/flare/calldata-DistributionToDelegators-Flare.json",
+      "upstream_bytes": 2055,
+      "upstream_sha256": "6aaa39ef0e9ef28bae43af88612790bbe06d0a5fb79bfffe572566807d0373b5",
+      "replacement_bytes": 4925,
+      "replacement_sha256": "29c13da20139b3194ab20c57f829a0258d83385807f256c3655ec8cc937922f6"
+    },
+    {
+      "path": "registry/flare/calldata-PollingFoundation-Flare.json",
+      "upstream_bytes": 3753,
+      "upstream_sha256": "65c7fdff2cf040aa89196b76c3ac87fd6d9ce4f0aa6bfcf17ac47b10d054fa9d",
+      "replacement_bytes": 8367,
+      "replacement_sha256": "3d43254b8e2eb8cdb40a40a8a7bf9511ce196f682102b33a56890cba94be367c"
+    },
+    {
+      "path": "registry/flare/calldata-PollingFoundation-Songbird.json",
+      "upstream_bytes": 3741,
+      "upstream_sha256": "9ccf8de1a00164b8656ce36e6db48aab25d9609c409bbb9730d32887e1d4b1c3",
+      "replacement_bytes": 8379,
+      "replacement_sha256": "05fad4a4cd93f30fe8440f9a437a31abeb54b89258ce814fdf906f2571ccadc6"
+    },
+    {
+      "path": "registry/flare/calldata-ValidatorRewardManager-Flare.json",
+      "upstream_bytes": 1913,
+      "upstream_sha256": "a194c1693acde230718639882891ce22b73b931ee916d9fa658f8a28d992f5c4",
+      "replacement_bytes": 4259,
+      "replacement_sha256": "61f7ab1470da300be05c6d7ff89f03de99ba16cacd2ccbeb1962c7712a59f3ba"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-EpochRewardsVault-dev.json",
+      "upstream_bytes": 2990,
+      "upstream_sha256": "f5c64290d34b06ec9105551f16ca494773c6fac9676558d16549a13c6fe71d79",
+      "replacement_bytes": 4755,
+      "replacement_sha256": "934f8ae5a151fcf99c63058a9b5bfe6a1c61db7e8669a59470b1c8c05dc1c577"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-EpochRewardsVault.json",
+      "upstream_bytes": 3088,
+      "upstream_sha256": "87a0eea62bc7bcd0af8b76bb4ccf864e57722526320461f51c2f332ab46f17d7",
+      "replacement_bytes": 4534,
+      "replacement_sha256": "11b4d016ad4e467273d060b7d9310dfc2e46fe8137af8da377dcdaa207b92c17"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-MintAndRedeem-dev.json",
+      "upstream_bytes": 2403,
+      "upstream_sha256": "95f97996edeabe366b43b845331248fd85df013f4ff2f47a0f4d4f790a252330",
+      "replacement_bytes": 4594,
+      "replacement_sha256": "55505c2da24f894a04cc8628c3233c38856ff1824727efad37e9d2443677ecef"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-MintAndRedeem.json",
+      "upstream_bytes": 2592,
+      "upstream_sha256": "e3a5cebb0c680b303985b94638ed022a5ece83fcc3962ac6094291c9c27de6a5",
+      "replacement_bytes": 4367,
+      "replacement_sha256": "73603e6c91fdb280ee061559745cc74a7b285c01807feea71068a5a2d754ac9c"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-PftMarketplace.json",
+      "upstream_bytes": 5697,
+      "upstream_sha256": "26e43ff65b43bfac17051de5c1392bb2c2f29287560492d6e3f27e78c22bdea3",
+      "replacement_bytes": 7961,
+      "replacement_sha256": "a994d62280e3a94a0bcc2483b8e9fec036b66496021257c4c78b20c230885eb7"
+    },
+    {
       "path": "registry/flyingtulip/calldata-PftNft.json",
       "upstream_bytes": 2324,
       "upstream_sha256": "4d689ea91df44b08018e3fc6b381e5f259134178dbf81645997083143e7f615e",
-      "replacement_bytes": 2317,
-      "replacement_sha256": "a30abb996b18f39899ffa22cedd1e981a6ef958fe394671db3adb4ec9c3afd05"
+      "replacement_bytes": 4035,
+      "replacement_sha256": "8c75b28b1c6e1fa1d6d877b4bfdb9d9db7bf9c7ac6aacc1c3e065cff951b6296"
     },
     {
       "path": "registry/flyingtulip/calldata-PositionsManager.json",
@@ -431,11 +753,25 @@
       "replacement_sha256": "16c3c693aa3f08e35e8a80fd383b7d08b0c5e77648bea1ab6541d21399c2146b"
     },
     {
+      "path": "registry/flyingtulip/calldata-PutManager.json",
+      "upstream_bytes": 2834,
+      "upstream_sha256": "c7306d4e9d3b4a50364513883bca5cde112e27fd99f6926a5205ee54e8a49ed3",
+      "replacement_bytes": 4793,
+      "replacement_sha256": "cf8d6c16151dcb26e79f07718edeb1fcdb2e5a3d0ad51806a2adebc77fdeef86"
+    },
+    {
       "path": "registry/flyingtulip/calldata-SessionManager.json",
       "upstream_bytes": 9639,
       "upstream_sha256": "4e26b99c1d8c170e96a4190e3d68ccca1b57d7674896e954fb3c5f788f6bce0a",
       "replacement_bytes": 11287,
       "replacement_sha256": "dcb847584d82d692f196a1ea9acdc1534cd868c36aaa35bcb58afedbb3ca20b2"
+    },
+    {
+      "path": "registry/flyingtulip/eip712-LeverageRfqEngine.json",
+      "upstream_bytes": 2688,
+      "upstream_sha256": "1ff0f2ff12b41f7f433b3d0137517115b0a0032b8e4a76954b59137ca6455186",
+      "replacement_bytes": 3451,
+      "replacement_sha256": "52c65c6ff4b75980b954dd48a850b39d2a3941a79d9cc32d8d4fa224df8f0875"
     },
     {
       "path": "registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json",
@@ -448,15 +784,36 @@
       "path": "registry/flyingtulip/eip712-SessionManager-FT.json",
       "upstream_bytes": 3069,
       "upstream_sha256": "1c62a2c51aeb265e38d30c65ccc812bea3f6e35d381247541b17f0542bf5c7c2",
-      "replacement_bytes": 3099,
-      "replacement_sha256": "331aae6b33c1fa6998acb17d4cb7861c5aecd2f67252c6e9b8953e69e62ad57e"
+      "replacement_bytes": 4686,
+      "replacement_sha256": "69d47ce80c5a87cca492cf7840bc3ecea39914589466c080521ca77f387c9eb7"
     },
     {
       "path": "registry/flyingtulip/eip712-SessionManager-ftUSD.json",
       "upstream_bytes": 3424,
       "upstream_sha256": "3f9af2a41ced1c6c8de90ae1c1be9a5a42ad5fc99ca77369a3f4c92e315a48a9",
-      "replacement_bytes": 3454,
-      "replacement_sha256": "bfe3eca47fb53a433547a93069a74647f804148419aa96795512490f13b3d1c9"
+      "replacement_bytes": 6036,
+      "replacement_sha256": "d1b6a704960f1e1b3ac9e2536928772dcd865ee70cfec8ca7195cbb66bde2f08"
+    },
+    {
+      "path": "registry/flyingtulip/eip712-SpotOrderCancel.json",
+      "upstream_bytes": 2103,
+      "upstream_sha256": "5449f9269973da4edbe9bc405f1a158824e55448fcafd6639fd3d31f64d8a676",
+      "replacement_bytes": 2905,
+      "replacement_sha256": "0ede3a9406f9512e02713cae51fb9199d05ac96f4f25a078ff98e83988a8515a"
+    },
+    {
+      "path": "registry/igra/calldata-KasExitBridge.json",
+      "upstream_bytes": 1110,
+      "upstream_sha256": "9c6fbece743979770b283aaf0f973132d3e81fbca971e45bf122fa7398f29197",
+      "replacement_bytes": 2313,
+      "replacement_sha256": "784ed491316c56ceb014106d0a8ab039bb88dc467eb6e2754ed03ff445d9926a"
+    },
+    {
+      "path": "registry/kiln/calldata-kiln-fee-splitter-factory.json",
+      "upstream_bytes": 3777,
+      "upstream_sha256": "ec68c74603c2252c4220993d2b222a69d18b3deab5e0b742b078165a133cefc3",
+      "replacement_bytes": 5373,
+      "replacement_sha256": "df9a16ac4d0f182341e014728912466371f96c0d7feba85b5cccd162928f4170"
     },
     {
       "path": "registry/layerswap/calldata-LayerswapDepository.json",
@@ -464,6 +821,27 @@
       "upstream_sha256": "b9cc03aebb3c30fc8b189345fb3f1416601d3ee6bc6af8f4fac09fb0ab06f13d",
       "replacement_bytes": 9844,
       "replacement_sha256": "ebf6905de06763dd8489bd1d6893214155cc425ed9b13850efdae9439a28976a"
+    },
+    {
+      "path": "registry/ledgerquest/eip712-ledgerquest.json",
+      "upstream_bytes": 698,
+      "upstream_sha256": "26e9a047ebabd084a40b8ef426f9f27d963753cd58596c0dc78abe9f44d9b9f5",
+      "replacement_bytes": 1481,
+      "replacement_sha256": "8a9e1f599e25cac6b8700305ca66e1a46ea4a5087c9802ce9de7b1293972edf3"
+    },
+    {
+      "path": "registry/lens/eip712-lens-lenshub.json",
+      "upstream_bytes": 12909,
+      "upstream_sha256": "e090ba97523330a3d8e55dc9f45af919d6353d5995fbec8d495bb3f54fddbff7",
+      "replacement_bytes": 20761,
+      "replacement_sha256": "f984670616d806e1210298da63542105581fc87e08a5ead1b7453143eee44258"
+    },
+    {
+      "path": "registry/lens/eip712-lens-token-handle-registry.json",
+      "upstream_bytes": 1201,
+      "upstream_sha256": "af42e9abffb10a096f41ac99c622154ae8834977c0a534404748677ef1868b10",
+      "replacement_bytes": 2303,
+      "replacement_sha256": "7241bb48d99b990fd0147c8d4d122bb6f4860ba53818b4497d012dbba8e4ac86"
     },
     {
       "path": "registry/lido/calldata-WithdrawalQueueERC721.json",
@@ -504,8 +882,22 @@
       "path": "registry/lombard/calldata-lbtc-sepolia.json",
       "upstream_bytes": 4612,
       "upstream_sha256": "f79cc8eb93054c1233f5cd044a2d4b2f5ba82a4162d4890dc182a1bbfea22fc7",
-      "replacement_bytes": 4666,
-      "replacement_sha256": "974178982fc146e9c83992085524f0fabe3bba9882e2dcff91c6974f1037f49c"
+      "replacement_bytes": 6219,
+      "replacement_sha256": "d93e832f604aa0c1c03e275210ae03b50e2fd9ecbdafa2127118b5bafec3cf43"
+    },
+    {
+      "path": "registry/lombard/eip712-network-fee-authorization-mainnet.json",
+      "upstream_bytes": 814,
+      "upstream_sha256": "169e528382579935261bac01972152b2458a9b6983deb571b73f5354a97fbfd8",
+      "replacement_bytes": 2267,
+      "replacement_sha256": "6137485cfc72be7e96cdaf8431f0effdff880f3f10a8be66ef2352078fed003b"
+    },
+    {
+      "path": "registry/lombard/eip712-network-fee-authorization-sepolia.json",
+      "upstream_bytes": 818,
+      "upstream_sha256": "685a6b681290c537b09a609272c14fdcedb5eb03198143e12c8255421fd4bb46",
+      "replacement_bytes": 1801,
+      "replacement_sha256": "6688f176b536922785c8fbd17a13c89db31085bbf5d70d955e5e19d2229e0adb"
     },
     {
       "path": "registry/midas/calldata-MinterVault.json",
@@ -529,11 +921,25 @@
       "replacement_sha256": "1a60c06511308904d000ab7c2a4bbab9fe5d6b4d4d9e9ca55ab83acb7d6cacd8"
     },
     {
+      "path": "registry/p2p/calldata-EigenPodManager.json",
+      "upstream_bytes": 560,
+      "upstream_sha256": "6c2aac91ac87975c0dd7c25d08351ef09184f0af0f9a51311dbba986448df1f5",
+      "replacement_bytes": 5299,
+      "replacement_sha256": "6afa919ea2f7ade291ec811f3419216940a3043c74967db5bba836499ba7e3f1"
+    },
+    {
       "path": "registry/p2p/calldata-NativeTokenVault.json",
       "upstream_bytes": 3691,
       "upstream_sha256": "900dbec13f7af5c9ce507f1261cd20d275befa87d052a4b29549a7e5867bbf47",
       "replacement_bytes": 3901,
       "replacement_sha256": "88c365a8098621e07ec3fea89e402d4af10de666b649bab8c75440789253f1c9"
+    },
+    {
+      "path": "registry/p2p/calldata-P2pMessageSender.json",
+      "upstream_bytes": 762,
+      "upstream_sha256": "ea84c41eab24bab809ed1bf55203c255ae42ac2f7a66404955f3fdb7413b3169",
+      "replacement_bytes": 2714,
+      "replacement_sha256": "d477c29bed334ceebb4cadb3fe9a6bbb6019118dcfa145c2fe5d813db6827996"
     },
     {
       "path": "registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json",
@@ -550,6 +956,13 @@
       "replacement_sha256": "ee8b405e19674c61429188d0d5bf2a34273d0d0eabac1b8e8da1982019c25524"
     },
     {
+      "path": "registry/paraswap/eip712-paraswap.json",
+      "upstream_bytes": 2672,
+      "upstream_sha256": "9c19b4ebcc2bfa4729ef24bcd79f0e148aeffb2e5046ac4bb86679c68d2f7770",
+      "replacement_bytes": 4538,
+      "replacement_sha256": "2d8c15bd22bb2f464410fcf46d1e7abb3e2bdb31837858a52dd8539d413773e6"
+    },
+    {
       "path": "registry/quickswap/calldata-QuickSwap.json",
       "upstream_bytes": 15749,
       "upstream_sha256": "19e2481f20414ae9b6669050c9740f919ca3896713693df7b50e60dba685d15f",
@@ -557,11 +970,235 @@
       "replacement_sha256": "c5b6e9f2cd030e6d61402c29289f0c3d6fc11419ae6a15cf98de43c8ce7d4dab"
     },
     {
+      "path": "registry/rarible/eip712-rarible-erc-1155.json",
+      "upstream_bytes": 1183,
+      "upstream_sha256": "4cb9ddd74f59797eb5dcc189c38cc33a7818dc9fdf6c082000dac074a44135b8",
+      "replacement_bytes": 2233,
+      "replacement_sha256": "d439907d392241334216f83d096f7a33d66a41ce76e028934bff74b8bcddd6c5"
+    },
+    {
+      "path": "registry/rarible/eip712-rarible-erc-721.json",
+      "upstream_bytes": 1091,
+      "upstream_sha256": "b0c8bf917974d22db8b8b5c9dc2bdb57f2e4376591fa71ba2f0972ada0814905",
+      "replacement_bytes": 2067,
+      "replacement_sha256": "8208b57a46f2f33ea127af32e3201a0f02342168edbeeed5f9493b0acd1247dc"
+    },
+    {
+      "path": "registry/safe/calldata-Safe-1.3.0.json",
+      "upstream_bytes": 1421,
+      "upstream_sha256": "a41c181f2003aa3446068b25464cef45553f0c7df543b1f4a4c07a9704203aa7",
+      "replacement_bytes": 7026,
+      "replacement_sha256": "4e34a49a3b6f97b624e0c0891483ef175213d7e39403eeafeca5c22efd50ef22"
+    },
+    {
+      "path": "registry/safe/calldata-Safe-1.4.1.json",
+      "upstream_bytes": 822,
+      "upstream_sha256": "39cb7b692f99603a09803f4b3a0a2b88ad0ee350320a9beeadffe43068585775",
+      "replacement_bytes": 4299,
+      "replacement_sha256": "947a756b2cf4445b84b888a3c8058f581494b6b7b2a60a0aacc76e8d2d7cc9dd"
+    },
+    {
+      "path": "registry/safe/calldata-Safe-1.5.0.json",
+      "upstream_bytes": 396,
+      "upstream_sha256": "d4b2964d8655688277b124bf17e7a5055b7797ed2a38c84f6d7f868ac3db7fd4",
+      "replacement_bytes": 2355,
+      "replacement_sha256": "e7c0ba9cacc43d2fba0c90ed92551fbc6c67f5783662df529371077c3fce0827"
+    },
+    {
+      "path": "registry/safe/calldata-SafeL2-1.3.0.json",
+      "upstream_bytes": 1425,
+      "upstream_sha256": "c0917a3d4decf344c0599a220fc00ee4eb41202b14d5c74cb87e96dd8a46dd41",
+      "replacement_bytes": 7057,
+      "replacement_sha256": "27a910f57238a1771cf920e290551ffc93efbb667f8d918c5123816fd7b5adee"
+    },
+    {
+      "path": "registry/safe/calldata-SafeL2-1.4.1.json",
+      "upstream_bytes": 826,
+      "upstream_sha256": "70c13f7d1e39e4a78f196f3b0a36224ce2a3314551cf0b4e76a639d0c5328634",
+      "replacement_bytes": 4330,
+      "replacement_sha256": "c247b99e93fdeac090e20220217b2aa0edbcf1e0bd800dba8979180025fcf9ca"
+    },
+    {
+      "path": "registry/safe/calldata-SafeL2-1.5.0.json",
+      "upstream_bytes": 400,
+      "upstream_sha256": "09c816dd08e6d4f03b0d9aaf7c79af0b371ad9676fa299e24b5cbcb2aa96f075",
+      "replacement_bytes": 2386,
+      "replacement_sha256": "7b35a9aaec838b7fb4283e109eef5504caf4396cb93e922d78632309ea0f956c"
+    },
+    {
+      "path": "registry/safe/calldata-SafeMigration-1.4.1.json",
+      "upstream_bytes": 849,
+      "upstream_sha256": "d95ff8cba2164722492b05dda507fca3a32441517561408207a296c8b9c07988",
+      "replacement_bytes": 4331,
+      "replacement_sha256": "a6f0ad4be6d6b7e381be7d67be90dad836b76056c448e3fbb98d8f31753cb922"
+    },
+    {
+      "path": "registry/safe/calldata-SafeMigration-1.5.0.json",
+      "upstream_bytes": 423,
+      "upstream_sha256": "f4417b28f6fbd246656ce086e58ff4a7cdafbdf4641cb6ce41e5fa0e5bc83399",
+      "replacement_bytes": 2752,
+      "replacement_sha256": "b70f527c35705a25a3492055a5280fa60c50c16d72f7f66d8efc134012eead1e"
+    },
+    {
+      "path": "registry/safe/calldata-SafeToL2Setup-1.4.1.json",
+      "upstream_bytes": 849,
+      "upstream_sha256": "7fd9874afb86c826631fd7612def21cb6a5e2e7da1393fa3556f2daccc0510fc",
+      "replacement_bytes": 3532,
+      "replacement_sha256": "6af611347e2e7aa77ad49ca98eb8a3b1b6707c4eb3896db50bff6f63a847ad14"
+    },
+    {
+      "path": "registry/safe/calldata-SafeToL2Setup-1.5.0.json",
+      "upstream_bytes": 423,
+      "upstream_sha256": "86a078a726e7612747b7ce4bca9a02a89be85422873f7c80c9a9f5367e06ccf8",
+      "replacement_bytes": 2063,
+      "replacement_sha256": "8f53ed30c53c42b9b7d087486ce1f54c7cef70f4d0810f4e5a4292a181d6381b"
+    },
+    {
+      "path": "registry/sei/calldata-sei-distribution.json",
+      "upstream_bytes": 1524,
+      "upstream_sha256": "ff7b9e735b767081f1460f8acfb7e030160176d42eaa76510afd3df2a78ac65d",
+      "replacement_bytes": 3686,
+      "replacement_sha256": "1a9d0276e3b4313afc0c2074a92365861fa76455c5627458ef578587c4536301"
+    },
+    {
+      "path": "registry/sei/calldata-sei-staking.json",
+      "upstream_bytes": 4269,
+      "upstream_sha256": "d64cf477971329437d25b0e7adc96891622c72071ab5b91ab0b2637a2121710a",
+      "replacement_bytes": 6922,
+      "replacement_sha256": "708fc07d622e2f29ce2ed2a9b5ea5fe51bc8909f57e5895802c2e8b1ed8e1970"
+    },
+    {
       "path": "registry/serenita/calldata-EthVault.json",
       "upstream_bytes": 3782,
       "upstream_sha256": "8058769e34b7bf4d9bb48ba2040a416f99a0c41b27827b57df26cc4d6cfe19b3",
       "replacement_bytes": 4199,
       "replacement_sha256": "250b5e04754fe1ffefff48341e2384f59fe4ba2960dac430b1d6cbf3a7e100df"
+    },
+    {
+      "path": "registry/smartcredit/eip712-smartcredit.json",
+      "upstream_bytes": 1191,
+      "upstream_sha256": "fc712f967fbb58a97852de70a26bef5307c09a647a51245aa0d2f3000f5bb799",
+      "replacement_bytes": 2254,
+      "replacement_sha256": "6ea662cc02ba82209032efcdb8dee03e1c0793d58af04cd26822c9b239231e46"
+    },
+    {
+      "path": "registry/starkgate/calldata-StarkGate-STRK.json",
+      "upstream_bytes": 1004,
+      "upstream_sha256": "5f62cef09fa63eafeb5ed357707958dec92c60f7673e056a532f0597207b961b",
+      "replacement_bytes": 2369,
+      "replacement_sha256": "c77fede77abd15b2ea0771b9dd2a4a2cf47bbcae5b2f2bf540517e9e5c238deb"
+    },
+    {
+      "path": "registry/swell/calldata-swell.json",
+      "upstream_bytes": 5499,
+      "upstream_sha256": "76ced7ef2f31d03275978f98aa3ff00bed94e5f66d0911da298827948cf95cd2",
+      "replacement_bytes": 13375,
+      "replacement_sha256": "1b9e683c4627e07880344434f13ef210c65ac6d474ddaaac7b86b7fb894add19"
+    },
+    {
+      "path": "registry/swissborg/calldata-ChsbToBorgMigrator.json",
+      "upstream_bytes": 928,
+      "upstream_sha256": "824af273ab4f2161726fc40a711d7ab047b604dec6380559f0970f6abed4dc0d",
+      "replacement_bytes": 2028,
+      "replacement_sha256": "8070acfa8866252d659316dad6179112210d412cf9654a3133741edd427c623f"
+    },
+    {
+      "path": "registry/swissborg/calldata-NttManager.json",
+      "upstream_bytes": 2846,
+      "upstream_sha256": "67624662a436152aee08819a3cdfe8362e6c51f5d7f70a5fc206ca890322f96e",
+      "replacement_bytes": 5240,
+      "replacement_sha256": "253146cdf0cf6074b6c116cad54910fecaf15c17f7f8b7ea645bed6ef42971d6"
+    },
+    {
+      "path": "registry/tally/eip712-tally-arbitrum-arb-token.json",
+      "upstream_bytes": 681,
+      "upstream_sha256": "29bd44cddc8ad4d068a9a165ba77fc5ed8fa5cb7927fed66285515900b67730f",
+      "replacement_bytes": 1452,
+      "replacement_sha256": "5fcc3eb008bc0cb893014fba1a08081ab6c8d91ad0d533f7544d22580c417a0d"
+    },
+    {
+      "path": "registry/tally/eip712-tally-arbitrum-core-governor.json",
+      "upstream_bytes": 647,
+      "upstream_sha256": "75f03c45cee2b33802a8c993dde71af035d93755f2007537057a8c028b80406a",
+      "replacement_bytes": 1351,
+      "replacement_sha256": "283d8e1ce2563f53d910a3a6e1098fcd51a1bb4d4d07c52a43e3f17722440178"
+    },
+    {
+      "path": "registry/tally/eip712-tally-arbitrum-treasury-governor.json",
+      "upstream_bytes": 651,
+      "upstream_sha256": "4f17200ecd86975f5935a9b380c95f2eba2e348977eb9a5cb41d849a0944b002",
+      "replacement_bytes": 1355,
+      "replacement_sha256": "23af6ecd24ddd85ea0299a698fb6ad5ed37d7eed745c7c987e7f7ef6886f53e4"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-bitcoin-governor.json",
+      "upstream_bytes": 608,
+      "upstream_sha256": "8b794c8b6df8b2af42ea437210561f28c381fc1bd67bd3b7365571f855be3e37",
+      "replacement_bytes": 1298,
+      "replacement_sha256": "e0e4c880336b1a31de3839e7c572efbc7c7940004b9522f8df411ed17611f437"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-bravo-governor.json",
+      "upstream_bytes": 617,
+      "upstream_sha256": "f4109af6491c92ee61d952506f47f9760083a015544bc7903c113328e9ae4390",
+      "replacement_bytes": 1317,
+      "replacement_sha256": "b50357dc939be71715512c04979af9fbe1c4f674965837542635ae7e880f67a0"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-ens-governor.json",
+      "upstream_bytes": 609,
+      "upstream_sha256": "89477daaffcacf1c4186458c309b834a17037f72555293affc6c7a5af7982282",
+      "replacement_bytes": 1302,
+      "replacement_sha256": "71d8f28613c6c5ae528678153901d1755a1bdaaabbd8ef0d68f68cc21444decc"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-ens-token.json",
+      "upstream_bytes": 703,
+      "upstream_sha256": "e38764c872c2f50dca399ab56ef8bf47771f2fa576be6094da286dc9c46fc70a",
+      "replacement_bytes": 1463,
+      "replacement_sha256": "010689887217765eee3396fec2a8a77adaf9b033521466e8918076893f57c660"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-gtk-token.json",
+      "upstream_bytes": 643,
+      "upstream_sha256": "92e7c7eab015581078a36ec3aaf21053471a42d07fd2f4bc2fb706e256c6c4d9",
+      "replacement_bytes": 1436,
+      "replacement_sha256": "795e27ffede1e7d6a4aed134e1a857e246f6fc5b8018388f125830aa07916428"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-hop-governor.json",
+      "upstream_bytes": 609,
+      "upstream_sha256": "d71c94825d76e4ef45fe6753050cd305f57d8c54be413bd4c8ae4996463d6628",
+      "replacement_bytes": 1302,
+      "replacement_sha256": "35cc04924cb3e592fef0c903df43c03758581cd4f02c7aa06d16eeec01414b92"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-hop-token.json",
+      "upstream_bytes": 667,
+      "upstream_sha256": "e50e7daf5c591b3e3f51797f4027f954830a4d0370bf29bafbe3b2696da1ada0",
+      "replacement_bytes": 1427,
+      "replacement_sha256": "0368eddfc774de060ee555ffd57629be4bf5536164e68d3ab74c6b7fefabf509"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-pool-token.json",
+      "upstream_bytes": 670,
+      "upstream_sha256": "dce453fb1d226b36c143b6f4a5bebc6fd55bbe45db75d123a42de93f320ef808",
+      "replacement_bytes": 1422,
+      "replacement_sha256": "666c6ce8478428cd5fdebcc9471397038483cdd8683f83af66949825c5b29798"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-pooltogether-governor.json",
+      "upstream_bytes": 637,
+      "upstream_sha256": "7e58b79667aa698dd29c8fdf0a49c4bbd4f5f9d02f560128340d9e694a55206e",
+      "replacement_bytes": 1320,
+      "replacement_sha256": "f8f2fb1581c4ff643390d9c080b32bfe7131e5a3c0bfdc04a47e05206b7ad117"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-uni-token.json",
+      "upstream_bytes": 643,
+      "upstream_sha256": "954f456bdc5de2d7ee521a7cf97e9ab977129ce7f102463ad340973db2d2fc26",
+      "replacement_bytes": 1411,
+      "replacement_sha256": "67a7bd7ca457da491e03d8be1e323123d81bb627f50185f59b60e2053a5ed528"
     },
     {
       "path": "registry/tether/calldata-usdt.json",
@@ -590,6 +1227,27 @@
       "upstream_sha256": "8173d5e8ff661452629c1c4ebb2427fef452a2d36dadc29fe6bb8dc850b911d2",
       "replacement_bytes": 3259,
       "replacement_sha256": "e3157a468d0de22734eb77b5c7a8a83a6b74f02ebe5bb23213dcea638300afae"
+    },
+    {
+      "path": "registry/threshold/calldata-L2WormholeGateway.json",
+      "upstream_bytes": 3034,
+      "upstream_sha256": "c6d8f5d249d87262b4e7b773f2704284bcbccf16add98805c559e6850ea8db55",
+      "replacement_bytes": 9490,
+      "replacement_sha256": "33da5b323a5179132f5b8b77b1a6498614eec6e301b3551569257ceba09371d9"
+    },
+    {
+      "path": "registry/threshold/calldata-RebateStaking.json",
+      "upstream_bytes": 2681,
+      "upstream_sha256": "faf0d5dd2af84932fc9b28f9377342ffa97c00908b73d4df54dd42ab433687fa",
+      "replacement_bytes": 4287,
+      "replacement_sha256": "196252af4198d2a70353c67d83c3456affc9d6ac1fd0935281624c5bfc0533a2"
+    },
+    {
+      "path": "registry/threshold/calldata-TBTCVault.json",
+      "upstream_bytes": 1648,
+      "upstream_sha256": "d400b13feb9325866be7d25ec9f042f435bcae53cebeedd56a97f90673ebfa05",
+      "replacement_bytes": 3851,
+      "replacement_sha256": "42c8a2ed1a672d3282472bdc6665eba93543b9fad7501f241247684bd91b8981"
     },
     {
       "path": "registry/uniswap/calldata-UniswapV3Router02.json",
@@ -634,6 +1292,13 @@
       "replacement_sha256": "585cda2929c5e88e35d6c98aa6b8edd38e01a03288123d1d6bc60635c2119204"
     },
     {
+      "path": "registry/walletconnect/calldata-stakeweight.json",
+      "upstream_bytes": 2842,
+      "upstream_sha256": "c904f53118c650b0a14db5e2eccc17c7bebc2e3e19f05e4de85134fdede280ef",
+      "replacement_bytes": 4523,
+      "replacement_sha256": "080d57756134a8dbbd303a7243143bdf134f9ea60d30eeb21ee963a96a8ed35c"
+    },
+    {
       "path": "registry/walletconnect/calldata-wct.json",
       "upstream_bytes": 1818,
       "upstream_sha256": "879e6399ee0cbc2a94c99cb6c925322e9419062759a4a45f73e6640aa33f5f6f",
@@ -646,6 +1311,20 @@
       "upstream_sha256": "ac899b0b8b09ea9b3d19ea068124288fabcb74ab08681eaa491bcf109cd0464d",
       "replacement_bytes": 876,
       "replacement_sha256": "ff21a25056339b58747d4b00d963705548de2853d67562a4af642c0976b633e2"
+    },
+    {
+      "path": "registry/yieldxyz/calldata-yieldxyz-pol-validator.json",
+      "upstream_bytes": 3106,
+      "upstream_sha256": "97650028e1dd83e4c2584f4320c88fcfb362b1a451ab052958af4904da0c109f",
+      "replacement_bytes": 5189,
+      "replacement_sha256": "228c94c88a052eb44b8f96a33238247fe1f2d26734f897e7f1c91eaa1eb419eb"
+    },
+    {
+      "path": "registry/yieldxyz/calldata-yieldxyz-usde-vault.json",
+      "upstream_bytes": 3361,
+      "upstream_sha256": "41a8b443293132d8a64525f7947b500053311d872ce02980b111004280b39f31",
+      "replacement_bytes": 4888,
+      "replacement_sha256": "75efc68f4c2dcc96699c2d04b9c7519249e8900f6e2d162ec74e7f345dd7770b"
     }
   ]
 }

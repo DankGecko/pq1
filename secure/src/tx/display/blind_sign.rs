@@ -12,9 +12,9 @@
 use sha2::{Digest, Sha256};
 
 use super::primitives::{
-    write_addr_full_or_name, write_calldata_hash_rows, write_chain, write_data_len_row, write_gas,
-    write_gwei, write_line, write_native_amount_two_rows, write_native_currency_row,
-    write_native_fee_budget_row, write_nonce_row, write_selector_row, write_tip_row, AmountFit,
+    build_legacy_fee_pages, write_addr_full_or_name, write_calldata_hash_rows, write_chain,
+    write_data_len_row, write_line, write_native_amount_two_rows, write_native_currency_row,
+    write_nonce_row, write_selector_row, AmountFit,
 };
 use super::Pages;
 use crate::names::NameResolver;
@@ -139,24 +139,17 @@ pub fn render_blind_sign_pages(
     write_line(&mut pages.buf[next_page][3], "> next");
     next_page += 1;
 
-    // ── Max fee + tip ───────────────────────────────────────────────
-    write_line(&mut pages.buf[next_page][0], "Max fee:");
-    let _ = write_gwei(&mut pages.buf[next_page][1], &tx.max_fee_per_gas);
-    write_tip_row(&mut pages.buf[next_page][2], &tx.max_priority_fee_per_gas);
-    write_line(&mut pages.buf[next_page][3], "> next");
-    next_page += 1;
-
-    // ── Worst-case fee budget + gas ─────────────────────────────────
-    write_line(&mut pages.buf[next_page][0], "Worst-case:");
-    write_native_fee_budget_row(
-        &mut pages.buf[next_page][1],
+    // ── Exact max/tip and worst-case fee envelope ───────────────────
+    let fee_pages = build_legacy_fee_pages(
         &tx.max_fee_per_gas,
+        &tx.max_priority_fee_per_gas,
         tx.gas_limit,
         tx.chain_id,
-    );
-    write_gas(&mut pages.buf[next_page][2], tx.gas_limit);
-    write_line(&mut pages.buf[next_page][3], "> next");
-    next_page += 1;
+    )
+    .pages;
+    pages.buf[next_page] = fee_pages[0];
+    pages.buf[next_page + 1] = fee_pages[1];
+    next_page += 2;
 
     // ── Nonce + buttons ─────────────────────────────────────────────
     write_nonce_row(&mut pages.buf[next_page][0], tx.nonce);

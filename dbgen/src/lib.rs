@@ -365,9 +365,9 @@ mod tests {
                 descriptor_count: 7,
                 provenance: erc7730::CatalogueProvenance::DevUnattested,
                 status: &status,
-                forced_eligible_len: 32_528,
-                forced_eligible_group_count: 546,
-                forced_eligible_count: 3_214,
+                forced_eligible_len: 33_336,
+                forced_eligible_group_count: 560,
+                forced_eligible_count: 3_290,
             },
             Erc7730SecurityTailInput {
                 root: &[0x22; 32],
@@ -391,7 +391,7 @@ mod tests {
                 .count(),
             2
         );
-        assert!(tail.contains("pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: [u8; 32528] ="));
+        assert!(tail.contains("pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: [u8; 33336] ="));
         assert!(tail.contains("pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: [u8; 16] ="));
         assert!(!tail.contains("pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: &[u8"));
         assert_eq!(

@@ -10,6 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use dbgen::erc7730::{build_db_tolerant_with_erc20_capabilities, Emitted, Erc7730BuildResult};
+use pqsigner_erc7730::binding::{cross_check_eip712, BindingError};
+use pqsigner_erc7730::bundle::verify_erc7730_bundle;
+use pqsigner_erc7730::display::render::render_erc7730_eip712_pages_v3;
+use pqsigner_erc7730::ir::ContextKind;
+use pqsigner_erc7730::render::RenderErr;
+use pqsigner_tx::names::NameResolver;
 use pqsigner_tx_core::hash::keccak256;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -25,6 +32,14 @@ const ROUTER_IMPLEMENTATION: &str = "b823359367978a28eae71e90f79d95b62348bd80";
 const NATIVE_TOKEN_AT_BLOCK: &str = "b0f70c0bd6fd87dbeb7c10dc692a2a6106817072";
 const OFFICIAL_COMMIT: &str = "bfd32248badaa2fb35a453f17f3c181badfb3dd6";
 const OFFICIAL_TREE: &str = "5278bc4c8f292e58dac2ba21fe016df1e810fc18";
+const EIP712_DESCRIPTOR: &str = "registry/lombard/eip712-network-fee-authorization-mainnet.json";
+const DOMAIN_TYPE: &str =
+    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
+const DOMAIN_NAME: &str = "Lombard Staked Bitcoin";
+const DOMAIN_VERSION: &str = "1";
+const FEE_APPROVAL_TYPE: &str = "feeApproval(uint256 chainId,uint256 fee,uint256 expiry)";
+const FEE_APPROVAL_TYPEHASH: &str =
+    "40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725";
 const BATCHES: [&str; 6] = [
     "identity",
     "lbtc-state",
@@ -52,6 +67,10 @@ fn workspace_root() -> PathBuf {
 
 fn evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/lombard-lbtc")
+}
+
+fn upstream_fixture_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-upstream-fixtures/registry-v2/lombard/testsv2")
 }
 
 fn read_json(path: &Path) -> Value {
@@ -182,6 +201,81 @@ fn abi_signature(function: &Value) -> String {
     format!("{name}({types})")
 }
 
+fn address(text: &str) -> [u8; 20] {
+    decode_hex(text)
+        .try_into()
+        .unwrap_or_else(|bytes: Vec<u8>| panic!("address has {} bytes", bytes.len()))
+}
+
+fn production_registry() -> Erc7730BuildResult {
+    let root = workspace_root();
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry")
+    .0
+}
+
+fn synth_bundle(registry: &Erc7730BuildResult, entry: &Emitted) -> Vec<u8> {
+    let depth = u32::from_le_bytes(registry.blob[24..28].try_into().unwrap()) as usize;
+    let proofs_off = u32::from_le_bytes(registry.blob[28..32].try_into().unwrap()) as usize;
+    let proof_base = proofs_off + entry.leaf_index * depth * 32;
+    let mut bundle = Vec::with_capacity(2 + entry.ir_bytes.len() + 8 + depth * 32);
+    bundle.extend_from_slice(&(entry.ir_bytes.len() as u16).to_be_bytes());
+    bundle.extend_from_slice(&entry.ir_bytes);
+    bundle.extend_from_slice(&(entry.leaf_index as u32).to_be_bytes());
+    bundle.extend_from_slice(&(depth as u32).to_be_bytes());
+    bundle.extend_from_slice(&registry.blob[proof_base..proof_base + depth * 32]);
+    bundle
+}
+
+fn eip712_domain_separator_with_name(name: &str, chain_id: u64, contract: &[u8; 20]) -> [u8; 32] {
+    let mut encoded = [0u8; 160];
+    encoded[..32].copy_from_slice(&keccak256(DOMAIN_TYPE.as_bytes()));
+    encoded[32..64].copy_from_slice(&keccak256(name.as_bytes()));
+    encoded[64..96].copy_from_slice(&keccak256(DOMAIN_VERSION.as_bytes()));
+    encoded[120..128].copy_from_slice(&chain_id.to_be_bytes());
+    encoded[140..160].copy_from_slice(contract);
+    keccak256(&encoded)
+}
+
+fn eip712_domain_separator(chain_id: u64, contract: &[u8; 20]) -> [u8; 32] {
+    eip712_domain_separator_with_name(DOMAIN_NAME, chain_id, contract)
+}
+
+fn word_u128(value: u128) -> [u8; 32] {
+    let mut word = [0u8; 32];
+    word[16..].copy_from_slice(&value.to_be_bytes());
+    word
+}
+
+fn pages_text(pages: &pqsigner_erc7730::display::Pages) -> String {
+    pages
+        .as_slice()
+        .iter()
+        .flat_map(|page| page.iter())
+        .map(|row| String::from_utf8_lossy(row).trim().to_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn raw_word_transcript(label: &str, word: &[u8; 32]) -> String {
+    let encoded = hex::encode(word);
+    format!(
+        "{label}\n{}\n{}\n1/2 > next\n{label}\n{}\n{}\n2/2 > next",
+        &encoded[0..16],
+        &encoded[16..32],
+        &encoded[32..48],
+        &encoded[48..64]
+    )
+}
+
 #[test]
 fn evidence_manifest_receipts_every_archived_byte() {
     let evidence = evidence_root();
@@ -203,6 +297,38 @@ fn evidence_manifest_receipts_every_archived_byte() {
     assert_eq!(
         manifest["official_source"]["tree"].as_str(),
         Some(OFFICIAL_TREE)
+    );
+    assert_eq!(
+        manifest["eip712"]["deployment"]["chain_id"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        manifest["eip712"]["deployment"]["verifying_contract"].as_str(),
+        Some("0x8236a87084f8b84306f72007f36f2618a5634494")
+    );
+    assert_eq!(
+        manifest["eip712"]["domain"]["canonical_type"].as_str(),
+        Some(DOMAIN_TYPE)
+    );
+    assert_eq!(
+        manifest["eip712"]["domain"]["name"].as_str(),
+        Some(DOMAIN_NAME)
+    );
+    assert_eq!(
+        manifest["eip712"]["domain"]["version"].as_str(),
+        Some(DOMAIN_VERSION)
+    );
+    assert_eq!(
+        manifest["eip712"]["primary_type"]["canonical_type"].as_str(),
+        Some(FEE_APPROVAL_TYPE)
+    );
+    assert_eq!(
+        manifest["eip712"]["primary_type"]["typehash"].as_str(),
+        Some(format!("0x{FEE_APPROVAL_TYPEHASH}").as_str())
+    );
+    assert_eq!(
+        hex::encode(keccak256(FEE_APPROVAL_TYPE.as_bytes())),
+        FEE_APPROVAL_TYPEHASH
     );
 
     let mut actual = BTreeSet::new();
@@ -467,6 +593,38 @@ fn exact_abi_and_sources_support_only_the_claimed_signed_meaning() {
         "$.mailbox.send( $.ledgerChainId, gmpRecipient, Assets.LEDGER_CALLER, rawPayload );"
     ));
     assert!(router.contains("tokenContract.burn(fromAddress, amount + fee);"));
+    assert!(router.contains(
+        "uint256 fee = Math.min( $.tokenConfigs[token].maximumMintCommission, feeAction.fee );"
+    ));
+    assert!(router.contains(
+        "bytes32 digest = tokenContract.getFeeDigest( feeAction.fee, feeAction.expiry );"
+    ));
+    assert!(router.contains("Assert.feeApproval(digest, recipient, userSignature);"));
+
+    let base_lbtc = normalized(&read_text(
+        &evidence.join("source/verified/staked/contracts/LBTC/BaseLBTC.sol"),
+    ));
+    assert!(base_lbtc.contains("Actions.FEE_APPROVAL_EIP712_ACTION, block.chainid, fee, expiry"));
+    assert!(base_lbtc.contains("_hashTypedDataV4("));
+
+    let actions = normalized(&read_text(
+        &evidence.join("source/verified/staked/contracts/libs/Actions.sol"),
+    ));
+    assert!(actions.contains(
+        "bytes32 internal constant FEE_APPROVAL_EIP712_ACTION = 0x40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725;"
+    ));
+
+    assert!(staked.contains("__ERC20Permit_init(\"Lombard Staked Bitcoin\");"));
+    let eip712 = normalized(&read_text(&evidence.join(
+        "source/verified/staked/@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol",
+    )));
+    assert!(eip712.contains(
+        "keccak256(abi.encode(TYPE_HASH, _EIP712NameHash(), _EIP712VersionHash(), block.chainid, address(this)))"
+    ));
+    let erc20_permit = normalized(&read_text(&evidence.join(
+        "source/verified/staked/@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol",
+    )));
+    assert!(erc20_permit.contains("__EIP712_init_unchained(name, \"1\");"));
 
     let erc20 = normalized(&read_text(&evidence.join(
         "source/verified/staked/@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol",
@@ -512,6 +670,25 @@ fn exact_abi_and_sources_support_only_the_claimed_signed_meaning() {
         .get("redeemForBtc(bytes scriptPubkey, uint256 amount)")
         .is_some());
 
+    let fee_descriptor = read_json(
+        &workspace_root()
+            .join("secure/data/erc7730-registry")
+            .join(EIP712_DESCRIPTOR),
+    );
+    assert_eq!(
+        fee_descriptor["_pqsigner"]["deploymentFormats"][0]["formats"],
+        serde_json::json!([FEE_APPROVAL_TYPE])
+    );
+    let fee_field = &fee_descriptor["display"]["formats"][FEE_APPROVAL_TYPE]["fields"][1];
+    assert_eq!(
+        fee_descriptor["display"]["formats"][FEE_APPROVAL_TYPE]["intent"],
+        "Max LBTC fee"
+    );
+    assert_eq!(fee_field["label"], "Base units (hex)");
+    assert_eq!(fee_field["format"], "raw");
+    assert!(fee_field.get("params").is_none());
+    assert_eq!(fee_field["visible"], "always");
+
     let request_state = read_json(&evidence.join("rpc/raw/request-lbtc-state.json"));
     assert_eq!(
         request(&request_state, "lbtc-implementation-slot")["params"][1].as_str(),
@@ -524,4 +701,383 @@ fn exact_abi_and_sources_support_only_the_claimed_signed_meaning() {
             .trim_start_matches("0x"),
         LBTC_PROXY
     );
+}
+
+#[test]
+fn upstream_v2_fee_fixtures_preserve_mainnet_exactness_and_sepolia_refusal() {
+    let fixtures = [
+        (
+            "eip712-network-fee-authorization-mainnet.tests.json",
+            "43f8267b1804af15dd114772fe0a2d294324188c8281c3199ef8a40623220f03",
+            "eip712-network-fee-authorization-mainnet.json",
+            1u64,
+            "8236a87084f8b84306f72007f36f2618a5634494",
+            300_000_000_000_000u128,
+            1_779_321_600u64,
+            true,
+        ),
+        (
+            "eip712-network-fee-authorization-sepolia.tests.json",
+            "1ffa565c0d694bbe09fdbacafa115131f2946d8bfce06b0d6707e0d6532c2dfc",
+            "eip712-network-fee-authorization-sepolia.json",
+            11_155_111u64,
+            "731efa688f3679688cf60a3993b8658138953ed6",
+            2_000_000_000_000_000u128,
+            1_782_345_600u64,
+            false,
+        ),
+    ];
+    let expected_domain_members = serde_json::json!([
+        { "name": "name", "type": "string" },
+        { "name": "version", "type": "string" },
+        { "name": "chainId", "type": "uint256" },
+        { "name": "verifyingContract", "type": "address" }
+    ]);
+    let expected_fee_members = serde_json::json!([
+        { "name": "chainId", "type": "uint256" },
+        { "name": "fee", "type": "uint256" },
+        { "name": "expiry", "type": "uint256" }
+    ]);
+    let registry = production_registry();
+    let registry_root = workspace_root().join("secure/data/erc7730-registry/registry/lombard");
+    let typehash = keccak256(FEE_APPROVAL_TYPE.as_bytes());
+    let resolver = NameResolver::new();
+
+    for (
+        fixture_name,
+        fixture_sha256,
+        source_name,
+        chain_id,
+        contract_hex,
+        expected_fee,
+        expected_expiry,
+        admitted,
+    ) in fixtures
+    {
+        let fixture_path = upstream_fixture_root().join(fixture_name);
+        let fixture_bytes = fs::read(&fixture_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", fixture_path.display()));
+        assert_eq!(
+            sha256_hex(&fixture_bytes),
+            fixture_sha256,
+            "{fixture_name} must remain the exact pulled registry-v2 artifact"
+        );
+        let fixture: Value = serde_json::from_slice(&fixture_bytes)
+            .unwrap_or_else(|error| panic!("parse {}: {error}", fixture_path.display()));
+        assert_eq!(
+            fixture["$schema"].as_str(),
+            Some("../../../specs/erc7730-tests-v2.schema.json")
+        );
+        let expected_descriptor = format!("../{source_name}");
+        assert_eq!(
+            fixture["descriptor"].as_str(),
+            Some(expected_descriptor.as_str())
+        );
+        let tests = fixture["tests"].as_array().expect("fixture tests");
+        assert_eq!(tests.len(), 1, "fixture has one signed case");
+        let test = &tests[0];
+        assert_eq!(
+            test["description"].as_str(),
+            Some("Lombard Network Fee Authorization")
+        );
+        let data = &test["data"];
+        assert_eq!(data["primaryType"].as_str(), Some("feeApproval"));
+        assert_eq!(data["types"]["EIP712Domain"], expected_domain_members);
+        assert_eq!(data["types"]["feeApproval"], expected_fee_members);
+        assert_eq!(
+            data["types"].as_object().expect("fixture type map").len(),
+            2,
+            "no unexamined signed types"
+        );
+        let domain = &data["domain"];
+        assert_eq!(domain["name"].as_str(), Some(DOMAIN_NAME));
+        assert_eq!(domain["version"].as_str(), Some(DOMAIN_VERSION));
+        assert_eq!(domain["chainId"].as_u64(), Some(chain_id));
+        assert_eq!(
+            domain["verifyingContract"]
+                .as_str()
+                .expect("fixture verifying contract")
+                .trim_start_matches("0x")
+                .to_ascii_lowercase(),
+            contract_hex
+        );
+        assert_eq!(
+            domain.as_object().expect("fixture domain").len(),
+            4,
+            "domain shape is exact"
+        );
+        let message = &data["message"];
+        assert_eq!(
+            message
+                .as_object()
+                .expect("fixture feeApproval message")
+                .len(),
+            3,
+            "every signed feeApproval member is inspected"
+        );
+        assert_eq!(message["chainId"].as_u64(), Some(chain_id));
+        let fixture_fee = message["fee"]
+            .as_str()
+            .map(|value| value.parse::<u128>().expect("decimal fixture fee"))
+            .or_else(|| message["fee"].as_u64().map(u128::from))
+            .expect("fixture fee is a uint");
+        assert_eq!(fixture_fee, expected_fee);
+        assert_eq!(message["expiry"].as_u64(), Some(expected_expiry));
+
+        let contract = address(
+            domain["verifyingContract"]
+                .as_str()
+                .expect("fixture verifying contract"),
+        );
+        let source = registry_root.join(source_name);
+        if admitted {
+            assert_eq!(
+                source,
+                workspace_root()
+                    .join("secure/data/erc7730-registry")
+                    .join(EIP712_DESCRIPTOR),
+                "mainnet fixture must bind the exact curated source"
+            );
+            let entry = registry
+                .entries
+                .iter()
+                .find(|entry| {
+                    entry.chain_id == chain_id
+                        && entry.contract == contract
+                        && entry.source == source
+                })
+                .expect("mainnet fixture maps to one production catalogue leaf");
+            let bundle = synth_bundle(&registry, entry);
+            let verified = verify_erc7730_bundle(&bundle, &registry.root)
+                .expect("mainnet fixture Merkle proof verifies");
+            assert_eq!(verified.ir.context_kind, ContextKind::Eip712);
+            assert_eq!(verified.ir.chain_id, chain_id);
+            assert_eq!(verified.ir.contract, contract);
+            assert_eq!(verified.ir.format_count(), Ok(1));
+            let domain_separator = eip712_domain_separator(chain_id, &contract);
+            assert_eq!(verified.ir.domain_separator, domain_separator);
+            assert_eq!(
+                cross_check_eip712(&verified.ir, chain_id, &domain_separator),
+                Ok(())
+            );
+
+            let chain_word = word_u128(u128::from(chain_id));
+            let fee_word = word_u128(fixture_fee);
+            let expiry_word = word_u128(u128::from(expected_expiry));
+            let encoded = [chain_word, fee_word, expiry_word].concat();
+            let pages = render_erc7730_eip712_pages_v3(
+                chain_id,
+                &contract,
+                &typehash,
+                &encoded,
+                &[],
+                &verified,
+                None,
+                &resolver,
+            )
+            .expect("mainnet fixture renders through the production catalogue");
+            let text = pages_text(&pages);
+            assert!(text.contains("Max LBTC fee"));
+            assert!(
+                text.contains(&raw_word_transcript("Chain ID", &chain_word)),
+                "complete signed chain word is missing:\n{text}"
+            );
+            assert!(
+                text.contains(&raw_word_transcript("Base units (hex)", &fee_word)),
+                "complete exact raw base-unit fee is missing:\n{text}"
+            );
+            assert!(
+                text.contains("Expiry\n2026-05-21\n00:00:00 UTC"),
+                "exact expiry is missing:\n{text}"
+            );
+            assert!(
+                !text.contains("0.0003 ETH"),
+                "unauthenticated upstream denomination must not replace raw LBTC base units"
+            );
+        } else {
+            let descriptor = read_json(&source);
+            assert_eq!(
+                descriptor["_pqsigner"]["deploymentFormats"],
+                serde_json::json!([])
+            );
+            assert_eq!(
+                descriptor["_pqsigner"]["refusalOnlyFormats"],
+                serde_json::json!([FEE_APPROVAL_TYPE])
+            );
+            assert!(
+                !registry.entries.iter().any(|entry| entry.source == source),
+                "Sepolia refusal-only descriptor must emit no production leaf"
+            );
+            assert!(
+                !registry.entries.iter().any(|entry| {
+                    if entry.chain_id != chain_id || entry.contract != contract {
+                        return false;
+                    }
+                    let ir = pqsigner_erc7730::ir::Erc7730Ir::parse(&entry.ir_bytes)
+                        .expect("production IR parses");
+                    ir.context_kind == ContextKind::Eip712
+                        && ir
+                            .format_iter()
+                            .any(|format| format.is_ok_and(|format| format.type_hash == typehash))
+                }),
+                "Sepolia feeApproval tuple must remain unregistered and therefore unrenderable"
+            );
+        }
+    }
+}
+
+#[test]
+fn mainnet_fee_approval_is_exactly_bound_and_renders_production_raw_base_units() {
+    let registry = production_registry();
+    let registry_root = workspace_root().join("secure/data/erc7730-registry");
+    let contract = address(LBTC_PROXY);
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.contract == contract
+                && entry.source == registry_root.join(EIP712_DESCRIPTOR)
+        })
+        .expect("admitted mainnet Lombard feeApproval leaf");
+
+    let bundle = synth_bundle(&registry, entry);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root)
+        .expect("mainnet Lombard feeApproval Merkle proof verifies");
+    assert_eq!(verified.ir.context_kind, ContextKind::Eip712);
+    assert_eq!(verified.ir.chain_id, 1);
+    assert_eq!(verified.ir.contract, contract);
+    assert_eq!(verified.ir.format_count(), Ok(1));
+
+    let domain_separator = eip712_domain_separator(1, &contract);
+    assert_eq!(verified.ir.domain_separator, domain_separator);
+    assert_eq!(
+        cross_check_eip712(&verified.ir, 1, &domain_separator),
+        Ok(())
+    );
+    assert_eq!(
+        cross_check_eip712(&verified.ir, 2, &domain_separator),
+        Err(BindingError::ChainIdMismatch)
+    );
+    assert_eq!(
+        cross_check_eip712(
+            &verified.ir,
+            1,
+            &eip712_domain_separator_with_name("Not Lombard Staked Bitcoin", 1, &contract)
+        ),
+        Err(BindingError::DomainSeparatorMismatch)
+    );
+    let mut wrong_contract = contract;
+    wrong_contract[19] ^= 1;
+    assert_eq!(
+        cross_check_eip712(
+            &verified.ir,
+            1,
+            &eip712_domain_separator(1, &wrong_contract)
+        ),
+        Err(BindingError::DomainSeparatorMismatch)
+    );
+
+    let typehash = keccak256(FEE_APPROVAL_TYPE.as_bytes());
+    assert_eq!(hex::encode(typehash), FEE_APPROVAL_TYPEHASH);
+    let resolver = NameResolver::new();
+    let exact_fee = word_u128(123_456_700);
+    let exact = [word_u128(1), exact_fee, word_u128(1_800_000_000)].concat();
+    let pages = render_erc7730_eip712_pages_v3(
+        1,
+        &contract,
+        &typehash,
+        &exact,
+        &[],
+        &verified,
+        None,
+        &resolver,
+    )
+    .expect("production metadata-less LBTC fee renders as raw base units");
+    let text = pages_text(&pages);
+    assert!(
+        text.contains("Max LBTC fee"),
+        "maximum-fee intent missing:\n{text}"
+    );
+    assert!(
+        text.contains("Base units (hex)"),
+        "base-unit radix label missing:\n{text}"
+    );
+    let exact_hex = hex::encode(exact_fee);
+    let exact_raw_pages = format!(
+        "Base units (hex)\n{}\n{}\n1/2 > next\nBase units (hex)\n{}\n{}\n2/2 > next",
+        &exact_hex[0..16],
+        &exact_hex[16..32],
+        &exact_hex[32..48],
+        &exact_hex[48..64]
+    );
+    assert!(
+        text.contains(&exact_raw_pages),
+        "complete signed fee word missing:\n{text}"
+    );
+
+    let wrong_signed_chain = [word_u128(2), exact_fee, word_u128(1_800_000_000)].concat();
+    let wrong_signed_chain_result = render_erc7730_eip712_pages_v3(
+        1,
+        &contract,
+        &typehash,
+        &wrong_signed_chain,
+        &[],
+        &verified,
+        None,
+        &resolver,
+    );
+    assert!(
+        matches!(
+            wrong_signed_chain_result,
+            Err(RenderErr::Reject("7730 word guard failed"))
+        ),
+        "Lombard constructs feeApproval with block.chainid, so the signed chainId word must equal the authenticated deployment chain"
+    );
+
+    let adjacent_fee = word_u128(123_456_701);
+    let adjacent = [word_u128(1), adjacent_fee, word_u128(1_800_000_000)].concat();
+    let adjacent_pages = render_erc7730_eip712_pages_v3(
+        1,
+        &contract,
+        &typehash,
+        &adjacent,
+        &[],
+        &verified,
+        None,
+        &resolver,
+    )
+    .expect("adjacent raw base-unit fee renders without rounding");
+    let adjacent_text = pages_text(&adjacent_pages);
+    let adjacent_hex = hex::encode(adjacent_fee);
+    let adjacent_raw_pages = format!(
+        "Base units (hex)\n{}\n{}\n1/2 > next\nBase units (hex)\n{}\n{}\n2/2 > next",
+        &adjacent_hex[0..16],
+        &adjacent_hex[16..32],
+        &adjacent_hex[32..48],
+        &adjacent_hex[48..64]
+    );
+    assert!(
+        adjacent_text.contains(&adjacent_raw_pages),
+        "adjacent complete signed fee word missing:\n{adjacent_text}"
+    );
+    assert_ne!(
+        text, adjacent_text,
+        "distinct signed base-unit values must remain visibly distinct"
+    );
+
+    let wrong_typehash = keccak256(b"feeApproval(uint256 chainId,uint256 fee,uint64 expiry)");
+    assert!(matches!(
+        render_erc7730_eip712_pages_v3(
+            1,
+            &contract,
+            &wrong_typehash,
+            &exact,
+            &[],
+            &verified,
+            None,
+            &resolver,
+        ),
+        Err(RenderErr::NoFormat)
+    ));
 }

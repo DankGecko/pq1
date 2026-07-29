@@ -1,0 +1,836 @@
+{
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "upgradeActivationDelay",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "implementation",
+          "type": "address"
+        }
+      ],
+      "name": "FinalizedImplementation",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "implementation",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes",
+          "name": "initializer",
+          "type": "bytes"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "finalize",
+          "type": "bool"
+        }
+      ],
+      "name": "ImplementationAdded",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "implementation",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes",
+          "name": "initializer",
+          "type": "bytes"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "finalize",
+          "type": "bool"
+        }
+      ],
+      "name": "ImplementationRemoved",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "implementation",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes",
+          "name": "initializer",
+          "type": "bytes"
+        }
+      ],
+      "name": "ImplementationUpgraded",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "role",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "previousAdminRole",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "newAdminRole",
+          "type": "bytes32"
+        }
+      ],
+      "name": "RoleAdminChanged",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "role",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "sender",
+          "type": "address"
+        }
+      ],
+      "name": "RoleGranted",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "role",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "sender",
+          "type": "address"
+        }
+      ],
+      "name": "RoleRevoked",
+      "type": "event"
+    },
+    {
+      "stateMutability": "payable",
+      "type": "fallback"
+    },
+    {
+      "inputs": [],
+      "name": "ENABLE_WINDOW_DURATION_SLOT",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "MAX_UPGRADE_DELAY",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "PROXY_VERSION",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "UPGRADE_DELAY_SLOT",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newImplementation",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        },
+        {
+          "internalType": "bool",
+          "name": "finalize",
+          "type": "bool"
+        }
+      ],
+      "name": "addImplementation",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getEnableWindowDuration",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "duration",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getUpgradeActivationDelay",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "delay",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "implementation",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "_implementation",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes",
+          "name": "",
+          "type": "bytes"
+        }
+      ],
+      "name": "initialize",
+      "outputs": [],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "isAppGovernor",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "isAppRoleAdmin",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "isGovernanceAdmin",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "isNotFinalized",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "notFinal",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "isOperator",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "isSecurityAdmin",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "isSecurityAgent",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "isTokenAdmin",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "isUpgradeGovernor",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "registerAppGovernor",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "registerAppRoleAdmin",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "registerGovernanceAdmin",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "registerOperator",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "registerSecurityAdmin",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "registerSecurityAgent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "registerTokenAdmin",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "registerUpgradeGovernor",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "removedImplementation",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        },
+        {
+          "internalType": "bool",
+          "name": "finalize",
+          "type": "bool"
+        }
+      ],
+      "name": "removeImplementation",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "role",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "renounceRole",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "revokeAppGovernor",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "revokeAppRoleAdmin",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "revokeGovernanceAdmin",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "revokeOperator",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "revokeSecurityAdmin",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "revokeSecurityAgent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "revokeTokenAdmin",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "revokeUpgradeGovernor",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newImplementation",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        },
+        {
+          "internalType": "bool",
+          "name": "finalize",
+          "type": "bool"
+        }
+      ],
+      "name": "upgradeTo",
+      "outputs": [],
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "stateMutability": "payable",
+      "type": "receive"
+    }
+  ],
+  "additional_sources": [
+    {
+      "file_path": "starkware/solidity/components/Roles.sol",
+      "source_code": "/*\n  Copyright 2019-2023 StarkWare Industries Ltd.\n\n  Licensed under the Apache License, Version 2.0 (the \"License\").\n  You may not use this file except in compliance with the License.\n  You may obtain a copy of the License at\n\n  https://www.starkware.co/open-source-license/\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an \"AS IS\" BASIS,\n  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n  See the License for the specific language governing permissions\n  and limitations under the License.\n*/\n// SPDX-License-Identifier: Apache-2.0.\npragma solidity ^0.8.0;\n\nimport \"starkware/solidity/libraries/RolesLib.sol\";\n\nabstract contract Roles {\n    // This flag dermine if the GOVERNANCE_ADMIN role can be renounced.\n    bool immutable fullyRenouncable;\n\n    constructor(bool renounceable) {\n        fullyRenouncable = renounceable;\n        RolesLib.initialize();\n    }\n\n    // MODIFIERS.\n    modifier onlyAppGovernor() {\n        require(isAppGovernor(AccessControl._msgSender()), \"ONLY_APP_GOVERNOR\");\n        _;\n    }\n\n    modifier onlyOperator() {\n        require(isOperator(AccessControl._msgSender()), \"ONLY_OPERATOR\");\n        _;\n    }\n\n    modifier onlySecurityAdmin() {\n        require(isSecurityAdmin(AccessControl._msgSender()), \"ONLY_SECURITY_ADMIN\");\n        _;\n    }\n\n    modifier onlySecurityAgent() {\n        require(isSecurityAgent(AccessControl._msgSender()), \"ONLY_SECURITY_AGENT\");\n        _;\n    }\n\n    modifier onlyTokenAdmin() {\n        require(isTokenAdmin(AccessControl._msgSender()), \"ONLY_TOKEN_ADMIN\");\n        _;\n    }\n\n    modifier onlyUpgradeGovernor() {\n        require(isUpgradeGovernor(AccessControl._msgSender()), \"ONLY_UPGRADE_GOVERNOR\");\n        _;\n    }\n\n    modifier notSelf(address account) {\n        require(account != AccessControl._msgSender(), \"CANNOT_PERFORM_ON_SELF\");\n        _;\n    }\n\n    // Is holding role.\n    function isAppGovernor(address account) public view returns (bool) {\n        return AccessControl.hasRole(APP_GOVERNOR, account);\n    }\n\n    function isAppRoleAdmin(address account) public view returns (bool) {\n        return AccessControl.hasRole(APP_ROLE_ADMIN, account);\n    }\n\n    function isGovernanceAdmin(address account) public view returns (bool) {\n        return AccessControl.hasRole(GOVERNANCE_ADMIN, account);\n    }\n\n    function isOperator(address account) public view returns (bool) {\n        return AccessControl.hasRole(OPERATOR, account);\n    }\n\n    function isSecurityAdmin(address account) public view returns (bool) {\n        return AccessControl.hasRole(SECURITY_ADMIN, account);\n    }\n\n    function isSecurityAgent(address account) public view returns (bool) {\n        return AccessControl.hasRole(SECURITY_AGENT, account);\n    }\n\n    function isTokenAdmin(address account) public view returns (bool) {\n        return AccessControl.hasRole(TOKEN_ADMIN, account);\n    }\n\n    function isUpgradeGovernor(address account) public view returns (bool) {\n        return AccessControl.hasRole(UPGRADE_GOVERNOR, account);\n    }\n\n    // Register Role.\n    function registerAppGovernor(address account) external {\n        AccessControl.grantRole(APP_GOVERNOR, account);\n    }\n\n    function registerAppRoleAdmin(address account) external {\n        AccessControl.grantRole(APP_ROLE_ADMIN, account);\n    }\n\n    function registerGovernanceAdmin(address account) external {\n        AccessControl.grantRole(GOVERNANCE_ADMIN, account);\n    }\n\n    function registerOperator(address account) external {\n        AccessControl.grantRole(OPERATOR, account);\n    }\n\n    function registerSecurityAdmin(address account) external {\n        AccessControl.grantRole(SECURITY_ADMIN, account);\n    }\n\n    function registerSecurityAgent(address account) external {\n        AccessControl.grantRole(SECURITY_AGENT, account);\n    }\n\n    function registerTokenAdmin(address account) external {\n        AccessControl.grantRole(TOKEN_ADMIN, account);\n    }\n\n    function registerUpgradeGovernor(address account) external {\n        AccessControl.grantRole(UPGRADE_GOVERNOR, account);\n    }\n\n    // Revoke Role.\n    function revokeAppGovernor(address account) external {\n        AccessControl.revokeRole(APP_GOVERNOR, account);\n    }\n\n    function revokeAppRoleAdmin(address account) external notSelf(account) {\n        AccessControl.revokeRole(APP_ROLE_ADMIN, account);\n    }\n\n    function revokeGovernanceAdmin(address account) external notSelf(account) {\n        AccessControl.revokeRole(GOVERNANCE_ADMIN, account);\n    }\n\n    function revokeOperator(address account) external {\n        AccessControl.revokeRole(OPERATOR, account);\n    }\n\n    function revokeSecurityAdmin(address account) external notSelf(account) {\n        AccessControl.revokeRole(SECURITY_ADMIN, account);\n    }\n\n    function revokeSecurityAgent(address account) external {\n        AccessControl.revokeRole(SECURITY_AGENT, account);\n    }\n\n    function revokeTokenAdmin(address account) external {\n        AccessControl.revokeRole(TOKEN_ADMIN, account);\n    }\n\n    function revokeUpgradeGovernor(address account) external {\n        AccessControl.revokeRole(UPGRADE_GOVERNOR, account);\n    }\n\n    // Renounce Role.\n    function renounceRole(bytes32 role, address account) external {\n        if (role == GOVERNANCE_ADMIN && !fullyRenouncable) {\n            revert(\"CANNOT_RENOUNCE_GOVERNANCE_ADMIN\");\n        }\n        AccessControl.renounceRole(role, account);\n    }\n}\n"
+    },
+    {
+      "file_path": "starkware/solidity/libraries/AccessControl.sol",
+      "source_code": "/*\n  Copyright 2019-2023 StarkWare Industries Ltd.\n\n  Licensed under the Apache License, Version 2.0 (the \"License\").\n  You may not use this file except in compliance with the License.\n  You may obtain a copy of the License at\n\n  https://www.starkware.co/open-source-license/\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an \"AS IS\" BASIS,\n  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n  See the License for the specific language governing permissions\n  and limitations under the License.\n*/\n// SPDX-License-Identifier: MIT\n// Based on OpenZeppelin Contract (access/AccessControl.sol)\n// StarkWare modification (storage slot, change to library).\n\npragma solidity ^0.8.0;\n\nimport \"third_party/open_zeppelin/utils/Strings.sol\";\n\n/*\n  Library module that allows using contracts to implement role-based access\n  control mechanisms. This is a lightweight version that doesn't allow enumerating role\n  members except through off-chain means by accessing the contract event logs. Some\n  applications may benefit from on-chain enumerability, for those cases see\n  {AccessControlEnumerable}.\n \n  Roles are referred to by their `bytes32` identifier. These should be exposed\n  in the external API and be unique. The best way to achieve this is by\n  using `public constant` hash digests:\n \n  ```\n  bytes32 public constant MY_ROLE = keccak256(\"MY_ROLE\");\n  ```\n \n  Roles can be used to represent a set of permissions. To restrict access to a\n  function call, use {hasRole}:\n \n  ```\n  function foo() public {\n      require(hasRole(MY_ROLE, msg.sender));\n      ...\n  }\n  ```\n \n  Roles can be granted and revoked dynamically via the {grantRole} and\n  {revokeRole} functions. Each role has an associated admin role, and only\n  accounts that have a role's admin role can call {grantRole} and {revokeRole}.\n \n  By default, the admin role for all roles is `DEFAULT_ADMIN_ROLE`, which means\n  that only accounts with this role will be able to grant or revoke other\n  roles. More complex role relationships can be created by using\n  {_setRoleAdmin}.\n \n  WARNING: The `DEFAULT_ADMIN_ROLE` is also its own admin: it has permission to\n  grant and revoke this role. Extra precautions should be taken to secure\n  accounts that have been granted it.\n \n  OpenZeppelin implementation changed as following:\n  1. Converted to library.\n  2. Storage valiable {_roles} moved outside of linear storage,\n     to avoid potential storage conflicts or corruption.\n  3. Removed ERC165 support.\n*/\nlibrary AccessControl {\n    /*\n      Emitted when `newAdminRole` is set as ``role``'s admin role, replacing `previousAdminRole`\n     \n      `DEFAULT_ADMIN_ROLE` is the starting admin for all roles, despite\n      {RoleAdminChanged} not being emitted signaling this.\n     \n      Available since v3.1.\n    */\n    event RoleAdminChanged(\n        bytes32 indexed role,\n        bytes32 indexed previousAdminRole,\n        bytes32 indexed newAdminRole\n    );\n\n    /*\n      Emitted when `account` is granted `role`.\n     \n      `sender` is the account that originated the contract call, an admin role\n      bearer except when using {AccessControl-_setupRole}.\n    */\n    event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender);\n\n    /*\n      Emitted when `account` is revoked `role`.\n     \n      `sender` is the account that originated the contract call:\n        - if using `revokeRole`, it is the admin role bearer\n        - if using `renounceRole`, it is the role bearer (i.e. `account`).\n    */\n    event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender);\n\n    struct RoleData {\n        mapping(address => bool) members;\n        bytes32 adminRole;\n    }\n\n    // Context interface functions.\n    function _msgSender() internal view returns (address) {\n        return msg.sender;\n    }\n\n    function _msgData() internal pure returns (bytes calldata) {\n        return msg.data;\n    }\n\n    // The storage variable `_roles` is located away from the contract linear area (low storage addresses)\n    // to prevent potential collision/corruption in upgrade scenario.\n    // Slot = Web3.keccak(text=\"AccesControl_Storage_Slot\").\n    bytes32 constant rolesSlot = 0x53e43b954ba190a7e49386f1f78b01dcd9f628db23f432fa029a7dfd6d98e8fb;\n\n    function _roles() private pure returns (mapping(bytes32 => RoleData) storage roles) {\n        assembly {\n            roles.slot := rolesSlot\n        }\n    }\n\n    bytes32 constant DEFAULT_ADMIN_ROLE = 0x00;\n\n    /*\n      Modifier that checks that an account has a specific role. Reverts\n      with a standardized message including the required role.\n      \n      The format of the revert reason is given by the following regular expression:\n      \n      /^AccessControl: account (0x[0-9a-f]{40}) is missing role (0x[0-9a-f]{64})$/\n      \n      Available since v4.1.\n    */\n    modifier onlyRole(bytes32 role) {\n        _checkRole(role);\n        _;\n    }\n\n    /*\n      Returns `true` if `account` has been granted `role`.\n    */\n    function hasRole(bytes32 role, address account) internal view returns (bool) {\n        return _roles()[role].members[account];\n    }\n\n    /*\n      Revert with a standard message if `_msgSender()` is missing `role`.\n      Overriding this function changes the behavior of the {onlyRole} modifier.\n     \n      Format of the revert message is described in {_checkRole}.\n     \n      Available since v4.6.\n    */\n    function _checkRole(bytes32 role) internal view {\n        _checkRole(role, _msgSender());\n    }\n\n    /*\n      Revert with a standard message if `account` is missing `role`.\n     \n      The format of the revert reason is given by the following regular expression:\n     \n       /^AccessControl: account (0x[0-9a-f]{40}) is missing role (0x[0-9a-f]{64})$/.\n    */\n    function _checkRole(bytes32 role, address account) internal view {\n        if (!hasRole(role, account)) {\n            revert(\n                string(\n                    abi.encodePacked(\n                        \"AccessControl: account \",\n                        Strings.toHexString(uint160(account), 20),\n                        \" is missing role \",\n                        Strings.toHexString(uint256(role), 32)\n                    )\n                )\n            );\n        }\n    }\n\n    /*\n      Returns the admin role that controls `role`. See {grantRole} and\n      {revokeRole}.\n     \n      To change a role's admin, use {_setRoleAdmin}.\n    */\n    function getRoleAdmin(bytes32 role) internal view returns (bytes32) {\n        return _roles()[role].adminRole;\n    }\n\n    /*\n      Grants `role` to `account`.\n     \n      If `account` had not been already granted `role`, emits a {RoleGranted}\n      event.\n     \n      Requirements:\n     \n      - the caller must have ``role``'s admin role.\n     \n      May emit a {RoleGranted} event.\n    */\n    function grantRole(bytes32 role, address account) internal onlyRole(getRoleAdmin(role)) {\n        _grantRole(role, account);\n    }\n\n    /*\n      Revokes `role` from `account`.\n     \n      If `account` had been granted `role`, emits a {RoleRevoked} event.\n     \n      Requirements:\n     \n      - the caller must have ``role``'s admin role.\n     \n      * May emit a {RoleRevoked} event.\n    */\n    function revokeRole(bytes32 role, address account) internal onlyRole(getRoleAdmin(role)) {\n        _revokeRole(role, account);\n    }\n\n    /*\n      Revokes `role` from the calling account.\n     \n      Roles are often managed via {grantRole} and {revokeRole}: this function's\n      purpose is to provide a mechanism for accounts to lose their privileges\n      if they are compromised (such as when a trusted device is misplaced).\n     \n      If the calling account had been revoked `role`, emits a {RoleRevoked}\n      event.\n     \n      Requirements:\n     \n      - the caller must be `account`.\n     \n      May emit a {RoleRevoked} event.\n    */\n    function renounceRole(bytes32 role, address account) internal {\n        require(account == _msgSender(), \"AccessControl: can only renounce roles for self\");\n\n        _revokeRole(role, account);\n    }\n\n    /*\n      Grants `role` to `account`.\n     \n      If `account` had not been already granted `role`, emits a {RoleGranted}\n      event. Note that unlike {grantRole}, this function doesn't perform any\n      checks on the calling account.\n     \n      May emit a {RoleGranted} event.\n     \n      [WARNING]virtual\n      ====\n      This function should only be called from the constructor when setting\n      up the initial roles for the system.\n     \n      Using this function in any other way is effectively circumventing the admin\n      system imposed by {AccessControl}.\n      ====\n     \n      NOTE: This function is deprecated in favor of {_grantRole}.\n    */\n    function _setupRole(bytes32 role, address account) internal {\n        _grantRole(role, account);\n    }\n\n    /*\n      Sets `adminRole` as ``role``'s admin role.\n     \n      Emits a {RoleAdminChanged} event.\n    */\n    function _setRoleAdmin(bytes32 role, bytes32 adminRole) internal {\n        bytes32 previousAdminRole = getRoleAdmin(role);\n        _roles()[role].adminRole = adminRole;\n        emit RoleAdminChanged(role, previousAdminRole, adminRole);\n    }\n\n    /*\n      Grants `role` to `account`.\n     \n      Internal function without access restriction.\n     \n      May emit a {RoleGranted} event.\n    */\n    function _grantRole(bytes32 role, address account) internal {\n        if (!hasRole(role, account)) {\n            _roles()[role].members[account] = true;\n            emit RoleGranted(role, account, _msgSender());\n        }\n    }\n\n    /*\n      Revokes `role` from `account`.\n     \n      Internal function without access restriction.\n     \n      May emit a {RoleRevoked} event.\n    */\n    function _revokeRole(bytes32 role, address account) internal {\n        if (hasRole(role, account)) {\n            _roles()[role].members[account] = false;\n            emit RoleRevoked(role, account, _msgSender());\n        }\n    }\n}\n"
+    },
+    {
+      "file_path": "starkware/solidity/libraries/Addresses.sol",
+      "source_code": "/*\n  Copyright 2019-2023 StarkWare Industries Ltd.\n\n  Licensed under the Apache License, Version 2.0 (the \"License\").\n  You may not use this file except in compliance with the License.\n  You may obtain a copy of the License at\n\n  https://www.starkware.co/open-source-license/\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an \"AS IS\" BASIS,\n  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n  See the License for the specific language governing permissions\n  and limitations under the License.\n*/\n// SPDX-License-Identifier: Apache-2.0.\npragma solidity ^0.8.0;\n\n/*\n  Common Utility Libraries.\n  I. Addresses (extending address).\n*/\nlibrary Addresses {\n    /*\n      Note: isContract function has some known limitation.\n      See https://github.com/OpenZeppelin/\n      openzeppelin-contracts/blob/master/contracts/utils/Address.sol.\n    */\n    function isContract(address account) internal view returns (bool) {\n        uint256 size;\n        assembly {\n            size := extcodesize(account)\n        }\n        return size > 0;\n    }\n\n    function performEthTransfer(address recipient, uint256 amount) internal {\n        if (amount == 0) return;\n        (bool success, ) = recipient.call{value: amount}(\"\"); // NOLINT: low-level-calls.\n        require(success, \"ETH_TRANSFER_FAILED\");\n    }\n\n    /*\n      Safe wrapper around ERC20/ERC721 calls.\n      This is required because many deployed ERC20 contracts don't return a value.\n      See https://github.com/ethereum/solidity/issues/4116.\n    */\n    function safeTokenContractCall(address tokenAddress, bytes memory callData) internal {\n        require(isContract(tokenAddress), \"BAD_TOKEN_ADDRESS\");\n        // NOLINTNEXTLINE: low-level-calls.\n        (bool success, bytes memory returndata) = tokenAddress.call(callData);\n        require(success, string(returndata));\n\n        if (returndata.length > 0) {\n            require(abi.decode(returndata, (bool)), \"TOKEN_OPERATION_FAILED\");\n        }\n    }\n}\n"
+    },
+    {
+      "file_path": "starkware/solidity/libraries/NamedStorage.sol",
+      "source_code": "/*\n  Copyright 2019-2023 StarkWare Industries Ltd.\n\n  Licensed under the Apache License, Version 2.0 (the \"License\").\n  You may not use this file except in compliance with the License.\n  You may obtain a copy of the License at\n\n  https://www.starkware.co/open-source-license/\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an \"AS IS\" BASIS,\n  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n  See the License for the specific language governing permissions\n  and limitations under the License.\n*/\n// SPDX-License-Identifier: Apache-2.0.\npragma solidity ^0.8.0;\n\n/*\n  Library to provide basic storage, in storage location out of the low linear address space.\n\n  New types of storage variables should be added here upon need.\n*/\nlibrary NamedStorage {\n    function bytes32ToBoolMapping(string memory tag_)\n        internal\n        pure\n        returns (mapping(bytes32 => bool) storage randomVariable)\n    {\n        bytes32 location = keccak256(abi.encodePacked(tag_));\n        assembly {\n            randomVariable.slot := location\n        }\n    }\n\n    function bytes32ToUint256Mapping(string memory tag_)\n        internal\n        pure\n        returns (mapping(bytes32 => uint256) storage randomVariable)\n    {\n        bytes32 location = keccak256(abi.encodePacked(tag_));\n        assembly {\n            randomVariable.slot := location\n        }\n    }\n\n    function addressToUint256Mapping(string memory tag_)\n        internal\n        pure\n        returns (mapping(address => uint256) storage randomVariable)\n    {\n        bytes32 location = keccak256(abi.encodePacked(tag_));\n        assembly {\n            randomVariable.slot := location\n        }\n    }\n\n    function bytes32ToAddressMapping(string memory tag_)\n        internal\n        pure\n        returns (mapping(bytes32 => address) storage randomVariable)\n    {\n        bytes32 location = keccak256(abi.encodePacked(tag_));\n        assembly {\n            randomVariable.slot := location\n        }\n    }\n\n    function uintToAddressMapping(string memory tag_)\n        internal\n        pure\n        returns (mapping(uint256 => address) storage randomVariable)\n    {\n        bytes32 location = keccak256(abi.encodePacked(tag_));\n        assembly {\n            randomVariable.slot := location\n        }\n    }\n\n    function addressToAddressMapping(string memory tag_)\n        internal\n        pure\n        returns (mapping(address => address) storage randomVariable)\n    {\n        bytes32 location = keccak256(abi.encodePacked(tag_));\n        assembly {\n            randomVariable.slot := location\n        }\n    }\n\n    function addressToAddressListMapping(string memory tag_)\n        internal\n        pure\n        returns (mapping(address => address[]) storage randomVariable)\n    {\n        bytes32 location = keccak256(abi.encodePacked(tag_));\n        assembly {\n            randomVariable.slot := location\n        }\n    }\n\n    function addressToBoolMapping(string memory tag_)\n        internal\n        pure\n        returns (mapping(address => bool) storage randomVariable)\n    {\n        bytes32 location = keccak256(abi.encodePacked(tag_));\n        assembly {\n            randomVariable.slot := location\n        }\n    }\n\n    function getUintValue(string memory tag_) internal view returns (uint256 retVal) {\n        bytes32 slot = keccak256(abi.encodePacked(tag_));\n        assembly {\n            retVal := sload(slot)\n        }\n    }\n\n    function setUintValue(string memory tag_, uint256 value) internal {\n        bytes32 slot = keccak256(abi.encodePacked(tag_));\n        assembly {\n            sstore(slot, value)\n        }\n    }\n\n    function setUintValueOnce(string memory tag_, uint256 value) internal {\n        require(getUintValue(tag_) == 0, \"ALREADY_SET\");\n        setUintValue(tag_, value);\n    }\n\n    function getAddressValue(string memory tag_) internal view returns (address retVal) {\n        bytes32 slot = keccak256(abi.encodePacked(tag_));\n        assembly {\n            retVal := sload(slot)\n        }\n    }\n\n    function setAddressValue(string memory tag_, address value) internal {\n        bytes32 slot = keccak256(abi.encodePacked(tag_));\n        assembly {\n            sstore(slot, value)\n        }\n    }\n\n    function setAddressValueOnce(string memory tag_, address value) internal {\n        require(getAddressValue(tag_) == address(0x0), \"ALREADY_SET\");\n        setAddressValue(tag_, value);\n    }\n\n    function getBoolValue(string memory tag_) internal view returns (bool retVal) {\n        bytes32 slot = keccak256(abi.encodePacked(tag_));\n        assembly {\n            retVal := sload(slot)\n        }\n    }\n\n    function setBoolValue(string memory tag_, bool value) internal {\n        bytes32 slot = keccak256(abi.encodePacked(tag_));\n        assembly {\n            sstore(slot, value)\n        }\n    }\n}\n"
+    },
+    {
+      "file_path": "starkware/solidity/libraries/RolesLib.sol",
+      "source_code": "/*\n  Copyright 2019-2023 StarkWare Industries Ltd.\n\n  Licensed under the Apache License, Version 2.0 (the \"License\").\n  You may not use this file except in compliance with the License.\n  You may obtain a copy of the License at\n\n  https://www.starkware.co/open-source-license/\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an \"AS IS\" BASIS,\n  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n  See the License for the specific language governing permissions\n  and limitations under the License.\n*/\n// SPDX-License-Identifier: Apache-2.0.\npragma solidity ^0.8.0;\n\nimport \"starkware/solidity/libraries/AccessControl.sol\";\n\n// int.from_bytes(Web3.keccak(text=\"ROLE_APP_GOVERNOR\"), \"big\") & MASK_250 .\nbytes32 constant APP_GOVERNOR = bytes32(\n    uint256(0xd2ead78c620e94b02d0a996e99298c59ddccfa1d8a0149080ac3a20de06068)\n);\n\n// int.from_bytes(Web3.keccak(text=\"ROLE_APP_ROLE_ADMIN\"), \"big\") & MASK_250 .\nbytes32 constant APP_ROLE_ADMIN = bytes32(\n    uint256(0x03e615638e0b79444a70f8c695bf8f2a47033bf1cf95691ec3130f64939cee99)\n);\n\n// int.from_bytes(Web3.keccak(text=\"ROLE_GOVERNANCE_ADMIN\"), \"big\") & MASK_250 .\nbytes32 constant GOVERNANCE_ADMIN = bytes32(\n    uint256(0x03711c9d994faf6055172091cb841fd4831aa743e6f3315163b06a122c841846)\n);\n\n// int.from_bytes(Web3.keccak(text=\"ROLE_OPERATOR\"), \"big\") & MASK_250 .\nbytes32 constant OPERATOR = bytes32(\n    uint256(0x023edb77f7c8cc9e38e8afe78954f703aeeda7fffe014eeb6e56ea84e62f6da7)\n);\n\n// int.from_bytes(Web3.keccak(text=\"ROLE_SECURITY_ADMIN\"), \"big\") & MASK_250 .\nbytes32 constant SECURITY_ADMIN = bytes32(\n    uint256(0x026bd110619d11cfdfc28e281df893bc24828e89177318e9dbd860cdaedeb6b3)\n);\n\n// int.from_bytes(Web3.keccak(text=\"ROLE_SECURITY_AGENT\"), \"big\") & MASK_250 .\nbytes32 constant SECURITY_AGENT = bytes32(\n    uint256(0x037693ba312785932d430dccf0f56ffedd0aa7c0f8b6da2cc4530c2717689b96)\n);\n\n// int.from_bytes(Web3.keccak(text=\"ROLE_TOKEN_ADMIN\"), \"big\") & MASK_250 .\nbytes32 constant TOKEN_ADMIN = bytes32(\n    uint256(0x0128d63adbf6b09002c26caf55c47e2f26635807e3ef1b027218aa74c8d61a3e)\n);\n\n// int.from_bytes(Web3.keccak(text=\"ROLE_UPGRADE_GOVERNOR\"), \"big\") & MASK_250 .\nbytes32 constant UPGRADE_GOVERNOR = bytes32(\n    uint256(0x0251e864ca2a080f55bce5da2452e8cfcafdbc951a3e7fff5023d558452ec228)\n);\n\n/*\n  Role                |   Role Admin\n  ----------------------------------------\n  GOVERNANCE_ADMIN    |   GOVERNANCE_ADMIN\n  UPGRADE_GOVERNOR    |   GOVERNANCE_ADMIN\n  APP_ROLE_ADMIN      |   GOVERNANCE_ADMIN\n  APP_GOVERNOR        |   APP_ROLE_ADMIN\n  OPERATOR            |   APP_ROLE_ADMIN\n  TOKEN_ADMIN         |   APP_ROLE_ADMIN\n  SECURITY_ADMIN      |   SECURITY_ADMIN\n  SECURITY_AGENT      |   SECURITY_ADMIN .\n*/\nlibrary RolesLib {\n    // INITIALIZERS.\n    function governanceRolesInitialized() internal view returns (bool) {\n        return AccessControl.getRoleAdmin(GOVERNANCE_ADMIN) != bytes32(0x00);\n    }\n\n    function securityRolesInitialized() internal view returns (bool) {\n        return AccessControl.getRoleAdmin(SECURITY_ADMIN) != bytes32(0x00);\n    }\n\n    function initialize() internal {\n        address provisional = AccessControl._msgSender();\n        initialize(provisional, provisional);\n    }\n\n    function initialize(address provisionalGovernor, address provisionalSecAdmin) internal {\n        if (governanceRolesInitialized()) {\n            // Support Proxied contract initialization.\n            // In case the Proxy already initialized the roles,\n            // init will succeed IFF the provisionalGovernor is already `GovernanceAdmin`.\n            require(\n                AccessControl.hasRole(GOVERNANCE_ADMIN, provisionalGovernor),\n                \"ROLES_ALREADY_INITIALIZED\"\n            );\n        } else {\n            initGovernanceRoles(provisionalGovernor);\n        }\n\n        if (securityRolesInitialized()) {\n            // If SecurityAdmin initialized,\n            // then provisionalSecAdmin must already be a `SecurityAdmin`.\n            // If it's not initilized - initialize it.\n            require(\n                AccessControl.hasRole(SECURITY_ADMIN, provisionalSecAdmin),\n                \"SECURITY_ROLES_ALREADY_INITIALIZED\"\n            );\n        } else {\n            initSecurityRoles(provisionalSecAdmin);\n        }\n    }\n\n    function initSecurityRoles(address provisionalSecAdmin) private {\n        AccessControl._setRoleAdmin(SECURITY_ADMIN, SECURITY_ADMIN);\n        AccessControl._setRoleAdmin(SECURITY_AGENT, SECURITY_ADMIN);\n        AccessControl._grantRole(SECURITY_ADMIN, provisionalSecAdmin);\n    }\n\n    function initGovernanceRoles(address provisionalGovernor) private {\n        AccessControl._grantRole(GOVERNANCE_ADMIN, provisionalGovernor);\n        AccessControl._setRoleAdmin(APP_GOVERNOR, APP_ROLE_ADMIN);\n        AccessControl._setRoleAdmin(APP_ROLE_ADMIN, GOVERNANCE_ADMIN);\n        AccessControl._setRoleAdmin(GOVERNANCE_ADMIN, GOVERNANCE_ADMIN);\n        AccessControl._setRoleAdmin(OPERATOR, APP_ROLE_ADMIN);\n        AccessControl._setRoleAdmin(TOKEN_ADMIN, APP_ROLE_ADMIN);\n        AccessControl._setRoleAdmin(UPGRADE_GOVERNOR, GOVERNANCE_ADMIN);\n    }\n}\n"
+    },
+    {
+      "file_path": "starkware/solidity/upgrade/ProxyStorage.sol",
+      "source_code": "/*\n  Copyright 2019-2023 StarkWare Industries Ltd.\n\n  Licensed under the Apache License, Version 2.0 (the \"License\").\n  You may not use this file except in compliance with the License.\n  You may obtain a copy of the License at\n\n  https://www.starkware.co/open-source-license/\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an \"AS IS\" BASIS,\n  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n  See the License for the specific language governing permissions\n  and limitations under the License.\n*/\n// SPDX-License-Identifier: Apache-2.0.\npragma solidity ^0.8.0;\n\nimport \"starkware/solidity/libraries/NamedStorage.sol\";\n\n/*\n  Holds the Proxy-specific state variables.\n  to prevent collision hazard.\n*/\ncontract ProxyStorage {\n    // Random storage slot tags.\n    string constant ENABLED_TIME_TAG = \"PROXY_5_ENABLED_TIME\";\n    string constant DISABLED_TIME_TAG = \"PROXY_5_DISABLED_TIME\";\n    string constant INTIALIZED_TAG = \"PROXY_5_INITIALIZED\";\n\n    // The time after which we can switch to the implementation.\n    // Hash(implementation, data, finalize) => time.\n    function enabledTime() internal pure returns (mapping(bytes32 => uint256) storage) {\n        return NamedStorage.bytes32ToUint256Mapping(ENABLED_TIME_TAG);\n    }\n\n    // The time after which we can NO LONGER switch to the implementation.\n    // Implementation is valid to switch in time t,  enableTime <= t  <= disableTime.\n    // Hash(implementation, data, finalize) => time.\n    function expirationTime() internal pure returns (mapping(bytes32 => uint256) storage) {\n        return NamedStorage.bytes32ToUint256Mapping(DISABLED_TIME_TAG);\n    }\n\n    // A central storage of the flags whether implementation has been initialized.\n    // Note - it can be used flexibly enough to accommodate multiple levels of initialization\n    // (i.e. using different key salting schemes for different initialization levels).\n    function initialized() internal pure returns (mapping(bytes32 => bool) storage) {\n        return NamedStorage.bytes32ToBoolMapping(INTIALIZED_TAG);\n    }\n}\n"
+    },
+    {
+      "file_path": "starkware/solidity/upgrade/StorageSlots.sol",
+      "source_code": "/*\n  Copyright 2019-2023 StarkWare Industries Ltd.\n\n  Licensed under the Apache License, Version 2.0 (the \"License\").\n  You may not use this file except in compliance with the License.\n  You may obtain a copy of the License at\n\n  https://www.starkware.co/open-source-license/\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an \"AS IS\" BASIS,\n  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n  See the License for the specific language governing permissions\n  and limitations under the License.\n*/\n// SPDX-License-Identifier: Apache-2.0.\npragma solidity ^0.8.0;\n\n/**\n  StorageSlots holds the arbitrary storage slots used throughout the Proxy pattern.\n  Storage address slots are a mechanism to define an arbitrary location, that will not be\n  overlapped by the logical contracts.\n*/\ncontract StorageSlots {\n    // Storage slot with the address of the current implementation.\n    // We need to keep this variable stored outside of the commonly used space,\n    // so that it's not overrun by the logical implementation (the proxied contract).\n    // Web3.keccak(text=\"StarkWare2019.implemntation-slot\").\n    bytes32 internal constant IMPLEMENTATION_SLOT =\n        0x177667240aeeea7e35eabe3a35e18306f336219e1386f7710a6bf8783f761b24;\n\n    // Storage slot with the address of the call-proxy current implementation.\n    // We need to keep this variable stored outside of the commonly used space.\n    // so that it's not overrun by the logical implementation (the proxied contract).\n    // Web3.keccak(text=\"StarkWare2020.CallProxy.Implemntation.Slot\").\n    bytes32 internal constant CALL_PROXY_IMPL_SLOT =\n        0x7184681641399eb4ad2fdb92114857ee6ff239f94ad635a1779978947b8843be;\n\n    // This storage slot stores the finalization flag.\n    // Once the value stored in this slot is set to non-zero\n    // the proxy blocks implementation upgrades.\n    // The current implementation is then referred to as Finalized.\n    // Web3.keccak(text=\"StarkWare2019.finalization-flag-slot\").\n    bytes32 internal constant FINALIZED_STATE_SLOT =\n        0x7d433c6f837e8f93009937c466c82efbb5ba621fae36886d0cac433c5d0aa7d2;\n\n    // Storage slot to hold the upgrade delay (time-lock).\n    // The intention of this slot is to allow modification using an EIC.\n    // Web3.keccak(text=\"StarkWare.Upgradibility.Delay.Slot\").\n    bytes32 public constant UPGRADE_DELAY_SLOT =\n        0xc21dbb3089fcb2c4f4c6a67854ab4db2b0f233ea4b21b21f912d52d18fc5db1f;\n\n    // Storage slot to hold the upgrade eanbled duration in seconds.\n    // The intention of this slot is to allow modification using an EIC.\n    // Web3.keccak(text=\"StarkWare.Upgradibility.EnableWindowDuration.Slot\").\n    bytes32 public constant ENABLE_WINDOW_DURATION_SLOT =\n        0xb00a6109e73dbe7bbf8d3f18fb9221d2d024dc2671e3d5ff02532ccc40590738;\n}\n"
+    },
+    {
+      "file_path": "third_party/open_zeppelin/utils/Strings.sol",
+      "source_code": "/*\n  Copyright 2019-2023 StarkWare Industries Ltd.\n\n  Licensed under the Apache License, Version 2.0 (the \"License\").\n  You may not use this file except in compliance with the License.\n  You may obtain a copy of the License at\n\n  https://www.starkware.co/open-source-license/\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an \"AS IS\" BASIS,\n  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n  See the License for the specific language governing permissions\n  and limitations under the License.\n*/\n// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v4.7.0) (utils/Strings.sol)\n\npragma solidity ^0.8.0;\n\n/**\n * @dev String operations.\n */\nlibrary Strings {\n    bytes16 private constant _HEX_SYMBOLS = \"0123456789abcdef\";\n    uint8 private constant _ADDRESS_LENGTH = 20;\n\n    /**\n     * @dev Converts a `uint256` to its ASCII `string` decimal representation.\n     */\n    function toString(uint256 value) internal pure returns (string memory) {\n        // Inspired by OraclizeAPI's implementation - MIT licence\n        // https://github.com/oraclize/ethereum-api/blob/b42146b063c7d6ee1358846c198246239e9360e8/oraclizeAPI_0.4.25.sol\n\n        if (value == 0) {\n            return \"0\";\n        }\n        uint256 temp = value;\n        uint256 digits;\n        while (temp != 0) {\n            digits++;\n            temp /= 10;\n        }\n        bytes memory buffer = new bytes(digits);\n        while (value != 0) {\n            digits -= 1;\n            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));\n            value /= 10;\n        }\n        return string(buffer);\n    }\n\n    /**\n     * @dev Converts a `uint256` to its ASCII `string` hexadecimal representation.\n     */\n    function toHexString(uint256 value) internal pure returns (string memory) {\n        if (value == 0) {\n            return \"0x00\";\n        }\n        uint256 temp = value;\n        uint256 length = 0;\n        while (temp != 0) {\n            length++;\n            temp >>= 8;\n        }\n        return toHexString(value, length);\n    }\n\n    /**\n     * @dev Converts a `uint256` to its ASCII `string` hexadecimal representation with fixed length.\n     */\n    function toHexString(uint256 value, uint256 length) internal pure returns (string memory) {\n        bytes memory buffer = new bytes(2 * length + 2);\n        buffer[0] = \"0\";\n        buffer[1] = \"x\";\n        for (uint256 i = 2 * length + 1; i > 1; --i) {\n            buffer[i] = _HEX_SYMBOLS[value & 0xf];\n            value >>= 4;\n        }\n        require(value == 0, \"Strings: hex length insufficient\");\n        return string(buffer);\n    }\n\n    /**\n     * @dev Converts an `address` with fixed length of 20 bytes to its not checksummed ASCII `string` hexadecimal representation.\n     */\n    function toHexString(address addr) internal pure returns (string memory) {\n        return toHexString(uint256(uint160(addr)), _ADDRESS_LENGTH);\n    }\n}\n"
+    }
+  ],
+  "can_be_visualized_via_sol2uml": true,
+  "certified": false,
+  "compiler_settings": {
+    "evmVersion": "shanghai",
+    "libraries": {},
+    "metadata": {
+      "bytecodeHash": "ipfs",
+      "useLiteralContent": true
+    },
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "remappings": []
+  },
+  "compiler_version": "0.8.20+commit.a1b79de6",
+  "conflicting_implementations": null,
+  "constructor_args": "03711c9d994faf6055172091cb841fd4831aa743e6f3315163b06a122c841846026bd110619d11cfdfc28e281df893bc24828e89177318e9dbd860cdaedeb6b353e43b954ba190a7e49386f1f78b01dcd9f628db23f432fa029a7dfd6d98e8fb03e615638e0b79444a70f8c695bf8f2a47033bf1cf95691ec3130f64939cee990000000000000000000000000000000000000000000000000000000000000000",
+  "creation_bytecode": "0x60a060405234801562000010575f80fd5b506040516200257438038062002574833981016040819052620000339162000550565b5f608081905262000043620000a0565b506200006d817fc21dbb3089fcb2c4f4c6a67854ab4db2b0f233ea4b21b21f912d52d18fc5db1f55565b62000099621275007fb00a6109e73dbe7bbf8d3f18fb9221d2d024dc2671e3d5ff02532ccc4059073855565b5062000568565b33620000ad8180620000b0565b50565b620000ba6200020f565b1562000152576001600160a01b0382165f9081527fa5fdb349cc4ffac7e8ce7d3b075149d1bc847367d814e69a9beca89ef02db8b0602052604090205460ff166200014c5760405162461bcd60e51b815260206004820152601960248201527f524f4c45535f414c52454144595f494e495449414c495a45440000000000000060448201526064015b60405180910390fd5b6200015d565b6200015d8262000260565b62000167620003a3565b1562000204576001600160a01b0381165f9081527f2c11a1f9c63817dbb9f0faa966615764d2db5d6e008269e948a99e0b52181c23602052604090205460ff16620002005760405162461bcd60e51b815260206004820152602260248201527f53454355524954595f524f4c45535f414c52454144595f494e495449414c495a604482015261115160f21b606482015260840162000143565b5050565b6200020081620003f2565b5f80516020620024f48339815191525f9081525f80516020620025348339815191526020527fa5fdb349cc4ffac7e8ce7d3b075149d1bc847367d814e69a9beca89ef02db8b15481905b1415905090565b6200027a5f80516020620024f4833981519152826200045b565b620002b37ed2ead78c620e94b02d0a996e99298c59ddccfa1d8a0149080ac3a20de060685f8051602062002554833981519152620004f9565b620002db5f80516020620025548339815191525f80516020620024f4833981519152620004f9565b620002f55f80516020620024f483398151915280620004f9565b6200032f7f023edb77f7c8cc9e38e8afe78954f703aeeda7fffe014eeb6e56ea84e62f6da75f8051602062002554833981519152620004f9565b620003697f0128d63adbf6b09002c26caf55c47e2f26635807e3ef1b027218aa74c8d61a3e5f8051602062002554833981519152620004f9565b620000ad7f0251e864ca2a080f55bce5da2452e8cfcafdbc951a3e7fff5023d558452ec2285f80516020620024f4833981519152620004f9565b5f80516020620025148339815191525f9081525f80516020620025348339815191526020527f2c11a1f9c63817dbb9f0faa966615764d2db5d6e008269e948a99e0b52181c2454819062000259565b6200040c5f805160206200251483398151915280620004f9565b620004467f037693ba312785932d430dccf0f56ffedd0aa7c0f8b6da2cc4530c2717689b965f8051602062002514833981519152620004f9565b620000ad5f8051602062002514833981519152825b5f8281525f8051602062002534833981519152602090815260408083206001600160a01b038516845290915290205460ff1662000200575f8281525f8051602062002534833981519152602090815260408083206001600160a01b0385168085529252808320805460ff1916600117905551339285917f2f8788117e7eff1d82e926ec794901d17c78024a50270940304540a733656f0d9190a45050565b5f8281525f80516020620025348339815191526020526040808220600101805490849055905190918391839186917fbd79b86ffe0ab8e8776151514217cd7cacd52c909f66475c3af44e129f0b00ff9190a4505050565b5f6020828403121562000561575f80fd5b5051919050565b608051611f73620005815f395f6108e80152611f735ff3fe60806040526004361061021d575f3560e01c806372a44f0711610122578063d08fb6cb116100aa578063e907fa3c1161006e578063e907fa3c14610747578063ed9ef16a1461077b578063ee0e68071461079a578063fa0f73ba146107b9578063fad8b32a146107d85761026f565b8063d08fb6cb146106a1578063d38d8d7a146106c0578063d9fa7091146106d6578063deec9c5a146106f5578063e02904c6146107145761026f565b80639463629a116100f15780639463629a146105e8578063a2bdde3d14610607578063c5ab845314610626578063cb1cccce14610663578063cdd1f70d146106825761026f565b806372a44f0714610577578063757bd9ab1461058b5780638101b64c146105aa5780638e5224ff146105c95761026f565b80635a5d1bb9116101a557806362a143761161017457806362a14376146104e85780636c04d9d5146105075780636d70f7ae146105265780636fc97cbf146105455780637147855d146105645761026f565b80635a5d1bb9146104485780635c60da1b146104775780635cef2e86146104aa5780635e3a97e7146104c95761026f565b80632f951985116101ec5780632f9519851461039957806336568abe146103b85780633682a450146103d7578063439fab91146103f657806352b1e35e146104155761026f565b80630b3a2d21146102f65780630e770f2314610315578063178963831461033457806320cea94d146103535761026f565b3661026f5760405162461bcd60e51b815260206004820181905260248201527f434f4e54524143545f4e4f545f45585045435445445f544f5f5245434549564560448201526064015b60405180910390fd5b5f6102855f80516020611f1e8339815191525490565b90506001600160a01b0381166102d65760405162461bcd60e51b815260206004820152601660248201527526a4a9a9a4a723afa4a6a82622a6a2a72a20aa24a7a760511b6044820152606401610266565b365f80375f80365f845af43d5f803e8080156102f0573d5ff35b3d5ffd5b005b348015610301575f80fd5b506102f4610310366004611b30565b6107f7565b348015610320575f80fd5b506102f461032f366004611b30565b610824565b34801561033f575f80fd5b506102f461034e366004611b30565b61084e565b34801561035e575f80fd5b506103867fc21dbb3089fcb2c4f4c6a67854ab4db2b0f233ea4b21b21f912d52d18fc5db1f81565b6040519081526020015b60405180910390f35b3480156103a4575f80fd5b506102f46103b3366004611b30565b610878565b3480156103c3575f80fd5b506102f46103d2366004611b49565b6108cf565b3480156103e2575f80fd5b506102f46103f1366004611b30565b610960565b348015610401575f80fd5b506102f4610410366004611bb8565b61098a565b348015610420575f80fd5b506103867fb00a6109e73dbe7bbf8d3f18fb9221d2d024dc2671e3d5ff02532ccc4059073881565b348015610453575f80fd5b50610467610462366004611b30565b6109cb565b6040519015158152602001610390565b348015610482575f80fd5b505f80516020611f1e833981519152546040516001600160a01b039091168152602001610390565b3480156104b5575f80fd5b506102f46104c4366004611c04565b6109fb565b3480156104d4575f80fd5b506102f46104e3366004611c04565b610b35565b3480156104f3575f80fd5b506102f4610502366004611b30565b610ca4565b348015610512575f80fd5b50610467610521366004611b30565b610cce565b348015610531575f80fd5b50610467610540366004611b30565b610cf9565b348015610550575f80fd5b506102f461055f366004611b30565b610d24565b6102f4610572366004611c04565b610d4e565b348015610582575f80fd5b506103866112d5565b348015610596575f80fd5b506104676105a5366004611b30565b611314565b3480156105b5575f80fd5b506102f46105c4366004611b30565b61133f565b3480156105d4575f80fd5b506104676105e3366004611b30565b611392565b3480156105f3575f80fd5b506102f4610602366004611b30565b6113bd565b348015610612575f80fd5b50610467610621366004611b30565b6113d4565b348015610631575f80fd5b50610656604051806040016040528060058152602001640352e302e360dc1b81525081565b6040516103909190611c88565b34801561066e575f80fd5b5061046761067d366004611b30565b6113ff565b34801561068d575f80fd5b506102f461069c366004611b30565b611417565b3480156106ac575f80fd5b506104676106bb366004611b30565b611440565b3480156106cb575f80fd5b5061038662ed4e0081565b3480156106e1575f80fd5b506102f46106f0366004611b30565b61146b565b348015610700575f80fd5b506102f461070f366004611b30565b611495565b34801561071f575f80fd5b507fb00a6109e73dbe7bbf8d3f18fb9221d2d024dc2671e3d5ff02532ccc4059073854610386565b348015610752575f80fd5b507f7d433c6f837e8f93009937c466c82efbb5ba621fae36886d0cac433c5d0aa7d25415610467565b348015610786575f80fd5b506102f4610795366004611b30565b6114be565b3480156107a5575f80fd5b506102f46107b4366004611b30565b6114e8565b3480156107c4575f80fd5b506102f46107d3366004611b30565b611528565b3480156107e3575f80fd5b506102f46107f2366004611b30565b611552565b6108217f0128d63adbf6b09002c26caf55c47e2f26635807e3ef1b027218aa74c8d61a3e8261157c565b50565b6108217f037693ba312785932d430dccf0f56ffedd0aa7c0f8b6da2cc4530c2717689b968261157c565b6108217f03e615638e0b79444a70f8c695bf8f2a47033bf1cf95691ec3130f64939cee998261157c565b80336001600160a01b038216036108a15760405162461bcd60e51b815260040161026690611cba565b6108cb7f03e615638e0b79444a70f8c695bf8f2a47033bf1cf95691ec3130f64939cee99836115b1565b5050565b5f80516020611ede8339815191528214801561090957507f0000000000000000000000000000000000000000000000000000000000000000155b156109565760405162461bcd60e51b815260206004820181905260248201527f43414e4e4f545f52454e4f554e43455f474f5645524e414e43455f41444d494e6044820152606401610266565b6108cb82826115e1565b6108217f023edb77f7c8cc9e38e8afe78954f703aeeda7fffe014eeb6e56ea84e62f6da78261157c565b60405162461bcd60e51b815260206004820152601660248201527543414e4e4f545f43414c4c5f494e495449414c495a4560501b6044820152606401610266565b5f6109f57ed2ead78c620e94b02d0a996e99298c59ddccfa1d8a0149080ac3a20de060688361165b565b92915050565b610a0433610cce565b610a205760405162461bcd60e51b815260040161026690611cea565b5f84848484604051602001610a389493929190611d41565b6040516020818303038152906040528051906020012090505f610a59611691565b5f8381526020919091526040902054905080610ab75760405162461bcd60e51b815260206004820152601b60248201527f554e4b4e4f574e5f555047524144455f494e464f524d4154494f4e00000000006044820152606401610266565b610abf611691565b5f8381526020919091526040812055610ad66116cc565b5f8381526020019081526020015f205f9055856001600160a01b03167fe99b980b5259f200e4c1da973ff0251b6d9aaa144714c8773976ecd62b8ebe8d868686604051610b2593929190611d78565b60405180910390a2505050505050565b610b3e33610cce565b610b5a5760405162461bcd60e51b815260040161026690611cea565b6001600160a01b0384163b610ba85760405162461bcd60e51b8152602060048201526014602482015273105111149154d4d7d393d517d0d3d395149050d560621b6044820152606401610266565b5f84848484604051602001610bc09493929190611d41565b6040516020818303038152906040528051906020012090505f610be16112d5565b610beb9042611db1565b90505f610c167fb00a6109e73dbe7bbf8d3f18fb9221d2d024dc2671e3d5ff02532ccc405907385490565b610c209083611db1565b905081610c2b611691565b5f858152602091909152604090205580610c436116cc565b5f8581526020019081526020015f2081905550866001600160a01b03167f723a7080d63c133cf338e44e00705cc1b7b2bde7e88d6218a8d62710a329ce1b878787604051610c9393929190611d78565b60405180910390a250505050505050565b6108217f026bd110619d11cfdfc28e281df893bc24828e89177318e9dbd860cdaedeb6b38261157c565b5f6109f57f0251e864ca2a080f55bce5da2452e8cfcafdbc951a3e7fff5023d558452ec2288361165b565b5f6109f57f023edb77f7c8cc9e38e8afe78954f703aeeda7fffe014eeb6e56ea84e62f6da78361165b565b6108217f0251e864ca2a080f55bce5da2452e8cfcafdbc951a3e7fff5023d558452ec2288261157c565b610d5733610cce565b610d735760405162461bcd60e51b815260040161026690611cea565b7f7d433c6f837e8f93009937c466c82efbb5ba621fae36886d0cac433c5d0aa7d25415610de25760405162461bcd60e51b815260206004820152601860248201527f494d504c454d454e544154494f4e5f46494e414c495a454400000000000000006044820152606401610266565b610dea611703565b15610e295760405162461bcd60e51b815260206004820152600f60248201526e29aa20aa22afa4a9afa32927ad22a760891b6044820152606401610266565b5f84848484604051602001610e419493929190611d41565b6040516020818303038152906040528051906020012090505f610e62611691565b5f83815260209190915260408120549150610e7b6116cc565b5f8481526020919091526040902054905081610ed95760405162461bcd60e51b815260206004820152601b60248201527f554e4b4e4f574e5f555047524144455f494e464f524d4154494f4e00000000006044820152606401610266565b6001600160a01b0387163b610f275760405162461bcd60e51b8152602060048201526014602482015273105111149154d4d7d393d517d0d3d395149050d560621b6044820152606401610266565b4282111580610f5257505f610f475f80516020611f1e8339815191525490565b6001600160a01b0316145b610f9e5760405162461bcd60e51b815260206004820152601760248201527f555047524144455f4e4f545f454e41424c45445f5945540000000000000000006044820152606401610266565b42811015610fe75760405162461bcd60e51b815260206004820152601660248201527512535413115351539510551253d397d156141254915160521b6044820152606401610266565b610ffc875f80516020611f1e83398151915255565b5f80886001600160a01b031663439fab9160e01b8989604051602401611023929190611dc4565b60408051601f198184030181529181526020820180516001600160e01b03166001600160e01b03199094169390931790925290516110619190611ddf565b5f60405180830381855af49150503d805f8114611099576040519150601f19603f3d011682016040523d82523d5f602084013e61109e565b606091505b50915091508181906110c35760405162461bcd60e51b81526004016102669190611c88565b5060408051600481526024810182526020810180516001600160e01b03166333eeb14760e01b17905290516001600160a01b038b169161110291611ddf565b5f60405180830381855af49150503d805f811461113a576040519150601f19603f3d011682016040523d82523d5f602084013e61113f565b606091505b509092509050816111925760405162461bcd60e51b815260206004820152601960248201527f43414c4c5f544f5f495346524f5a454e5f5245564552544544000000000000006044820152606401610266565b808060200190518101906111a69190611dfa565b156111f35760405162461bcd60e51b815260206004820152601960248201527f4e45575f494d504c454d454e544154494f4e5f46524f5a454e000000000000006044820152606401610266565b6111fb611691565b5f86815260209190915260408120556112126116cc565b5f8681526020019081526020015f205f9055886001600160a01b03167fff14288d542bc1c1d15a652cb52af735f065c0c9d70b48e454a203c260733544898960405161125f929190611dc4565b60405180910390a285156112ca5761129660017f7d433c6f837e8f93009937c466c82efbb5ba621fae36886d0cac433c5d0aa7d255565b6040516001600160a01b038a16907fc13b75a5f14b69ebdc2431a5d475b3bff371abe251b5064144306fbd9c4de35c905f90a25b505050505050505050565b7fc21dbb3089fcb2c4f4c6a67854ab4db2b0f233ea4b21b21f912d52d18fc5db1f80549062ed4e00821061130c5762ed4e0061130e565b815b91505090565b5f6109f57f037693ba312785932d430dccf0f56ffedd0aa7c0f8b6da2cc4530c2717689b968361165b565b80336001600160a01b038216036113685760405162461bcd60e51b815260040161026690611cba565b6108cb7f026bd110619d11cfdfc28e281df893bc24828e89177318e9dbd860cdaedeb6b3836115b1565b5f6109f57f03e615638e0b79444a70f8c695bf8f2a47033bf1cf95691ec3130f64939cee998361165b565b6108215f80516020611ede8339815191528261157c565b5f6109f57f0128d63adbf6b09002c26caf55c47e2f26635807e3ef1b027218aa74c8d61a3e8361165b565b5f6109f55f80516020611ede8339815191528361165b565b6108217ed2ead78c620e94b02d0a996e99298c59ddccfa1d8a0149080ac3a20de060688261157c565b5f6109f57f026bd110619d11cfdfc28e281df893bc24828e89177318e9dbd860cdaedeb6b38361165b565b6108217f037693ba312785932d430dccf0f56ffedd0aa7c0f8b6da2cc4530c2717689b96826115b1565b6108217ed2ead78c620e94b02d0a996e99298c59ddccfa1d8a0149080ac3a20de06068826115b1565b6108217f0251e864ca2a080f55bce5da2452e8cfcafdbc951a3e7fff5023d558452ec228826115b1565b80336001600160a01b038216036115115760405162461bcd60e51b815260040161026690611cba565b6108cb5f80516020611ede833981519152836115b1565b6108217f0128d63adbf6b09002c26caf55c47e2f26635807e3ef1b027218aa74c8d61a3e826115b1565b6108217f023edb77f7c8cc9e38e8afe78954f703aeeda7fffe014eeb6e56ea84e62f6da7826115b1565b5f8281525f80516020611efe83398151915260205260409020600101546115a2816117f2565b6115ac83836117fc565b505050565b5f8281525f80516020611efe83398151915260205260409020600101546115d7816117f2565b6115ac8383611870565b6001600160a01b03811633146116515760405162461bcd60e51b815260206004820152602f60248201527f416363657373436f6e74726f6c3a2063616e206f6e6c792072656e6f756e636560448201526e103937b632b9903337b91039b2b63360891b6064820152608401610266565b6108cb8282611870565b5f9182525f80516020611efe833981519152602090815260408084206001600160a01b0393909316845291905290205460ff1690565b5f6116c76040518060400160405280601481526020017350524f58595f355f454e41424c45445f54494d4560601b8152506118e2565b905090565b5f6116c76040518060400160405280601581526020017450524f58595f355f44495341424c45445f54494d4560581b8152506118e2565b5f8061171a5f80516020611f1e8339815191525490565b90506001600160a01b038116611731575f91505090565b60408051600481526024810182526020810180516001600160e01b03166333eeb14760e01b17905290515f9182916001600160a01b0385169161177391611ddf565b5f60405180830381855af49150503d805f81146117ab576040519150601f19603f3d011682016040523d82523d5f602084013e6117b0565b606091505b50915091508181906117d55760405162461bcd60e51b81526004016102669190611c88565b50808060200190518101906117ea9190611dfa565b935050505090565b6108218133611914565b611806828261165b565b6108cb575f8281525f80516020611efe833981519152602090815260408083206001600160a01b0385168085529252808320805460ff1916600117905551339285917f2f8788117e7eff1d82e926ec794901d17c78024a50270940304540a733656f0d9190a45050565b61187a828261165b565b156108cb575f8281525f80516020611efe833981519152602090815260408083206001600160a01b0385168085529252808320805460ff1916905551339285917ff6391f5c32d9c69d2a47ea670b442974b53935d1edc7fd64eb21e047a839171b9190a45050565b5f80826040516020016118f59190611ddf565b60408051601f1981840301815291905280516020909101209392505050565b61191e828261165b565b6108cb57611936816001600160a01b03166014611978565b611941836020611978565b604051602001611952929190611e15565b60408051601f198184030181529082905262461bcd60e51b825261026691600401611c88565b60605f611986836002611e89565b611991906002611db1565b67ffffffffffffffff8111156119a9576119a9611ea0565b6040519080825280601f01601f1916602001820160405280156119d3576020820181803683370190505b509050600360fc1b815f815181106119ed576119ed611eb4565b60200101906001600160f81b03191690815f1a905350600f60fb1b81600181518110611a1b57611a1b611eb4565b60200101906001600160f81b03191690815f1a9053505f611a3d846002611e89565b611a48906001611db1565b90505b6001811115611abf576f181899199a1a9b1b9c1cb0b131b232b360811b85600f1660108110611a7c57611a7c611eb4565b1a60f81b828281518110611a9257611a92611eb4565b60200101906001600160f81b03191690815f1a90535060049490941c93611ab881611ec8565b9050611a4b565b508315611b0e5760405162461bcd60e51b815260206004820181905260248201527f537472696e67733a20686578206c656e67746820696e73756666696369656e746044820152606401610266565b9392505050565b80356001600160a01b0381168114611b2b575f80fd5b919050565b5f60208284031215611b40575f80fd5b611b0e82611b15565b5f8060408385031215611b5a575f80fd5b82359150611b6a60208401611b15565b90509250929050565b5f8083601f840112611b83575f80fd5b50813567ffffffffffffffff811115611b9a575f80fd5b602083019150836020828501011115611bb1575f80fd5b9250929050565b5f8060208385031215611bc9575f80fd5b823567ffffffffffffffff811115611bdf575f80fd5b611beb85828601611b73565b90969095509350505050565b8015158114610821575f80fd5b5f805f8060608587031215611c17575f80fd5b611c2085611b15565b9350602085013567ffffffffffffffff811115611c3b575f80fd5b611c4787828801611b73565b9094509250506040850135611c5b81611bf7565b939692955090935050565b5f5b83811015611c80578181015183820152602001611c68565b50505f910152565b602081525f8251806020840152611ca6816040850160208701611c66565b601f01601f19169190910160400192915050565b60208082526016908201527521a0a72727aa2fa822a92327a926afa7a72fa9a2a62360511b604082015260600190565b60208082526015908201527427a7262cafaaa823a920a222afa3a7ab22a92727a960591b604082015260600190565b81835281816020850137505f828201602090810191909152601f909101601f19169091010190565b6001600160a01b03851681526060602082018190525f90611d659083018587611d19565b9050821515604083015295945050505050565b604081525f611d8b604083018587611d19565b90508215156020830152949350505050565b634e487b7160e01b5f52601160045260245ffd5b808201808211156109f5576109f5611d9d565b602081525f611dd7602083018486611d19565b949350505050565b5f8251611df0818460208701611c66565b9190910192915050565b5f60208284031215611e0a575f80fd5b8151611b0e81611bf7565b7f416363657373436f6e74726f6c3a206163636f756e742000000000000000000081525f8351611e4c816017850160208801611c66565b7001034b99036b4b9b9b4b733903937b6329607d1b6017918401918201528351611e7d816028840160208801611c66565b01602801949350505050565b80820281158282048414176109f5576109f5611d9d565b634e487b7160e01b5f52604160045260245ffd5b634e487b7160e01b5f52603260045260245ffd5b5f81611ed657611ed6611d9d565b505f19019056fe03711c9d994faf6055172091cb841fd4831aa743e6f3315163b06a122c84184653e43b954ba190a7e49386f1f78b01dcd9f628db23f432fa029a7dfd6d98e8fb177667240aeeea7e35eabe3a35e18306f336219e1386f7710a6bf8783f761b24a264697066735822122097560038ae3e8765148b666a7d92dae6e45afba45a5c5a30ba22bf31d56d14ab64736f6c6343000814003303711c9d994faf6055172091cb841fd4831aa743e6f3315163b06a122c841846026bd110619d11cfdfc28e281df893bc24828e89177318e9dbd860cdaedeb6b353e43b954ba190a7e49386f1f78b01dcd9f628db23f432fa029a7dfd6d98e8fb03e615638e0b79444a70f8c695bf8f2a47033bf1cf95691ec3130f64939cee990000000000000000000000000000000000000000000000000000000000000000",
+  "creation_status": "success",
+  "decoded_constructor_args": [
+    [
+      "1556789761824654631941645422192241267775035395971414146468438977535375841350",
+      {
+        "internalType": "uint256",
+        "name": "upgradeActivationDelay",
+        "type": "uint256"
+      }
+    ]
+  ],
+  "deployed_bytecode": "0x60806040526004361061021d575f3560e01c806372a44f0711610122578063d08fb6cb116100aa578063e907fa3c1161006e578063e907fa3c14610747578063ed9ef16a1461077b578063ee0e68071461079a578063fa0f73ba146107b9578063fad8b32a146107d85761026f565b8063d08fb6cb146106a1578063d38d8d7a146106c0578063d9fa7091146106d6578063deec9c5a146106f5578063e02904c6146107145761026f565b80639463629a116100f15780639463629a146105e8578063a2bdde3d14610607578063c5ab845314610626578063cb1cccce14610663578063cdd1f70d146106825761026f565b806372a44f0714610577578063757bd9ab1461058b5780638101b64c146105aa5780638e5224ff146105c95761026f565b80635a5d1bb9116101a557806362a143761161017457806362a14376146104e85780636c04d9d5146105075780636d70f7ae146105265780636fc97cbf146105455780637147855d146105645761026f565b80635a5d1bb9146104485780635c60da1b146104775780635cef2e86146104aa5780635e3a97e7146104c95761026f565b80632f951985116101ec5780632f9519851461039957806336568abe146103b85780633682a450146103d7578063439fab91146103f657806352b1e35e146104155761026f565b80630b3a2d21146102f65780630e770f2314610315578063178963831461033457806320cea94d146103535761026f565b3661026f5760405162461bcd60e51b815260206004820181905260248201527f434f4e54524143545f4e4f545f45585045435445445f544f5f5245434549564560448201526064015b60405180910390fd5b5f6102855f80516020611f1e8339815191525490565b90506001600160a01b0381166102d65760405162461bcd60e51b815260206004820152601660248201527526a4a9a9a4a723afa4a6a82622a6a2a72a20aa24a7a760511b6044820152606401610266565b365f80375f80365f845af43d5f803e8080156102f0573d5ff35b3d5ffd5b005b348015610301575f80fd5b506102f4610310366004611b30565b6107f7565b348015610320575f80fd5b506102f461032f366004611b30565b610824565b34801561033f575f80fd5b506102f461034e366004611b30565b61084e565b34801561035e575f80fd5b506103867fc21dbb3089fcb2c4f4c6a67854ab4db2b0f233ea4b21b21f912d52d18fc5db1f81565b6040519081526020015b60405180910390f35b3480156103a4575f80fd5b506102f46103b3366004611b30565b610878565b3480156103c3575f80fd5b506102f46103d2366004611b49565b6108cf565b3480156103e2575f80fd5b506102f46103f1366004611b30565b610960565b348015610401575f80fd5b506102f4610410366004611bb8565b61098a565b348015610420575f80fd5b506103867fb00a6109e73dbe7bbf8d3f18fb9221d2d024dc2671e3d5ff02532ccc4059073881565b348015610453575f80fd5b50610467610462366004611b30565b6109cb565b6040519015158152602001610390565b348015610482575f80fd5b505f80516020611f1e833981519152546040516001600160a01b039091168152602001610390565b3480156104b5575f80fd5b506102f46104c4366004611c04565b6109fb565b3480156104d4575f80fd5b506102f46104e3366004611c04565b610b35565b3480156104f3575f80fd5b506102f4610502366004611b30565b610ca4565b348015610512575f80fd5b50610467610521366004611b30565b610cce565b348015610531575f80fd5b50610467610540366004611b30565b610cf9565b348015610550575f80fd5b506102f461055f366004611b30565b610d24565b6102f4610572366004611c04565b610d4e565b348015610582575f80fd5b506103866112d5565b348015610596575f80fd5b506104676105a5366004611b30565b611314565b3480156105b5575f80fd5b506102f46105c4366004611b30565b61133f565b3480156105d4575f80fd5b506104676105e3366004611b30565b611392565b3480156105f3575f80fd5b506102f4610602366004611b30565b6113bd565b348015610612575f80fd5b50610467610621366004611b30565b6113d4565b348015610631575f80fd5b50610656604051806040016040528060058152602001640352e302e360dc1b81525081565b6040516103909190611c88565b34801561066e575f80fd5b5061046761067d366004611b30565b6113ff565b34801561068d575f80fd5b506102f461069c366004611b30565b611417565b3480156106ac575f80fd5b506104676106bb366004611b30565b611440565b3480156106cb575f80fd5b5061038662ed4e0081565b3480156106e1575f80fd5b506102f46106f0366004611b30565b61146b565b348015610700575f80fd5b506102f461070f366004611b30565b611495565b34801561071f575f80fd5b507fb00a6109e73dbe7bbf8d3f18fb9221d2d024dc2671e3d5ff02532ccc4059073854610386565b348015610752575f80fd5b507f7d433c6f837e8f93009937c466c82efbb5ba621fae36886d0cac433c5d0aa7d25415610467565b348015610786575f80fd5b506102f4610795366004611b30565b6114be565b3480156107a5575f80fd5b506102f46107b4366004611b30565b6114e8565b3480156107c4575f80fd5b506102f46107d3366004611b30565b611528565b3480156107e3575f80fd5b506102f46107f2366004611b30565b611552565b6108217f0128d63adbf6b09002c26caf55c47e2f26635807e3ef1b027218aa74c8d61a3e8261157c565b50565b6108217f037693ba312785932d430dccf0f56ffedd0aa7c0f8b6da2cc4530c2717689b968261157c565b6108217f03e615638e0b79444a70f8c695bf8f2a47033bf1cf95691ec3130f64939cee998261157c565b80336001600160a01b038216036108a15760405162461bcd60e51b815260040161026690611cba565b6108cb7f03e615638e0b79444a70f8c695bf8f2a47033bf1cf95691ec3130f64939cee99836115b1565b5050565b5f80516020611ede8339815191528214801561090957507f0000000000000000000000000000000000000000000000000000000000000000155b156109565760405162461bcd60e51b815260206004820181905260248201527f43414e4e4f545f52454e4f554e43455f474f5645524e414e43455f41444d494e6044820152606401610266565b6108cb82826115e1565b6108217f023edb77f7c8cc9e38e8afe78954f703aeeda7fffe014eeb6e56ea84e62f6da78261157c565b60405162461bcd60e51b815260206004820152601660248201527543414e4e4f545f43414c4c5f494e495449414c495a4560501b6044820152606401610266565b5f6109f57ed2ead78c620e94b02d0a996e99298c59ddccfa1d8a0149080ac3a20de060688361165b565b92915050565b610a0433610cce565b610a205760405162461bcd60e51b815260040161026690611cea565b5f84848484604051602001610a389493929190611d41565b6040516020818303038152906040528051906020012090505f610a59611691565b5f8381526020919091526040902054905080610ab75760405162461bcd60e51b815260206004820152601b60248201527f554e4b4e4f574e5f555047524144455f494e464f524d4154494f4e00000000006044820152606401610266565b610abf611691565b5f8381526020919091526040812055610ad66116cc565b5f8381526020019081526020015f205f9055856001600160a01b03167fe99b980b5259f200e4c1da973ff0251b6d9aaa144714c8773976ecd62b8ebe8d868686604051610b2593929190611d78565b60405180910390a2505050505050565b610b3e33610cce565b610b5a5760405162461bcd60e51b815260040161026690611cea565b6001600160a01b0384163b610ba85760405162461bcd60e51b8152602060048201526014602482015273105111149154d4d7d393d517d0d3d395149050d560621b6044820152606401610266565b5f84848484604051602001610bc09493929190611d41565b6040516020818303038152906040528051906020012090505f610be16112d5565b610beb9042611db1565b90505f610c167fb00a6109e73dbe7bbf8d3f18fb9221d2d024dc2671e3d5ff02532ccc405907385490565b610c209083611db1565b905081610c2b611691565b5f858152602091909152604090205580610c436116cc565b5f8581526020019081526020015f2081905550866001600160a01b03167f723a7080d63c133cf338e44e00705cc1b7b2bde7e88d6218a8d62710a329ce1b878787604051610c9393929190611d78565b60405180910390a250505050505050565b6108217f026bd110619d11cfdfc28e281df893bc24828e89177318e9dbd860cdaedeb6b38261157c565b5f6109f57f0251e864ca2a080f55bce5da2452e8cfcafdbc951a3e7fff5023d558452ec2288361165b565b5f6109f57f023edb77f7c8cc9e38e8afe78954f703aeeda7fffe014eeb6e56ea84e62f6da78361165b565b6108217f0251e864ca2a080f55bce5da2452e8cfcafdbc951a3e7fff5023d558452ec2288261157c565b610d5733610cce565b610d735760405162461bcd60e51b815260040161026690611cea565b7f7d433c6f837e8f93009937c466c82efbb5ba621fae36886d0cac433c5d0aa7d25415610de25760405162461bcd60e51b815260206004820152601860248201527f494d504c454d454e544154494f4e5f46494e414c495a454400000000000000006044820152606401610266565b610dea611703565b15610e295760405162461bcd60e51b815260206004820152600f60248201526e29aa20aa22afa4a9afa32927ad22a760891b6044820152606401610266565b5f84848484604051602001610e419493929190611d41565b6040516020818303038152906040528051906020012090505f610e62611691565b5f83815260209190915260408120549150610e7b6116cc565b5f8481526020919091526040902054905081610ed95760405162461bcd60e51b815260206004820152601b60248201527f554e4b4e4f574e5f555047524144455f494e464f524d4154494f4e00000000006044820152606401610266565b6001600160a01b0387163b610f275760405162461bcd60e51b8152602060048201526014602482015273105111149154d4d7d393d517d0d3d395149050d560621b6044820152606401610266565b4282111580610f5257505f610f475f80516020611f1e8339815191525490565b6001600160a01b0316145b610f9e5760405162461bcd60e51b815260206004820152601760248201527f555047524144455f4e4f545f454e41424c45445f5945540000000000000000006044820152606401610266565b42811015610fe75760405162461bcd60e51b815260206004820152601660248201527512535413115351539510551253d397d156141254915160521b6044820152606401610266565b610ffc875f80516020611f1e83398151915255565b5f80886001600160a01b031663439fab9160e01b8989604051602401611023929190611dc4565b60408051601f198184030181529181526020820180516001600160e01b03166001600160e01b03199094169390931790925290516110619190611ddf565b5f60405180830381855af49150503d805f8114611099576040519150601f19603f3d011682016040523d82523d5f602084013e61109e565b606091505b50915091508181906110c35760405162461bcd60e51b81526004016102669190611c88565b5060408051600481526024810182526020810180516001600160e01b03166333eeb14760e01b17905290516001600160a01b038b169161110291611ddf565b5f60405180830381855af49150503d805f811461113a576040519150601f19603f3d011682016040523d82523d5f602084013e61113f565b606091505b509092509050816111925760405162461bcd60e51b815260206004820152601960248201527f43414c4c5f544f5f495346524f5a454e5f5245564552544544000000000000006044820152606401610266565b808060200190518101906111a69190611dfa565b156111f35760405162461bcd60e51b815260206004820152601960248201527f4e45575f494d504c454d454e544154494f4e5f46524f5a454e000000000000006044820152606401610266565b6111fb611691565b5f86815260209190915260408120556112126116cc565b5f8681526020019081526020015f205f9055886001600160a01b03167fff14288d542bc1c1d15a652cb52af735f065c0c9d70b48e454a203c260733544898960405161125f929190611dc4565b60405180910390a285156112ca5761129660017f7d433c6f837e8f93009937c466c82efbb5ba621fae36886d0cac433c5d0aa7d255565b6040516001600160a01b038a16907fc13b75a5f14b69ebdc2431a5d475b3bff371abe251b5064144306fbd9c4de35c905f90a25b505050505050505050565b7fc21dbb3089fcb2c4f4c6a67854ab4db2b0f233ea4b21b21f912d52d18fc5db1f80549062ed4e00821061130c5762ed4e0061130e565b815b91505090565b5f6109f57f037693ba312785932d430dccf0f56ffedd0aa7c0f8b6da2cc4530c2717689b968361165b565b80336001600160a01b038216036113685760405162461bcd60e51b815260040161026690611cba565b6108cb7f026bd110619d11cfdfc28e281df893bc24828e89177318e9dbd860cdaedeb6b3836115b1565b5f6109f57f03e615638e0b79444a70f8c695bf8f2a47033bf1cf95691ec3130f64939cee998361165b565b6108215f80516020611ede8339815191528261157c565b5f6109f57f0128d63adbf6b09002c26caf55c47e2f26635807e3ef1b027218aa74c8d61a3e8361165b565b5f6109f55f80516020611ede8339815191528361165b565b6108217ed2ead78c620e94b02d0a996e99298c59ddccfa1d8a0149080ac3a20de060688261157c565b5f6109f57f026bd110619d11cfdfc28e281df893bc24828e89177318e9dbd860cdaedeb6b38361165b565b6108217f037693ba312785932d430dccf0f56ffedd0aa7c0f8b6da2cc4530c2717689b96826115b1565b6108217ed2ead78c620e94b02d0a996e99298c59ddccfa1d8a0149080ac3a20de06068826115b1565b6108217f0251e864ca2a080f55bce5da2452e8cfcafdbc951a3e7fff5023d558452ec228826115b1565b80336001600160a01b038216036115115760405162461bcd60e51b815260040161026690611cba565b6108cb5f80516020611ede833981519152836115b1565b6108217f0128d63adbf6b09002c26caf55c47e2f26635807e3ef1b027218aa74c8d61a3e826115b1565b6108217f023edb77f7c8cc9e38e8afe78954f703aeeda7fffe014eeb6e56ea84e62f6da7826115b1565b5f8281525f80516020611efe83398151915260205260409020600101546115a2816117f2565b6115ac83836117fc565b505050565b5f8281525f80516020611efe83398151915260205260409020600101546115d7816117f2565b6115ac8383611870565b6001600160a01b03811633146116515760405162461bcd60e51b815260206004820152602f60248201527f416363657373436f6e74726f6c3a2063616e206f6e6c792072656e6f756e636560448201526e103937b632b9903337b91039b2b63360891b6064820152608401610266565b6108cb8282611870565b5f9182525f80516020611efe833981519152602090815260408084206001600160a01b0393909316845291905290205460ff1690565b5f6116c76040518060400160405280601481526020017350524f58595f355f454e41424c45445f54494d4560601b8152506118e2565b905090565b5f6116c76040518060400160405280601581526020017450524f58595f355f44495341424c45445f54494d4560581b8152506118e2565b5f8061171a5f80516020611f1e8339815191525490565b90506001600160a01b038116611731575f91505090565b60408051600481526024810182526020810180516001600160e01b03166333eeb14760e01b17905290515f9182916001600160a01b0385169161177391611ddf565b5f60405180830381855af49150503d805f81146117ab576040519150601f19603f3d011682016040523d82523d5f602084013e6117b0565b606091505b50915091508181906117d55760405162461bcd60e51b81526004016102669190611c88565b50808060200190518101906117ea9190611dfa565b935050505090565b6108218133611914565b611806828261165b565b6108cb575f8281525f80516020611efe833981519152602090815260408083206001600160a01b0385168085529252808320805460ff1916600117905551339285917f2f8788117e7eff1d82e926ec794901d17c78024a50270940304540a733656f0d9190a45050565b61187a828261165b565b156108cb575f8281525f80516020611efe833981519152602090815260408083206001600160a01b0385168085529252808320805460ff1916905551339285917ff6391f5c32d9c69d2a47ea670b442974b53935d1edc7fd64eb21e047a839171b9190a45050565b5f80826040516020016118f59190611ddf565b60408051601f1981840301815291905280516020909101209392505050565b61191e828261165b565b6108cb57611936816001600160a01b03166014611978565b611941836020611978565b604051602001611952929190611e15565b60408051601f198184030181529082905262461bcd60e51b825261026691600401611c88565b60605f611986836002611e89565b611991906002611db1565b67ffffffffffffffff8111156119a9576119a9611ea0565b6040519080825280601f01601f1916602001820160405280156119d3576020820181803683370190505b509050600360fc1b815f815181106119ed576119ed611eb4565b60200101906001600160f81b03191690815f1a905350600f60fb1b81600181518110611a1b57611a1b611eb4565b60200101906001600160f81b03191690815f1a9053505f611a3d846002611e89565b611a48906001611db1565b90505b6001811115611abf576f181899199a1a9b1b9c1cb0b131b232b360811b85600f1660108110611a7c57611a7c611eb4565b1a60f81b828281518110611a9257611a92611eb4565b60200101906001600160f81b03191690815f1a90535060049490941c93611ab881611ec8565b9050611a4b565b508315611b0e5760405162461bcd60e51b815260206004820181905260248201527f537472696e67733a20686578206c656e67746820696e73756666696369656e746044820152606401610266565b9392505050565b80356001600160a01b0381168114611b2b575f80fd5b919050565b5f60208284031215611b40575f80fd5b611b0e82611b15565b5f8060408385031215611b5a575f80fd5b82359150611b6a60208401611b15565b90509250929050565b5f8083601f840112611b83575f80fd5b50813567ffffffffffffffff811115611b9a575f80fd5b602083019150836020828501011115611bb1575f80fd5b9250929050565b5f8060208385031215611bc9575f80fd5b823567ffffffffffffffff811115611bdf575f80fd5b611beb85828601611b73565b90969095509350505050565b8015158114610821575f80fd5b5f805f8060608587031215611c17575f80fd5b611c2085611b15565b9350602085013567ffffffffffffffff811115611c3b575f80fd5b611c4787828801611b73565b9094509250506040850135611c5b81611bf7565b939692955090935050565b5f5b83811015611c80578181015183820152602001611c68565b50505f910152565b602081525f8251806020840152611ca6816040850160208701611c66565b601f01601f19169190910160400192915050565b60208082526016908201527521a0a72727aa2fa822a92327a926afa7a72fa9a2a62360511b604082015260600190565b60208082526015908201527427a7262cafaaa823a920a222afa3a7ab22a92727a960591b604082015260600190565b81835281816020850137505f828201602090810191909152601f909101601f19169091010190565b6001600160a01b03851681526060602082018190525f90611d659083018587611d19565b9050821515604083015295945050505050565b604081525f611d8b604083018587611d19565b90508215156020830152949350505050565b634e487b7160e01b5f52601160045260245ffd5b808201808211156109f5576109f5611d9d565b602081525f611dd7602083018486611d19565b949350505050565b5f8251611df0818460208701611c66565b9190910192915050565b5f60208284031215611e0a575f80fd5b8151611b0e81611bf7565b7f416363657373436f6e74726f6c3a206163636f756e742000000000000000000081525f8351611e4c816017850160208801611c66565b7001034b99036b4b9b9b4b733903937b6329607d1b6017918401918201528351611e7d816028840160208801611c66565b01602801949350505050565b80820281158282048414176109f5576109f5611d9d565b634e487b7160e01b5f52604160045260245ffd5b634e487b7160e01b5f52603260045260245ffd5b5f81611ed657611ed6611d9d565b505f19019056fe03711c9d994faf6055172091cb841fd4831aa743e6f3315163b06a122c84184653e43b954ba190a7e49386f1f78b01dcd9f628db23f432fa029a7dfd6d98e8fb177667240aeeea7e35eabe3a35e18306f336219e1386f7710a6bf8783f761b24a264697066735822122097560038ae3e8765148b666a7d92dae6e45afba45a5c5a30ba22bf31d56d14ab64736f6c63430008140033",
+  "evm_version": "shanghai",
+  "external_libraries": [],
+  "file_path": "starkware/solidity/upgrade/Proxy.sol",
+  "implementations": [
+    {
+      "address_hash": "0x6ad74D4B79A06A492C288eF66Ef868Dd981fdC85",
+      "name": "StarknetERC20Bridge"
+    }
+  ],
+  "is_blueprint": false,
+  "is_changed_bytecode": false,
+  "is_fully_verified": false,
+  "is_partially_verified": true,
+  "is_verified": true,
+  "is_verified_via_eth_bytecode_db": true,
+  "is_verified_via_sourcify": true,
+  "is_verified_via_verifier_alliance": null,
+  "language": "solidity",
+  "license_type": "none",
+  "name": "Proxy",
+  "optimization_enabled": true,
+  "optimization_runs": 200,
+  "proxy_type": "basic_implementation",
+  "source_code": "/*\n  Copyright 2019-2023 StarkWare Industries Ltd.\n\n  Licensed under the Apache License, Version 2.0 (the \"License\").\n  You may not use this file except in compliance with the License.\n  You may obtain a copy of the License at\n\n  https://www.starkware.co/open-source-license/\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an \"AS IS\" BASIS,\n  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n  See the License for the specific language governing permissions\n  and limitations under the License.\n*/\n// SPDX-License-Identifier: Apache-2.0.\npragma solidity ^0.8.20;\n\nimport \"starkware/solidity/upgrade/ProxyStorage.sol\";\nimport \"starkware/solidity/upgrade/StorageSlots.sol\";\nimport \"starkware/solidity/components/Roles.sol\";\nimport \"starkware/solidity/libraries/Addresses.sol\";\n\n/**\n  The Proxy contract implements delegation of calls to other contracts (`implementations`), with\n  proper forwarding of return values and revert reasons. This pattern allows retaining the contract\n  storage while replacing implementation code.\n\n  The following operations are supported by the proxy contract:\n\n  - :sol:func:`addImplementation`: Defines a new implementation, the data with which it should be initialized and whether this will be the last version of implementation.\n  - :sol:func:`upgradeTo`: Once an implementation is added, the governor may upgrade to that implementation only after a safety time period has passed (time lock), the current implementation is not the last version and the implementation is not frozen (see :sol:mod:`FullWithdrawals`).\n  - :sol:func:`removeImplementation`: Any announced implementation may be removed. Removing an implementation is especially important once it has been used for an upgrade in order to avoid an additional unwanted revert to an older version.\n\n  The only entity allowed to perform the above operations is the proxy governor\n  (see :sol:mod:`ProxyGovernance`).\n\n  Every implementation is required to have an `initialize` function that replaces the constructor\n  of a normal contract. Furthermore, the only parameter of this function is an array of bytes\n  (`data`) which may be decoded arbitrarily by the `initialize` function. It is up to the\n  implementation to ensure that this function cannot be run more than once if so desired.\n\n  When an implementation is added (:sol:func:`addImplementation`) the initialization `data` is also\n  announced, allowing users of the contract to analyze the full effect of an upgrade to the new\n  implementation. During an :sol:func:`upgradeTo`, the `data` is provided again and only if it is\n  identical to the announced `data` is the upgrade performed by pointing the proxy to the new\n  implementation and calling its `initialize` function with this `data`.\n\n  ProxyStorage contains the storage variables required by the Proxy.\n  The Proxy storage variables are not in the low slot addresses (a.k.a linear storage) - to avoid\n  storage collision.\n*/\ncontract Proxy is ProxyStorage, StorageSlots, Roles {\n    // Emitted when the active implementation is replaced.\n    event ImplementationUpgraded(address indexed implementation, bytes initializer);\n\n    // Emitted when an implementation is submitted as an upgrade candidate and a time lock\n    // is activated.\n    event ImplementationAdded(address indexed implementation, bytes initializer, bool finalize);\n\n    // Emitted when an implementation is removed from the list of upgrade candidates.\n    event ImplementationRemoved(address indexed implementation, bytes initializer, bool finalize);\n\n    // Emitted when the implementation is finalized.\n    event FinalizedImplementation(address indexed implementation);\n\n    using Addresses for address;\n\n    uint256 public constant MAX_UPGRADE_DELAY = 180 days;\n\n    string public constant PROXY_VERSION = \"5.0.0\";\n\n    // Initialize Roles(false) so that we cannot renounce governance.\n    constructor(uint256 upgradeActivationDelay) Roles(false) {\n        setUpgradeActivationDelay(upgradeActivationDelay);\n        setEnableWindowDuration(14 days);\n    }\n\n    /*\n      Stores the upgrade activation delay (in seconds) in the appropriate slot.\n      this function does not validate the delay value, as it's checked in the getter.\n    */\n    function setUpgradeActivationDelay(uint256 delayInSeconds) private {\n        bytes32 slot = UPGRADE_DELAY_SLOT;\n        assembly {\n            sstore(slot, delayInSeconds)\n        }\n    }\n\n    /*\n      Reads the upgrade activation delay (in seconds) at the appropriate slot.\n      The returned value is capped at MAX_UPGRADE_DELAY.\n      It is safer to do the capping in the getter because an upgrade\n      flow might modify this value without going through the setter function.\n    */\n    function getUpgradeActivationDelay() public view returns (uint256 delay) {\n        bytes32 slot = UPGRADE_DELAY_SLOT;\n        assembly {\n            delay := sload(slot)\n        }\n\n        delay = (delay < MAX_UPGRADE_DELAY) ? delay : MAX_UPGRADE_DELAY;\n        return delay;\n    }\n\n    function getEnableWindowDuration() public view returns (uint256 duration) {\n        bytes32 slot = ENABLE_WINDOW_DURATION_SLOT;\n        assembly {\n            duration := sload(slot)\n        }\n    }\n\n    function setEnableWindowDuration(uint256 durationInSeconds) private {\n        bytes32 slot = ENABLE_WINDOW_DURATION_SLOT;\n        assembly {\n            sstore(slot, durationInSeconds)\n        }\n    }\n\n    /*\n      Returns the address of the current implementation.\n    */\n    // NOLINTNEXTLINE external-function.\n    function implementation() public view returns (address _implementation) {\n        bytes32 slot = IMPLEMENTATION_SLOT;\n        assembly {\n            _implementation := sload(slot)\n        }\n    }\n\n    /*\n      Returns true if the implementation is frozen.\n      If the implementation was not assigned yet, returns false.\n    */\n    function implementationIsFrozen() private returns (bool) {\n        address _implementation = implementation();\n\n        // We can't call low level implementation before it's assigned. (i.e. ZERO).\n        if (_implementation == address(0x0)) {\n            return false;\n        }\n\n        // NOLINTNEXTLINE: low-level-calls.\n        (bool success, bytes memory returndata) = _implementation.delegatecall(\n            abi.encodeWithSignature(\"isFrozen()\")\n        );\n        require(success, string(returndata));\n        return abi.decode(returndata, (bool));\n    }\n\n    /*\n      This method blocks delegation to initialize().\n      Only upgradeTo should be able to delegate call to initialize().\n    */\n    function initialize(\n        bytes calldata /*data*/\n    ) external pure {\n        revert(\"CANNOT_CALL_INITIALIZE\");\n    }\n\n    modifier notFinalized() {\n        require(isNotFinalized(), \"IMPLEMENTATION_FINALIZED\");\n        _;\n    }\n\n    /*\n      Forbids calling the function if the implementation is frozen.\n      This modifier relies on the lower level (logical contract) implementation of isFrozen().\n    */\n    modifier notFrozen() {\n        require(!implementationIsFrozen(), \"STATE_IS_FROZEN\");\n        _;\n    }\n\n    /*\n      This entry point serves only transactions with empty calldata. (i.e. pure value transfer tx).\n      We don't expect to receive such, thus block them.\n    */\n    receive() external payable {\n        revert(\"CONTRACT_NOT_EXPECTED_TO_RECEIVE\");\n    }\n\n    /*\n      Contract's default function. Delegates execution to the implementation contract.\n      It returns back to the external caller whatever the implementation delegated code returns.\n    */\n    fallback() external payable {\n        address _implementation = implementation();\n        require(_implementation != address(0x0), \"MISSING_IMPLEMENTATION\");\n\n        assembly {\n            // Copy msg.data. We take full control of memory in this inline assembly\n            // block because it will not return to Solidity code. We overwrite the\n            // Solidity scratch pad at memory position 0.\n            calldatacopy(0, 0, calldatasize())\n\n            // Call the implementation.\n            // out and outsize are 0 for now, as we don't know the out size yet.\n            let result := delegatecall(gas(), _implementation, 0, calldatasize(), 0, 0)\n\n            // Copy the returned data.\n            returndatacopy(0, 0, returndatasize())\n\n            // TODO(Remo): Find a way to properly propagae inner OOG error.\n            switch result\n            // delegatecall returns 0 on error.\n            case 0 {\n                revert(0, returndatasize())\n            }\n            default {\n                return(0, returndatasize())\n            }\n        }\n    }\n\n    /*\n      Sets the implementation address of the proxy.\n    */\n    function setImplementation(address newImplementation) private {\n        bytes32 slot = IMPLEMENTATION_SLOT;\n        assembly {\n            sstore(slot, newImplementation)\n        }\n    }\n\n    /*\n      Returns true if the contract is not in the finalized state.\n    */\n    function isNotFinalized() public view returns (bool notFinal) {\n        bytes32 slot = FINALIZED_STATE_SLOT;\n        uint256 slotValue;\n        assembly {\n            slotValue := sload(slot)\n        }\n        notFinal = (slotValue == 0);\n    }\n\n    /*\n      Marks the current implementation as finalized.\n    */\n    function setFinalizedFlag() private {\n        bytes32 slot = FINALIZED_STATE_SLOT;\n        assembly {\n            sstore(slot, 0x1)\n        }\n    }\n\n    /*\n      Introduce an implementation and its initialization vector,\n      and start the time-lock before it can be upgraded to.\n      addImplementation is not blocked when frozen or finalized.\n      (upgradeTo API is blocked when finalized or frozen).\n    */\n    function addImplementation(\n        address newImplementation,\n        bytes calldata data,\n        bool finalize\n    ) external onlyUpgradeGovernor {\n        require(newImplementation.isContract(), \"ADDRESS_NOT_CONTRACT\");\n\n        bytes32 implVectorHash = keccak256(abi.encode(newImplementation, data, finalize));\n\n        uint256 activationTime = block.timestamp + getUpgradeActivationDelay();\n        uint256 lastActivationTime = activationTime + getEnableWindowDuration();\n\n        enabledTime()[implVectorHash] = activationTime;\n        expirationTime()[implVectorHash] = lastActivationTime;\n        emit ImplementationAdded(newImplementation, data, finalize);\n    }\n\n    /*\n      Removes a candidate implementation.\n      Note that it is possible to remove the current implementation. Doing so doesn't affect the\n      current implementation, but rather revokes it as a future candidate.\n    */\n    function removeImplementation(\n        address removedImplementation,\n        bytes calldata data,\n        bool finalize\n    ) external onlyUpgradeGovernor {\n        bytes32 implVectorHash = keccak256(abi.encode(removedImplementation, data, finalize));\n\n        // If we have initializer, we set the hash of it.\n        uint256 activationTime = enabledTime()[implVectorHash];\n        require(activationTime > 0, \"UNKNOWN_UPGRADE_INFORMATION\");\n        delete enabledTime()[implVectorHash];\n        delete expirationTime()[implVectorHash];\n        emit ImplementationRemoved(removedImplementation, data, finalize);\n    }\n\n    /*\n      Upgrades the proxy to a new implementation, with its initialization.\n      to upgrade successfully, implementation must have been added time-lock agreeably\n      before, and the init vector must be identical ot the one submitted before.\n\n      Upon assignment of new implementation address,\n      its initialize will be called with the initializing vector (even if empty).\n      Therefore, the implementation MUST must have such a method.\n\n      Note - Initialization data is committed to in advance, therefore it must remain valid\n      until the actual contract upgrade takes place.\n\n      Care should be taken regarding initialization data and flow when planning the contract upgrade.\n\n      When planning contract upgrade, special care is also needed with regard to governance\n      (See comments in Governance.sol).\n    */\n    // NOLINTNEXTLINE: reentrancy-events timestamp.\n    function upgradeTo(\n        address newImplementation,\n        bytes calldata data,\n        bool finalize\n    ) external payable onlyUpgradeGovernor notFinalized notFrozen {\n        bytes32 implVectorHash = keccak256(abi.encode(newImplementation, data, finalize));\n        uint256 activationTime = enabledTime()[implVectorHash];\n        uint256 lastActivationTime = expirationTime()[implVectorHash];\n        require(activationTime > 0, \"UNKNOWN_UPGRADE_INFORMATION\");\n        require(newImplementation.isContract(), \"ADDRESS_NOT_CONTRACT\");\n\n        // On the first time an implementation is set - time-lock should not be enforced.\n        require(\n            activationTime <= block.timestamp || implementation() == address(0x0),\n            \"UPGRADE_NOT_ENABLED_YET\"\n        );\n        require(lastActivationTime >= block.timestamp, \"IMPLEMENTATION_EXPIRED\");\n\n        setImplementation(newImplementation);\n\n        // NOLINTNEXTLINE: low-level-calls controlled-delegatecall.\n        (bool success, bytes memory returndata) = newImplementation.delegatecall(\n            abi.encodeWithSelector(this.initialize.selector, data)\n        );\n        require(success, string(returndata));\n\n        // Verify that the new implementation is not frozen post initialization.\n        // NOLINTNEXTLINE: low-level-calls controlled-delegatecall.\n        (success, returndata) = newImplementation.delegatecall(\n            abi.encodeWithSignature(\"isFrozen()\")\n        );\n        require(success, \"CALL_TO_ISFROZEN_REVERTED\");\n        require(!abi.decode(returndata, (bool)), \"NEW_IMPLEMENTATION_FROZEN\");\n\n        // Remove implementation activation entries.\n        delete enabledTime()[implVectorHash];\n        delete expirationTime()[implVectorHash];\n\n        emit ImplementationUpgraded(newImplementation, data);\n\n        if (finalize) {\n            setFinalizedFlag();\n            emit FinalizedImplementation(newImplementation);\n        }\n    }\n}\n",
+  "sourcify_repo_url": "https://repo.sourcify.dev/contracts/partial_match/1/0xcE5485Cfb26914C5dcE00B9BAF0580364daFC7a4/",
+  "verified_at": "2024-02-28T08:21:39.233322Z",
+  "verified_twin_address_hash": null
+}

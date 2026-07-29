@@ -1,0 +1,73 @@
+{
+  "artifacts": [
+    {
+      "bytes": 1741,
+      "path": "README.md",
+      "sha256": "85d7c44036e1c3ef680da92f6499348a1c3a273cae7a39b07c7703a5b2bec7be"
+    },
+    {
+      "bytes": 49754,
+      "path": "blockscout/ChsbToBorgMigratorProxy.json",
+      "sha256": "c4d14abf42c49c69cc1085dc7bab45fccfeceef7d7a14a80018ebea983154dbe"
+    },
+    {
+      "bytes": 119345,
+      "path": "blockscout/ChsbToBorgMigratorV2.json",
+      "sha256": "a2f927d711f2127d4cb4d2661d79358f1dace482edfe99b599fcf68b79db8539"
+    },
+    {
+      "bytes": 4,
+      "path": "blockscout/FellowFund.http-status.txt",
+      "sha256": "f8bf41177a5f5e808a7ccb648b51080b031f15ca8018d91a576263d6cc626eb6"
+    },
+    {
+      "bytes": 23,
+      "path": "blockscout/FellowFund.json",
+      "sha256": "bf96645a2721720fbe8fc0a47a243d73d5901e6213eb01c6eca976ab9bc18235"
+    },
+    {
+      "bytes": 5748,
+      "path": "collect.sh",
+      "sha256": "ada52e9948cf446b10d6515379cdfcd316c16b7ed0c6ff9568d91cfc541cf577"
+    },
+    {
+      "bytes": 111449,
+      "path": "rpc/drpc.json",
+      "sha256": "c1ffb56ded3fbb61e58910c79f2e0c411ba4b360904940f204ebe612738c8b23"
+    },
+    {
+      "bytes": 111529,
+      "path": "rpc/mevblocker.json",
+      "sha256": "2d2656d57bd8f3ef4dcd84ec2288516dd7d460f1acecea48371f4770781d09b7"
+    },
+    {
+      "bytes": 1363,
+      "path": "runtime/ChsbToBorgMigratorProxy.hex",
+      "sha256": "1624c41dccb070fdaa74cc217bcd64502163f28981b79d8f41a502275d8cf151"
+    },
+    {
+      "bytes": 22727,
+      "path": "runtime/ChsbToBorgMigratorV2.hex",
+      "sha256": "201b94c79ed20b2ef16cac918df4335ed147e7033bfa356ffd500baf28734d3b"
+    },
+    {
+      "bytes": 3,
+      "path": "runtime/FellowFund.hex",
+      "sha256": "d0a00c80ae48701de756e7a5a5a59eabb25c71cd60b9cee5a193e895b25b163f"
+    }
+  ],
+  "boundary": "Historical fixed-block deployment, runtime, proxy-state, token-binding, and verified-source evidence only. No future-upgrade, reopening, execution-success, fallback, blind-signing, production, shipment, or irreversible-action authority.",
+  "captured_at_utc": "2026-07-28T13:24:00Z",
+  "claims": [
+    "Two independent Ethereum RPC providers agree that the sole FellowFund registry destination has empty bytecode at the fixed block.",
+    "Both RPC providers bind the SwissBorg migrator proxy to ChsbToBorgMigratorV2, the same CHSB/BORG addresses, and paused=true.",
+    "Blockscout fully verifies the V2 implementation source whose migrate(uint256) body unconditionally reverts MIGRATION_CLOSED."
+  ],
+  "fixed_block": {
+    "chain_id": 1,
+    "number": 25630720,
+    "number_hex": "0x1871800"
+  },
+  "schema_version": 1,
+  "scope": "Fixed-block negative deployment evidence for FellowFund and fixed-block proxy/source closure evidence for the SwissBorg CHSB-to-BORG migrator."
+}

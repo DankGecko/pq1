@@ -475,6 +475,47 @@ fn evidence_receipts_inventory_and_all_five_selectors_are_exact() {
             "source-to-descriptor receipt drifted: {path}"
         );
     }
+    for relative in [
+        "secure/data/erc7730-registry/registry/1inch/calldata-AggregationRouterV6.json",
+        "secure/data/erc7730-registry/registry/1inch/calldata-AggregationRouterV6-zksync.json",
+    ] {
+        let descriptor = read_json(&workspace.join(relative));
+        let expected_refusal_only = if relative.ends_with("AggregationRouterV6-zksync.json") {
+            serde_json::json!([
+                "advanceEpoch(uint96 series, uint256 amount)",
+                "bitsInvalidateForOrder(uint256 makerTraits, uint256 additionalMask)"
+            ])
+        } else {
+            serde_json::json!([
+                "advanceEpoch(uint96 series, uint256 amount)",
+                "bitsInvalidateForOrder(uint256 makerTraits, uint256 additionalMask)",
+                "clipperSwap(address clipperExchange, uint256 srcToken, address dstToken, uint256 inputAmount, uint256 outputAmount, uint256 goodUntil, bytes32 r, bytes32 vs)",
+                "clipperSwapTo(address clipperExchange, address recipient, uint256 srcToken, address dstToken, uint256 inputAmount, uint256 outputAmount, uint256 goodUntil, bytes32 r, bytes32 vs)"
+            ])
+        };
+        assert_eq!(
+            descriptor["_pqsigner"]["refusalOnlyFormats"],
+            expected_refusal_only
+        );
+        let refusal_only = descriptor["_pqsigner"]["refusalOnlyFormats"]
+            .as_array()
+            .expect("structural refusal-only format list");
+        let refusal_only = refusal_only
+            .iter()
+            .map(|value| value.as_str().expect("refusal-only signature"))
+            .collect::<BTreeSet<_>>();
+        for admission in descriptor["_pqsigner"]["deploymentFormats"]
+            .as_array()
+            .expect("deployment format admissions")
+        {
+            for format in admission["formats"].as_array().expect("admitted formats") {
+                assert!(
+                    !refusal_only.contains(format.as_str().expect("admitted signature")),
+                    "refusal-only and admitted format overlap in {relative}"
+                );
+            }
+        }
+    }
     if let Some(overlay) = manifest["curation_overlay"].as_object() {
         let relative = overlay["path"].as_str().expect("curation overlay path");
         let bytes = fs::read(workspace.join(relative)).expect("curation overlay bytes");

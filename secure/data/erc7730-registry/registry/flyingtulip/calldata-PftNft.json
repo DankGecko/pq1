@@ -1,5 +1,34 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
+  "_curation_note": "PQSigner semantic curation: only the inherited ERC-721 approve and setApprovalForAll routes are admitted for the three fixed-block pFT proxy/implementation pairs below. The signed transaction target authenticates the exact NFT collection; approve shows the per-position account and its zero-address clearing rule, while setApprovalForAll injectively names both grant and deny outcomes. Evidence is historical source/compiler/runtime authority, not live ownership, authorization, success, future upgrades, transfer routes, fallback, or blind signing. See tests/erc7730-semantic-evidence/flyingtulip-market-nft.",
+  "_pqsigner": {
+    "deploymentFormats": [
+      {
+        "chainId": 1,
+        "address": "0xa4215Daaf3745E14E96E169E0E7706c479Ce04F2",
+        "formats": [
+          "approve(address to, uint256 tokenId)",
+          "setApprovalForAll(address operator, bool approved)"
+        ]
+      },
+      {
+        "chainId": 146,
+        "address": "0xa4215Daaf3745E14E96E169E0E7706c479Ce04F2",
+        "formats": [
+          "approve(address to, uint256 tokenId)",
+          "setApprovalForAll(address operator, bool approved)"
+        ]
+      },
+      {
+        "chainId": 146,
+        "address": "0x1d8051c90076FaA5b683A3551Ee4369d00f99D67",
+        "formats": [
+          "approve(address to, uint256 tokenId)",
+          "setApprovalForAll(address operator, bool approved)"
+        ]
+      }
+    ]
+  },
   "context": {
     "contract": {
       "deployments": [
@@ -38,10 +67,12 @@
         "fields": [
           {
             "path": "to",
-            "label": "Operator",
+            "label": "Approved account",
             "format": "addressName",
             "params": {
               "types": [
+                "wallet",
+                "eoa",
                 "contract"
               ],
               "sources": [
@@ -49,6 +80,12 @@
                 "ens"
               ]
             },
+            "visible": "always"
+          },
+          {
+            "value": "Zero address clears approval",
+            "label": "Approval rule",
+            "format": "raw",
             "visible": "always"
           },
           {
@@ -72,6 +109,8 @@
             "format": "addressName",
             "params": {
               "types": [
+                "wallet",
+                "eoa",
                 "contract"
               ],
               "sources": [

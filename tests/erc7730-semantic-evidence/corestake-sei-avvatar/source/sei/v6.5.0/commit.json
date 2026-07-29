@@ -1,0 +1,101 @@
+{
+  "author": {
+    "avatar_url": "https://avatars.githubusercontent.com/u/301855?v=4",
+    "events_url": "https://api.github.com/users/masih/events{/privacy}",
+    "followers_url": "https://api.github.com/users/masih/followers",
+    "following_url": "https://api.github.com/users/masih/following{/other_user}",
+    "gists_url": "https://api.github.com/users/masih/gists{/gist_id}",
+    "gravatar_id": "",
+    "html_url": "https://github.com/masih",
+    "id": 301855,
+    "login": "masih",
+    "node_id": "MDQ6VXNlcjMwMTg1NQ==",
+    "organizations_url": "https://api.github.com/users/masih/orgs",
+    "received_events_url": "https://api.github.com/users/masih/received_events",
+    "repos_url": "https://api.github.com/users/masih/repos",
+    "site_admin": false,
+    "starred_url": "https://api.github.com/users/masih/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/masih/subscriptions",
+    "type": "User",
+    "url": "https://api.github.com/users/masih",
+    "user_view_type": "public"
+  },
+  "comments_url": "https://api.github.com/repos/sei-protocol/sei-chain/commits/fbc0d9342ca28887958013170e4020d93cacdbfa/comments",
+  "commit": {
+    "author": {
+      "date": "2026-05-15T19:44:35Z",
+      "email": "m@derkani.org",
+      "name": "Masih H. Derkani"
+    },
+    "comment_count": 0,
+    "committer": {
+      "date": "2026-05-15T19:44:35Z",
+      "email": "noreply@github.com",
+      "name": "GitHub"
+    },
+    "message": "Cut v6.5.0 in prep for release (#3444)\n\nCut v6.5.0 in prep for release",
+    "tree": {
+      "sha": "400b7f293d4ef3525218a18c72e41be41af1a8d6",
+      "url": "https://api.github.com/repos/sei-protocol/sei-chain/git/trees/400b7f293d4ef3525218a18c72e41be41af1a8d6"
+    },
+    "url": "https://api.github.com/repos/sei-protocol/sei-chain/git/commits/fbc0d9342ca28887958013170e4020d93cacdbfa",
+    "verification": {
+      "payload": "tree 400b7f293d4ef3525218a18c72e41be41af1a8d6\nparent d6a1c040107d0c4d5886b0c7acfcf35780d10ee6\nauthor Masih H. Derkani <m@derkani.org> 1778874275 +0100\ncommitter GitHub <noreply@github.com> 1778874275 +0100\n\nCut v6.5.0 in prep for release (#3444)\n\nCut v6.5.0 in prep for release",
+      "reason": "valid",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqB3ejCRC1aQ7uu5UhlAAAHpoQAGZTfo3Gn0Ez9/90uE+l/8sz\nM10D1IquB7KBixdwn94PZxOkJABZ6z78NVnGg1pBKZaLKIksMD/zT4sqPZSnlp+a\nv/iq83uEUeR43Uu3nHgkdF+oTw06Y+ESN1xcu6CodFgX0oqa6uzxkBZAKnEDD/nQ\nfrG/7jXYODsNu8hU50YMW+I3fcOEfut/rR1txO8IKJMl304CtbkLS0apzep1jcB2\nZs6c88UXDyZxh3qxoypvzDpeHyiIXaWuaT4r5VmbFP9zWr08X4+ex59aMempOkzQ\ntNl+5IcFPOypofT4aKW7PuM0JezLVbUuaIBUMLYbJmdkZvRjrf8FJ+eVeJtFkcd4\nl7bnnQ96HZVTsuNadXze4WwCC68qtQWfwDVBBT7aAnbgQYKoyNh0kpFnFJwu8mnN\nHok3C4B9QDvfY30NOTJb3cVweb7BOmSQokyk9eq1nxgQ3kr9nnY/1K2WinIUI61r\nRbp83+dZ0V//3qwKm1XwqSyctQ8Lklgx8CirMoSp+HfEME19pXeL6GqL1DRiSNLo\nhVqaSjkej8z17tdTfj795kG9V25cqs58ltBJ5R3Qcv2ga6I0vhKIQVA4zGtwsLRP\nUKnIXFUrpXibYxnvTGCx/uNPdikVNuJvqUTJNzYQSh/UjB6+f+oM4pvutjQ8vxSu\n1JtLUyi6K+Zm932zU6WS\n=gDqj\n-----END PGP SIGNATURE-----\n",
+      "verified": true,
+      "verified_at": "2026-05-15T19:44:36Z"
+    }
+  },
+  "committer": {
+    "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+    "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+    "followers_url": "https://api.github.com/users/web-flow/followers",
+    "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+    "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+    "gravatar_id": "",
+    "html_url": "https://github.com/web-flow",
+    "id": 19864447,
+    "login": "web-flow",
+    "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+    "organizations_url": "https://api.github.com/users/web-flow/orgs",
+    "received_events_url": "https://api.github.com/users/web-flow/received_events",
+    "repos_url": "https://api.github.com/users/web-flow/repos",
+    "site_admin": false,
+    "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+    "type": "User",
+    "url": "https://api.github.com/users/web-flow",
+    "user_view_type": "public"
+  },
+  "files": [
+    {
+      "additions": 1,
+      "blob_url": "https://github.com/sei-protocol/sei-chain/blob/fbc0d9342ca28887958013170e4020d93cacdbfa/version.json",
+      "changes": 2,
+      "contents_url": "https://api.github.com/repos/sei-protocol/sei-chain/contents/version.json?ref=fbc0d9342ca28887958013170e4020d93cacdbfa",
+      "deletions": 1,
+      "filename": "version.json",
+      "patch": "@@ -1,3 +1,3 @@\n {\n-  \"version\": \"v6.5.0-rc1\"\n+  \"version\": \"v6.5.0\"\n }\n\\ No newline at end of file",
+      "raw_url": "https://github.com/sei-protocol/sei-chain/raw/fbc0d9342ca28887958013170e4020d93cacdbfa/version.json",
+      "sha": "e26edeb4cdf9dd6771cb43e577cf80931dcfc536",
+      "status": "modified"
+    }
+  ],
+  "html_url": "https://github.com/sei-protocol/sei-chain/commit/fbc0d9342ca28887958013170e4020d93cacdbfa",
+  "node_id": "C_kwDOHWkkNtoAKGZiYzBkOTM0MmNhMjg4ODc5NTgwMTMxNzBlNDAyMGQ5M2NhY2RiZmE",
+  "parents": [
+    {
+      "html_url": "https://github.com/sei-protocol/sei-chain/commit/d6a1c040107d0c4d5886b0c7acfcf35780d10ee6",
+      "sha": "d6a1c040107d0c4d5886b0c7acfcf35780d10ee6",
+      "url": "https://api.github.com/repos/sei-protocol/sei-chain/commits/d6a1c040107d0c4d5886b0c7acfcf35780d10ee6"
+    }
+  ],
+  "sha": "fbc0d9342ca28887958013170e4020d93cacdbfa",
+  "stats": {
+    "additions": 1,
+    "deletions": 1,
+    "total": 2
+  },
+  "url": "https://api.github.com/repos/sei-protocol/sei-chain/commits/fbc0d9342ca28887958013170e4020d93cacdbfa"
+}

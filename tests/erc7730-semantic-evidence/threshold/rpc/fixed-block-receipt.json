@@ -1,0 +1,543 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-07-28T09:47:57Z",
+  "standard_slots": {
+    "eip1967_implementation": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "eip1967_admin": "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103",
+    "eip1967_beacon": "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50"
+  },
+  "l2_wormhole_gateways": [
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "rpc_endpoints": [
+        "https://base.gateway.tenderly.co",
+        "https://base.drpc.org"
+      ],
+      "evidence_block": {
+        "number": 49191542,
+        "number_hex": "0x2ee9a76",
+        "hash": "0x3fb4840a1d98daa91650e1cf7d65a762a131ff5b00334272229b8b2d523c7e08",
+        "state_root": "0x6b5c4fac28006c150df12562b3ac6de9e2c07325a81d616d0ad30820667c7ad0",
+        "timestamp": "0x6a6791cf",
+        "independently_corroborated_by": [
+          "https://base.gateway.tenderly.co",
+          "https://base.drpc.org"
+        ]
+      },
+      "proxy": "0x09959798b95d00a3183d20fac298e4594e599eab",
+      "eip1967_implementation_slot": "0x00000000000000000000000040fa0a360818b04b9975680746dc0b7092105a0c",
+      "implementation": "0x40fa0a360818b04b9975680746dc0b7092105a0c",
+      "proxy_runtime": {
+        "file": "runtime/gateway-base-proxy.hex",
+        "bytes": 2227,
+        "decoded_sha256": "e518057ee9772b6d5ad104f0c0cbae96d42e5543dcaaff3b39257089ab5fe699",
+        "keccak256": "0x4d9be648c5bf39973670d9f8b481d5d0b971e6a2db2deccc6b98cde21c5dd83e"
+      },
+      "implementation_runtime": {
+        "file": "runtime/gateway-base-implementation.hex",
+        "bytes": 8764,
+        "decoded_sha256": "23e2df869df68a340174cacb86e5123067e87ae47a0379e9539ea8e10a508c75",
+        "keccak256": "0x406db4fd35e192386147f14f8074f22f721fa99512c540f84e9f7a67da54c130"
+      },
+      "bindings": {
+        "tbtc": {
+          "address": "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
+          "raw_call": "0x000000000000000000000000236aa50979d5f3de3bd1eeb40e81137f22ab794b"
+        },
+        "bridge": {
+          "address": "0x8d2de8d2f73f1f4cab472ac9a881c9b123c79627",
+          "raw_call": "0x0000000000000000000000008d2de8d2f73f1f4cab472ac9a881c9b123c79627"
+        },
+        "bridge_token": {
+          "address": "0x9ee95e6bd1b3c5740f105d6fb06b8bdef64eec70",
+          "raw_call": "0x0000000000000000000000009ee95e6bd1b3c5740f105d6fb06b8bdef64eec70"
+        }
+      },
+      "tbtc_metadata": {
+        "address": "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
+        "name": "Base tBTC v2",
+        "symbol": "tBTC",
+        "decimals": 18,
+        "raw_calls": {
+          "name()": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000c4261736520744254432076320000000000000000000000000000000000000000",
+          "symbol()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000047442544300000000000000000000000000000000000000000000000000000000",
+          "decimals()": "0x0000000000000000000000000000000000000000000000000000000000000012"
+        }
+      }
+    },
+    {
+      "network": "base-sepolia",
+      "chain_id": 84532,
+      "rpc_endpoints": [
+        "https://base-sepolia.gateway.tenderly.co",
+        "https://base-sepolia.drpc.org"
+      ],
+      "evidence_block": {
+        "number": 44702071,
+        "number_hex": "0x2aa1977",
+        "hash": "0x4f07122d6055f942f4863b5a78d08ca608884617f7caa3d9a081a3f5f151b627",
+        "state_root": "0x121aa0c07c536c328e6d04940744ee25e86a727ac156a1bf8f5c73d0c9dfd635",
+        "timestamp": "0x6a6791ce",
+        "independently_corroborated_by": [
+          "https://base-sepolia.gateway.tenderly.co",
+          "https://base-sepolia.drpc.org"
+        ]
+      },
+      "proxy": "0xc3d46e0266d95215589de639cc4e93b79f88fc6c",
+      "eip1967_implementation_slot": "0x0000000000000000000000009a82be743f0120fa24893b1631b6b2817fd94b1d",
+      "implementation": "0x9a82be743f0120fa24893b1631b6b2817fd94b1d",
+      "proxy_runtime": {
+        "file": "runtime/gateway-base-sepolia-proxy.hex",
+        "bytes": 2227,
+        "decoded_sha256": "e518057ee9772b6d5ad104f0c0cbae96d42e5543dcaaff3b39257089ab5fe699",
+        "keccak256": "0x4d9be648c5bf39973670d9f8b481d5d0b971e6a2db2deccc6b98cde21c5dd83e"
+      },
+      "implementation_runtime": {
+        "file": "runtime/gateway-base-sepolia-implementation.hex",
+        "bytes": 7390,
+        "decoded_sha256": "8b9436c032777149315ec29402512d9f19c6eecba7e500ba092665838ace3984",
+        "keccak256": "0xb0aae75fd0ad2edce21e9197df8ec42d8a0bd0f9c2ba9c6ded946ae3832c7139"
+      },
+      "bindings": {
+        "tbtc": {
+          "address": "0xb8f31a249bcb45267d06b9e51252c4793b917cd0",
+          "raw_call": "0x000000000000000000000000b8f31a249bcb45267d06b9e51252c4793b917cd0"
+        },
+        "bridge": {
+          "address": "0x86f55a04690fd7815a3d802bd587e83ea888b239",
+          "raw_call": "0x00000000000000000000000086f55a04690fd7815a3d802bd587e83ea888b239"
+        },
+        "bridge_token": {
+          "address": "0xe8a91987f593e0c1bb33835e1a443b5b44a6eb55",
+          "raw_call": "0x000000000000000000000000e8a91987f593e0c1bb33835e1a443b5b44a6eb55"
+        }
+      },
+      "tbtc_metadata": {
+        "address": "0xb8f31a249bcb45267d06b9e51252c4793b917cd0",
+        "name": "Base tBTC v2",
+        "symbol": "tBTC",
+        "decimals": 18,
+        "raw_calls": {
+          "name()": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000c4261736520744254432076320000000000000000000000000000000000000000",
+          "symbol()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000047442544300000000000000000000000000000000000000000000000000000000",
+          "decimals()": "0x0000000000000000000000000000000000000000000000000000000000000012"
+        }
+      }
+    },
+    {
+      "network": "arbitrum-one",
+      "chain_id": 42161,
+      "rpc_endpoints": [
+        "https://arbitrum.gateway.tenderly.co",
+        "https://arb-pokt.nodies.app"
+      ],
+      "evidence_block": {
+        "number": 488323627,
+        "number_hex": "0x1d1b3a2b",
+        "hash": "0x3a0ad6b266215dc0254bc39636d25496a4ae5133de6e0b5d0ae0304d23359ef2",
+        "state_root": "0x0e77a7c2bb33ea12d9ee1d4333becd57764f58298cc898ef240798ea5cf4d268",
+        "timestamp": "0x6a6791ce",
+        "independently_corroborated_by": [
+          "https://arbitrum.gateway.tenderly.co",
+          "https://arb-pokt.nodies.app"
+        ]
+      },
+      "proxy": "0x1293a54e160d1cd7075487898d65266081a15458",
+      "eip1967_implementation_slot": "0x0000000000000000000000007ff02bb686658f2d55f28fdf45286f9499beb9a5",
+      "implementation": "0x7ff02bb686658f2d55f28fdf45286f9499beb9a5",
+      "proxy_runtime": {
+        "file": "runtime/gateway-arbitrum-proxy.hex",
+        "bytes": 2112,
+        "decoded_sha256": "cbd134ac8d285892d5d33ec1bf94dcdf1102a990b1046d1594cb286e9239697b",
+        "keccak256": "0x6bec2bf64f7e824109f6ed55f77dd7665801d6195e461666ad6a5342a9f6daf5"
+      },
+      "implementation_runtime": {
+        "file": "runtime/gateway-arbitrum-implementation.hex",
+        "bytes": 8764,
+        "decoded_sha256": "85bd6d3e2f6dff8f6f4305a5276138908efd84bb3260111b753b5ad2e0132e39",
+        "keccak256": "0x94e0290bb29590adf277cebe06a1fbc7bbc17a595365458d7463fc71e5d45ff0"
+      },
+      "bindings": {
+        "tbtc": {
+          "address": "0x6c84a8f1c29108f47a79964b5fe888d4f4d0de40",
+          "raw_call": "0x0000000000000000000000006c84a8f1c29108f47a79964b5fe888d4f4d0de40"
+        },
+        "bridge": {
+          "address": "0x0b2402144bb366a632d14b83f244d2e0e21bd39c",
+          "raw_call": "0x0000000000000000000000000b2402144bb366a632d14b83f244d2e0e21bd39c"
+        },
+        "bridge_token": {
+          "address": "0x57723abc582dbfe11ea01f1a1f48aee20bd65d73",
+          "raw_call": "0x00000000000000000000000057723abc582dbfe11ea01f1a1f48aee20bd65d73"
+        }
+      },
+      "tbtc_metadata": {
+        "address": "0x6c84a8f1c29108f47a79964b5fe888d4f4d0de40",
+        "name": "Arbitrum tBTC v2",
+        "symbol": "tBTC",
+        "decimals": 18,
+        "raw_calls": {
+          "name()": "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000010417262697472756d207442544320763200000000000000000000000000000000",
+          "symbol()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000047442544300000000000000000000000000000000000000000000000000000000",
+          "decimals()": "0x0000000000000000000000000000000000000000000000000000000000000012"
+        }
+      }
+    },
+    {
+      "network": "arbitrum-sepolia",
+      "chain_id": 421614,
+      "rpc_endpoints": [
+        "https://arbitrum-sepolia.gateway.tenderly.co",
+        "https://arbitrum-sepolia.drpc.org"
+      ],
+      "evidence_block": {
+        "number": 291948825,
+        "number_hex": "0x1166c919",
+        "hash": "0x23ed956c2a208f98fd5c845c5f3dc141a8413f191fdc5acfdb0dd1207c1a260f",
+        "state_root": "0x46bf643f8c6ea8bfac783f3a030e23e8707714635ead31debff89cf4dd3a4843",
+        "timestamp": "0x6a6791ce",
+        "independently_corroborated_by": [
+          "https://arbitrum-sepolia.gateway.tenderly.co",
+          "https://arbitrum-sepolia.drpc.org"
+        ]
+      },
+      "proxy": "0xc3d46e0266d95215589de639cc4e93b79f88fc6c",
+      "eip1967_implementation_slot": "0x0000000000000000000000009a82be743f0120fa24893b1631b6b2817fd94b1d",
+      "implementation": "0x9a82be743f0120fa24893b1631b6b2817fd94b1d",
+      "proxy_runtime": {
+        "file": "runtime/gateway-arbitrum-sepolia-proxy.hex",
+        "bytes": 2112,
+        "decoded_sha256": "cbd134ac8d285892d5d33ec1bf94dcdf1102a990b1046d1594cb286e9239697b",
+        "keccak256": "0x6bec2bf64f7e824109f6ed55f77dd7665801d6195e461666ad6a5342a9f6daf5"
+      },
+      "implementation_runtime": {
+        "file": "runtime/gateway-arbitrum-sepolia-implementation.hex",
+        "bytes": 7390,
+        "decoded_sha256": "8b9436c032777149315ec29402512d9f19c6eecba7e500ba092665838ace3984",
+        "keccak256": "0xb0aae75fd0ad2edce21e9197df8ec42d8a0bd0f9c2ba9c6ded946ae3832c7139"
+      },
+      "bindings": {
+        "tbtc": {
+          "address": "0xb8f31a249bcb45267d06b9e51252c4793b917cd0",
+          "raw_call": "0x000000000000000000000000b8f31a249bcb45267d06b9e51252c4793b917cd0"
+        },
+        "bridge": {
+          "address": "0xc7a204bdbfe983fcd8d8e61d02b475d4073ff97e",
+          "raw_call": "0x000000000000000000000000c7a204bdbfe983fcd8d8e61d02b475d4073ff97e"
+        },
+        "bridge_token": {
+          "address": "0xb2f833b35853d238216d6ea0338c252e6a5ee3ec",
+          "raw_call": "0x000000000000000000000000b2f833b35853d238216d6ea0338c252e6a5ee3ec"
+        }
+      },
+      "tbtc_metadata": {
+        "address": "0xb8f31a249bcb45267d06b9e51252c4793b917cd0",
+        "name": "Arbitrum tBTC v2",
+        "symbol": "tBTC",
+        "decimals": 18,
+        "raw_calls": {
+          "name()": "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000010417262697472756d207442544320763200000000000000000000000000000000",
+          "symbol()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000047442544300000000000000000000000000000000000000000000000000000000",
+          "decimals()": "0x0000000000000000000000000000000000000000000000000000000000000012"
+        }
+      }
+    },
+    {
+      "network": "optimism-mainnet",
+      "chain_id": 10,
+      "rpc_endpoints": [
+        "https://optimism.gateway.tenderly.co",
+        "https://optimism.drpc.org"
+      ],
+      "evidence_block": {
+        "number": 154786827,
+        "number_hex": "0x939dc0b",
+        "hash": "0xeb3c1464efd5975b5285b15472483172e9b7d40116a28da0cf6fede6d6506628",
+        "state_root": "0x415f630080b3474e534010c1aff73f49bbc526dd8c6ff6b63eaef9a40b20762a",
+        "timestamp": "0x6a6791cf",
+        "independently_corroborated_by": [
+          "https://optimism.gateway.tenderly.co",
+          "https://optimism.drpc.org"
+        ]
+      },
+      "proxy": "0x1293a54e160d1cd7075487898d65266081a15458",
+      "eip1967_implementation_slot": "0x000000000000000000000000c08dcc93130ab30987dd7fe64e011402bbe5fda6",
+      "implementation": "0xc08dcc93130ab30987dd7fe64e011402bbe5fda6",
+      "proxy_runtime": {
+        "file": "runtime/gateway-optimism-proxy.hex",
+        "bytes": 2112,
+        "decoded_sha256": "cbd134ac8d285892d5d33ec1bf94dcdf1102a990b1046d1594cb286e9239697b",
+        "keccak256": "0x6bec2bf64f7e824109f6ed55f77dd7665801d6195e461666ad6a5342a9f6daf5"
+      },
+      "implementation_runtime": {
+        "file": "runtime/gateway-optimism-implementation.hex",
+        "bytes": 7390,
+        "decoded_sha256": "8b9436c032777149315ec29402512d9f19c6eecba7e500ba092665838ace3984",
+        "keccak256": "0xb0aae75fd0ad2edce21e9197df8ec42d8a0bd0f9c2ba9c6ded946ae3832c7139"
+      },
+      "bindings": {
+        "tbtc": {
+          "address": "0x6c84a8f1c29108f47a79964b5fe888d4f4d0de40",
+          "raw_call": "0x0000000000000000000000006c84a8f1c29108f47a79964b5fe888d4f4d0de40"
+        },
+        "bridge": {
+          "address": "0x1d68124e65fafc907325e3edbf8c4d84499daa8b",
+          "raw_call": "0x0000000000000000000000001d68124e65fafc907325e3edbf8c4d84499daa8b"
+        },
+        "bridge_token": {
+          "address": "0xec0a755664271b87002dda33ca2484b24af68912",
+          "raw_call": "0x000000000000000000000000ec0a755664271b87002dda33ca2484b24af68912"
+        }
+      },
+      "tbtc_metadata": {
+        "address": "0x6c84a8f1c29108f47a79964b5fe888d4f4d0de40",
+        "name": "Optimism tBTC v2",
+        "symbol": "tBTC",
+        "decimals": 18,
+        "raw_calls": {
+          "name()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000104f7074696d69736d207442544320763200000000000000000000000000000000",
+          "symbol()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000047442544300000000000000000000000000000000000000000000000000000000",
+          "decimals()": "0x0000000000000000000000000000000000000000000000000000000000000012"
+        }
+      }
+    },
+    {
+      "network": "optimism-sepolia",
+      "chain_id": 11155420,
+      "rpc_endpoints": [
+        "https://optimism-sepolia.gateway.tenderly.co",
+        "https://optimism-sepolia.drpc.org"
+      ],
+      "evidence_block": {
+        "number": 46684945,
+        "number_hex": "0x2c85b11",
+        "hash": "0x233260f03fad85fefe07a8bf4da1037e875b7294caf28560a39ce0289b599e3c",
+        "state_root": "0xacfefe0c154e66cffeb2a77f9d3d12604f4ad86e3a7c9a71ea288aaecb9c0c33",
+        "timestamp": "0x6a6791ce",
+        "independently_corroborated_by": [
+          "https://optimism-sepolia.gateway.tenderly.co",
+          "https://optimism-sepolia.drpc.org"
+        ]
+      },
+      "proxy": "0x5fb63d9e076a314023f2d1ab5dbfd7045c281eba",
+      "eip1967_implementation_slot": "0x000000000000000000000000c3d46e0266d95215589de639cc4e93b79f88fc6c",
+      "implementation": "0xc3d46e0266d95215589de639cc4e93b79f88fc6c",
+      "proxy_runtime": {
+        "file": "runtime/gateway-optimism-sepolia-proxy.hex",
+        "bytes": 2112,
+        "decoded_sha256": "cbd134ac8d285892d5d33ec1bf94dcdf1102a990b1046d1594cb286e9239697b",
+        "keccak256": "0x6bec2bf64f7e824109f6ed55f77dd7665801d6195e461666ad6a5342a9f6daf5"
+      },
+      "implementation_runtime": {
+        "file": "runtime/gateway-optimism-sepolia-implementation.hex",
+        "bytes": 7390,
+        "decoded_sha256": "8b9436c032777149315ec29402512d9f19c6eecba7e500ba092665838ace3984",
+        "keccak256": "0xb0aae75fd0ad2edce21e9197df8ec42d8a0bd0f9c2ba9c6ded946ae3832c7139"
+      },
+      "bindings": {
+        "tbtc": {
+          "address": "0x9a82be743f0120fa24893b1631b6b2817fd94b1d",
+          "raw_call": "0x0000000000000000000000009a82be743f0120fa24893b1631b6b2817fd94b1d"
+        },
+        "bridge": {
+          "address": "0x99737ec4b815d816c49a385943baf0380e75c0ac",
+          "raw_call": "0x00000000000000000000000099737ec4b815d816c49a385943baf0380e75c0ac"
+        },
+        "bridge_token": {
+          "address": "0x2133a5132c962f11f1ed6ca709132eef146d1b1c",
+          "raw_call": "0x0000000000000000000000002133a5132c962f11f1ed6ca709132eef146d1b1c"
+        }
+      },
+      "tbtc_metadata": {
+        "address": "0x9a82be743f0120fa24893b1631b6b2817fd94b1d",
+        "name": "Optimism tBTC v2",
+        "symbol": "tBTC",
+        "decimals": 18,
+        "raw_calls": {
+          "name()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000104f7074696d69736d207442544320763200000000000000000000000000000000",
+          "symbol()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000047442544300000000000000000000000000000000000000000000000000000000",
+          "decimals()": "0x0000000000000000000000000000000000000000000000000000000000000012"
+        }
+      }
+    },
+    {
+      "network": "polygon-mainnet",
+      "chain_id": 137,
+      "rpc_endpoints": [
+        "https://polygon.gateway.tenderly.co",
+        "https://polygon.drpc.org"
+      ],
+      "evidence_block": {
+        "number": 90978290,
+        "number_hex": "0x56c37f2",
+        "hash": "0xd18604bd5d17d49a020806b101ebbe825bf4bdacc9c2c43b25f8f69b13765ed6",
+        "state_root": "0xf25601729cb8d656f268e124804da7a77a28c8a1c3d6f311cf412e7cad69ca60",
+        "timestamp": "0x6a6791d0",
+        "independently_corroborated_by": [
+          "https://polygon.gateway.tenderly.co",
+          "https://polygon.drpc.org"
+        ]
+      },
+      "proxy": "0x09959798b95d00a3183d20fac298e4594e599eab",
+      "eip1967_implementation_slot": "0x00000000000000000000000004671c72aab5ac02a03c1098314b1bb6b560c197",
+      "implementation": "0x04671c72aab5ac02a03c1098314b1bb6b560c197",
+      "proxy_runtime": {
+        "file": "runtime/gateway-polygon-proxy.hex",
+        "bytes": 2112,
+        "decoded_sha256": "cbd134ac8d285892d5d33ec1bf94dcdf1102a990b1046d1594cb286e9239697b",
+        "keccak256": "0x6bec2bf64f7e824109f6ed55f77dd7665801d6195e461666ad6a5342a9f6daf5"
+      },
+      "implementation_runtime": {
+        "file": "runtime/gateway-polygon-implementation.hex",
+        "bytes": 7390,
+        "decoded_sha256": "8b9436c032777149315ec29402512d9f19c6eecba7e500ba092665838ace3984",
+        "keccak256": "0xb0aae75fd0ad2edce21e9197df8ec42d8a0bd0f9c2ba9c6ded946ae3832c7139"
+      },
+      "bindings": {
+        "tbtc": {
+          "address": "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
+          "raw_call": "0x000000000000000000000000236aa50979d5f3de3bd1eeb40e81137f22ab794b"
+        },
+        "bridge": {
+          "address": "0x5a58505a96d1dbf8df91cb21b54419fc36e93fde",
+          "raw_call": "0x0000000000000000000000005a58505a96d1dbf8df91cb21b54419fc36e93fde"
+        },
+        "bridge_token": {
+          "address": "0x3362b2b92b331925f09f9e5bca3e8c43921a435c",
+          "raw_call": "0x0000000000000000000000003362b2b92b331925f09f9e5bca3e8c43921a435c"
+        }
+      },
+      "tbtc_metadata": {
+        "address": "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
+        "name": "Polygon tBTC v2",
+        "symbol": "tBTC",
+        "decimals": 18,
+        "raw_calls": {
+          "name()": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000f506f6c79676f6e20744254432076320000000000000000000000000000000000",
+          "symbol()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000047442544300000000000000000000000000000000000000000000000000000000",
+          "decimals()": "0x0000000000000000000000000000000000000000000000000000000000000012"
+        }
+      }
+    }
+  ],
+  "rebate_staking": {
+    "network": "ethereum-mainnet",
+    "chain_id": 1,
+    "rpc_endpoints": [
+      "https://mainnet.gateway.tenderly.co",
+      "https://eth.drpc.org"
+    ],
+    "evidence_block": {
+      "number": 25625567,
+      "number_hex": "0x18703df",
+      "hash": "0x943e268a9f507447d14df180901c60e300ba949de947394ea5d34d1c6e88cc91",
+      "state_root": "0x29b927dfd0d8a8b96bc1673a98bb42e513d9b3039e400621a40b944c910f253b",
+      "timestamp": "0x6a6791cb",
+      "independently_corroborated_by": [
+        "https://mainnet.gateway.tenderly.co",
+        "https://eth.drpc.org"
+      ]
+    },
+    "proxy": "0x0184739c32edc3471d3e4860c8e39a5f3ff85a45",
+    "eip1967_implementation_slot": "0x00000000000000000000000025aaf04229f77a9ae80430b3c89e3455ab2ec22f",
+    "implementation": "0x25aaf04229f77a9ae80430b3c89e3455ab2ec22f",
+    "proxy_runtime": {
+      "file": "runtime/rebate-proxy.hex",
+      "bytes": 2112,
+      "decoded_sha256": "cbd134ac8d285892d5d33ec1bf94dcdf1102a990b1046d1594cb286e9239697b",
+      "keccak256": "0x6bec2bf64f7e824109f6ed55f77dd7665801d6195e461666ad6a5342a9f6daf5"
+    },
+    "implementation_runtime": {
+      "file": "runtime/rebate-implementation.hex",
+      "bytes": 9400,
+      "decoded_sha256": "ceea89703d058135927fa6d79cfff32a29f5ddbce4d32240a0c24dbec012000f",
+      "keccak256": "0x7241e6ef1f36f05933bffcd001a5625a1cb5be1afed9ece072ce343293302f0c"
+    },
+    "bindings": {
+      "token": {
+        "address": "0xcdf7028ceab81fa0c6971208e83fa7872994bee5",
+        "raw_call": "0x000000000000000000000000cdf7028ceab81fa0c6971208e83fa7872994bee5"
+      },
+      "bridge": {
+        "address": "0x5e4861a80b55f035d899f66772117f00fa0e8e7b",
+        "raw_call": "0x0000000000000000000000005e4861a80b55f035d899f66772117f00fa0e8e7b"
+      }
+    },
+    "token_metadata": {
+      "address": "0xcdf7028ceab81fa0c6971208e83fa7872994bee5",
+      "name": "Threshold Network Token",
+      "symbol": "T",
+      "decimals": 18,
+      "raw_calls": {
+        "name()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000175468726573686f6c64204e6574776f726b20546f6b656e000000000000000000",
+        "symbol()": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000015400000000000000000000000000000000000000000000000000000000000000",
+        "decimals()": "0x0000000000000000000000000000000000000000000000000000000000000012"
+      }
+    }
+  },
+  "tbtc_vaults": [
+    {
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "rpc_endpoints": [
+        "https://mainnet.gateway.tenderly.co",
+        "https://eth.drpc.org"
+      ],
+      "evidence_block": {
+        "number": 25625567,
+        "number_hex": "0x18703df",
+        "hash": "0x943e268a9f507447d14df180901c60e300ba949de947394ea5d34d1c6e88cc91",
+        "state_root": "0x29b927dfd0d8a8b96bc1673a98bb42e513d9b3039e400621a40b944c910f253b",
+        "timestamp": "0x6a6791cb",
+        "independently_corroborated_by": [
+          "https://mainnet.gateway.tenderly.co",
+          "https://eth.drpc.org"
+        ]
+      },
+      "address": "0x9c070027cdc9dc8f82416b2e5314e11dfb4fe3cd",
+      "standard_proxy_slots": {
+        "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "runtime": {
+        "file": "runtime/vault-ethereum.hex",
+        "bytes": 15123,
+        "decoded_sha256": "424c2405f60f20933fb13c0477dd71ced9fcc536dac618c9aa954e771b369541",
+        "keccak256": "0x549c4b627e40d0e38e6d874c56066ad033004f3f5e26ffba9b15806064f6f0df"
+      }
+    },
+    {
+      "network": "ethereum-sepolia",
+      "chain_id": 11155111,
+      "rpc_endpoints": [
+        "https://sepolia.gateway.tenderly.co",
+        "https://sepolia.drpc.org"
+      ],
+      "evidence_block": {
+        "number": 11362998,
+        "number_hex": "0xad62b6",
+        "hash": "0x23ee2ffc785bf431b56887c8d7ad9f45af37092b5f3c88cf0863938121c386b6",
+        "state_root": "0xebc3088bf9e713d0f0ffa78f790a211a0d279f77ac280f2982d0edb98c3713bf",
+        "timestamp": "0x6a6791cc",
+        "independently_corroborated_by": [
+          "https://sepolia.gateway.tenderly.co",
+          "https://sepolia.drpc.org"
+        ]
+      },
+      "address": "0xb5679de944a79732a75ce556191df11f489448d5",
+      "standard_proxy_slots": {
+        "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "runtime": {
+        "file": "runtime/vault-sepolia.hex",
+        "bytes": 14113,
+        "decoded_sha256": "fe34e048cbd0dc5f6c2d711b6bfb3688267d2344b66c966a21caf8199c495e30",
+        "keccak256": "0x10383e95610d9b20dcc25723933aae6e202eafad023cfc10e2a509fc2b03b8ba"
+      }
+    }
+  ]
+}

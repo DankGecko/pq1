@@ -4,6 +4,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use dbgen::erc7730::{build_db_tolerant_with_erc20_capabilities, Emitted, Erc7730BuildResult};
+use pqsigner_erc7730::binding::cross_check_eip712;
+use pqsigner_erc7730::bundle::verify_erc7730_bundle;
+use pqsigner_erc7730::display::render::nested::hash_struct_array;
+use pqsigner_erc7730::display::render::render_erc7730_eip712_pages_v3;
+use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
+use pqsigner_tx::erc20::bundle::Erc20Metadata;
+use pqsigner_tx::names::NameResolver;
 use pqsigner_tx_core::hash::keccak256;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -19,6 +27,12 @@ const SESSION_EIP712_TYPEHASH: &str =
 const UINT256_MAX_HEX: &str = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 const EIP712_NAME_IMMUTABLE_START: usize = 3_099;
 const EIP712_VERSION_IMMUTABLE_START: usize = 3_140;
+const EIP712_DOMAIN_TYPE: &str =
+    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
+const LEVERAGE_EIP712_TYPE: &str = "LeveragedOrder(uint8 action,address user,address sellToken,address buyToken,uint256 sellAmount,uint256 buyAmount,uint32 validTo,uint256 feeAmount)";
+const CANCEL_ORDER_EIP712_TYPE: &str = "CancelOrder(string orderId)";
+const TPSL_CANCEL_EIP712_TYPE: &str =
+    "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)";
 
 const DEPLOYMENTS: &[(u64, &str)] = &[
     (1, "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9"),
@@ -164,6 +178,10 @@ fn workspace_root() -> PathBuf {
 
 fn evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/flyingtulip-sessionmanager")
+}
+
+fn upstream_fixture_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-upstream-fixtures/registry-v2/flyingtulip/testsv2")
 }
 
 fn read_json(path: &Path) -> Value {
@@ -400,6 +418,161 @@ fn decode_short_string_immutable(runtime: &[u8], start: usize) -> String {
     std::str::from_utf8(&word[..length])
         .expect("EIP-712 domain ShortString is UTF-8")
         .to_owned()
+}
+
+fn production_registry() -> Erc7730BuildResult {
+    let root = workspace_root();
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry")
+    .0
+}
+
+fn synth_bundle(registry: &Erc7730BuildResult, entry: &Emitted) -> Vec<u8> {
+    let depth = u32::from_le_bytes(registry.blob[24..28].try_into().unwrap()) as usize;
+    let proofs_off = u32::from_le_bytes(registry.blob[28..32].try_into().unwrap()) as usize;
+    let proof_base = proofs_off + entry.leaf_index * depth * 32;
+    let mut bundle = Vec::with_capacity(2 + entry.ir_bytes.len() + 8 + depth * 32);
+    bundle.extend_from_slice(&(entry.ir_bytes.len() as u16).to_be_bytes());
+    bundle.extend_from_slice(&entry.ir_bytes);
+    bundle.extend_from_slice(&(entry.leaf_index as u32).to_be_bytes());
+    bundle.extend_from_slice(&(depth as u32).to_be_bytes());
+    bundle.extend_from_slice(&registry.blob[proof_base..proof_base + depth * 32]);
+    bundle
+}
+
+fn word_address(address: &[u8; 20]) -> [u8; 32] {
+    let mut word = [0u8; 32];
+    word[12..].copy_from_slice(address);
+    word
+}
+
+fn word_u64(value: u64) -> [u8; 32] {
+    let mut word = [0u8; 32];
+    word[24..].copy_from_slice(&value.to_be_bytes());
+    word
+}
+
+fn word_decimal(text: &str) -> [u8; 32] {
+    assert!(
+        !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()),
+        "fixture uint256 is canonical decimal"
+    );
+    let mut word = [0u8; 32];
+    for digit in text.bytes() {
+        let mut carry = u16::from(digit - b'0');
+        for byte in word.iter_mut().rev() {
+            let next = u16::from(*byte) * 10 + carry;
+            *byte = next as u8;
+            carry = next >> 8;
+        }
+        assert_eq!(carry, 0, "fixture uint256 fits one EIP-712 word");
+    }
+    word
+}
+
+fn fixture_address(value: &Value) -> [u8; 20] {
+    decode_hex_text(value.as_str().expect("fixture address string"))
+        .try_into()
+        .unwrap_or_else(|bytes: Vec<u8>| panic!("fixture address has {} bytes", bytes.len()))
+}
+
+fn eip712_domain_separator(
+    name: &str,
+    version: &str,
+    chain_id: u64,
+    contract: &[u8; 20],
+) -> [u8; 32] {
+    keccak256(
+        &[
+            keccak256(EIP712_DOMAIN_TYPE.as_bytes()),
+            keccak256(name.as_bytes()),
+            keccak256(version.as_bytes()),
+            word_u64(chain_id),
+            word_address(contract),
+        ]
+        .concat(),
+    )
+}
+
+fn session_vector(limit_count: usize) -> (Vec<u8>, Vec<u8>) {
+    let owner = [0x11; 20];
+    let delegate = [0x22; 20];
+    let limits = (0..limit_count)
+        .map(|index| {
+            let mut token = [0u8; 20];
+            token[18..].copy_from_slice(&(index as u16 + 1).to_be_bytes());
+            [word_address(&token), word_u64((index as u64 + 1) * 1_000)].concat()
+        })
+        .collect::<Vec<_>>();
+    let limit_slices = limits.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let limits_hash = hash_struct_array(
+        &keccak256(ASSET_LIMIT_EIP712_TYPE.as_bytes()),
+        &limit_slices,
+    );
+    let encoded = [
+        word_address(&owner),
+        word_address(&delegate),
+        word_u64(1_750_000_000),
+        word_u64(1_800_000_000),
+        word_u64(64),
+        word_u64(250),
+        limits_hash,
+        [0x77; 32],
+    ]
+    .concat();
+    let mut nested = Vec::new();
+    nested.extend_from_slice(&(limit_count as u16).to_be_bytes());
+    for limit in limits {
+        nested.extend_from_slice(&(limit.len() as u16).to_be_bytes());
+        nested.extend_from_slice(&limit);
+    }
+    (encoded, nested)
+}
+
+fn pages_text(pages: &pqsigner_erc7730::display::Pages) -> String {
+    pages
+        .as_slice()
+        .iter()
+        .flat_map(|page| page.iter())
+        .map(|row| String::from_utf8_lossy(row).trim().to_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn raw_word_transcript(label: &str, word: &[u8; 32]) -> String {
+    let encoded = hex::encode(word);
+    format!(
+        "{label}\n{}\n{}\n1/2 > next\n{label}\n{}\n{}\n2/2 > next",
+        &encoded[0..16],
+        &encoded[16..32],
+        &encoded[32..48],
+        &encoded[48..64]
+    )
+}
+
+fn address_transcript(label: &str, address: &[u8; 20]) -> String {
+    let encoded = hex::encode(address);
+    format!(
+        "{label}\n0x{}\n{}\n{}",
+        &encoded[0..14],
+        &encoded[14..30],
+        &encoded[30..40]
+    )
+}
+
+fn compact_display(text: &str) -> String {
+    text.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[test]
@@ -830,20 +1003,72 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
         );
     }
 
-    let eip712_descriptor_specs: [(&str, &str, &[(u64, &str)]); 2] = [
+    let eip712_admission = &manifest["eip712_admission"];
+    assert_eq!(
+        required_str(eip712_admission, "primary_type"),
+        SESSION_EIP712_TYPE
+    );
+    assert_eq!(
+        required_str(eip712_admission, "primary_type_hash"),
+        SESSION_EIP712_TYPEHASH
+    );
+    assert_eq!(
+        required_str(eip712_admission, "nested_type"),
+        ASSET_LIMIT_EIP712_TYPE
+    );
+    assert_eq!(
+        required_str(eip712_admission, "nested_type_hash"),
+        ASSET_LIMIT_EIP712_TYPEHASH
+    );
+    assert_eq!(
+        eip712_admission["signed_terminals"]
+            .as_array()
+            .expect("signed EIP-712 terminals")
+            .iter()
+            .map(|terminal| terminal.as_str().expect("terminal string"))
+            .collect::<Vec<_>>(),
+        vec![
+            "owner",
+            "delegate",
+            "validAfter",
+            "validUntil",
+            "maxCalls",
+            "maxFeeBps",
+            "limits.[].token",
+            "limits.[].limit",
+            "salt",
+        ]
+    );
+    assert_eq!(
+        eip712_admission["nested_array_boundary"]["pq1_min_items"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        eip712_admission["nested_array_boundary"]["pq1_max_items"].as_u64(),
+        Some(6)
+    );
+    assert!(required_str(
+        &eip712_admission["nested_array_boundary"],
+        "outside_pq1_boundary"
+    )
+    .contains("Fatal refusal"));
+
+    let eip712_descriptor_specs: [(&str, &str, &str, &[(u64, &str)]); 2] = [
         (
             "eip712-SessionManager-FT.json",
+            "ft",
             "FT SessionManager",
             FT_EIP712_DEPLOYMENTS,
         ),
         (
             "eip712-SessionManager-ftUSD.json",
+            "current",
             "ftUSD SessionManager",
             FTUSD_EIP712_DEPLOYMENTS,
         ),
     ];
     let mut described_deployments = BTreeSet::new();
-    for (file_name, domain_name, expected_partition) in eip712_descriptor_specs {
+    for (file_name, family_id, domain_name, expected_partition) in eip712_descriptor_specs {
         let registry_path = workspace
             .join("secure/data/erc7730-registry/registry/flyingtulip")
             .join(file_name);
@@ -867,6 +1092,70 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
             .collect();
         let actual_partition = deployment_set(&eip712_context["deployments"]);
         assert_eq!(actual_partition, expected_partition);
+
+        let manifest_descriptor = manifest["eip712_descriptors"]
+            .as_array()
+            .expect("EIP-712 descriptor evidence")
+            .iter()
+            .find(|candidate| candidate["id"].as_str() == Some(family_id))
+            .unwrap_or_else(|| panic!("missing EIP-712 descriptor evidence for {family_id}"));
+        assert_eq!(
+            workspace.join(required_str(manifest_descriptor, "vendored_file")),
+            registry_path
+        );
+        assert_eq!(
+            workspace.join(required_str(manifest_descriptor, "curation_overlay")),
+            overlay_path
+        );
+        assert_eq!(
+            sha256_hex(&registry_bytes),
+            required_str(manifest_descriptor, "vendored_file_sha256")
+        );
+        assert_eq!(
+            sha256_hex(&overlay_bytes),
+            required_str(manifest_descriptor, "curation_overlay_sha256")
+        );
+        assert_eq!(
+            manifest_descriptor["domain"]["name"].as_str(),
+            Some(domain_name)
+        );
+        assert_eq!(manifest_descriptor["domain"]["version"].as_str(), Some("1"));
+        assert_eq!(
+            deployment_set(&manifest_descriptor["deployments"]),
+            expected_partition
+        );
+
+        let curation_note = required_str(&descriptor, "_curation_note");
+        for fact in [
+            "deploymentFormats",
+            "one through six",
+            "hard-refuses empty or longer arrays",
+            "fail-closed narrowing",
+            "not live session",
+        ] {
+            assert!(
+                curation_note.contains(fact),
+                "{file_name} curation note omitted `{fact}`"
+            );
+        }
+        assert_eq!(
+            deployment_set(&descriptor["_pqsigner"]["deploymentFormats"]),
+            expected_partition
+        );
+        for admission in descriptor["_pqsigner"]["deploymentFormats"]
+            .as_array()
+            .expect("deployment-format admission list")
+        {
+            assert_eq!(
+                admission["formats"]
+                    .as_array()
+                    .expect("admitted formats")
+                    .iter()
+                    .map(|format| format.as_str().expect("format string"))
+                    .collect::<Vec<_>>(),
+                vec![SESSION_EIP712_TYPE]
+            );
+        }
         for deployment in &actual_partition {
             assert!(
                 described_deployments.insert(deployment.clone()),
@@ -1559,6 +1848,499 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
     );
     assert!(required_str(&manifest, "boundary").contains("no live-state"));
     assert!(required_str(&manifest, "boundary").contains("longer than eight"));
-    assert!(required_str(&manifest, "boundary").contains("truncating the signed tail"));
+    assert!(required_str(&manifest, "boundary").contains("zero or more than six"));
+    assert!(required_str(&manifest, "boundary").contains("rather than truncate"));
     assert!(required_str(&manifest, "boundary").contains("blind-signing authority"));
+}
+
+#[test]
+fn flyingtulip_eip712_admission_and_quarantine_partition_is_exact() {
+    let workspace = workspace_root();
+    let flyingtulip = workspace.join("secure/data/erc7730-registry/registry/flyingtulip");
+
+    for (file_name, refusal_formats) in [
+        ("eip712-LeverageRfqEngine.json", &[LEVERAGE_EIP712_TYPE][..]),
+        (
+            "eip712-SpotOrderCancel.json",
+            &[CANCEL_ORDER_EIP712_TYPE, TPSL_CANCEL_EIP712_TYPE][..],
+        ),
+    ] {
+        let descriptor = read_json(&flyingtulip.join(file_name));
+        let actual = descriptor["_pqsigner"]["refusalOnlyFormats"]
+            .as_array()
+            .expect("refusal-only typed formats")
+            .iter()
+            .map(|format| format.as_str().expect("refusal format"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual, refusal_formats,
+            "{file_name} refusal boundary drifted"
+        );
+        assert_eq!(
+            descriptor["_pqsigner"]["deploymentFormats"],
+            serde_json::json!([]),
+            "{file_name} must explicitly authorize no deployment-format pair"
+        );
+        assert!(
+            required_str(&descriptor, "_curation_note").contains("No clear-signing leaf"),
+            "{file_name} quarantine note lost its fail-closed outcome"
+        );
+    }
+
+    let registry = production_registry();
+    let relevant_files = [
+        "eip712-SessionManager-FT.json",
+        "eip712-SessionManager-ftUSD.json",
+        "eip712-LeverageRfqEngine.json",
+        "eip712-SpotOrderCancel.json",
+    ];
+    let actual: BTreeSet<_> = registry
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let file_name = entry.source.file_name()?.to_str()?;
+            relevant_files.contains(&file_name).then(|| {
+                (
+                    file_name.to_owned(),
+                    entry.chain_id,
+                    hex::encode(entry.contract),
+                )
+            })
+        })
+        .collect();
+    let expected: BTreeSet<_> = FT_EIP712_DEPLOYMENTS
+        .iter()
+        .map(|(chain_id, address)| {
+            (
+                "eip712-SessionManager-FT.json".to_owned(),
+                *chain_id,
+                (*address).to_owned(),
+            )
+        })
+        .chain(FTUSD_EIP712_DEPLOYMENTS.iter().map(|(chain_id, address)| {
+            (
+                "eip712-SessionManager-ftUSD.json".to_owned(),
+                *chain_id,
+                (*address).to_owned(),
+            )
+        }))
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "only the seven evidenced Session deployment-format pairs may emit leaves"
+    );
+
+    for entry in registry.entries.iter().filter(|entry| {
+        entry
+            .source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    "eip712-SessionManager-FT.json" | "eip712-SessionManager-ftUSD.json"
+                )
+            })
+    }) {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Session EIP-712 IR parses");
+        assert_eq!(ir.context_kind, ContextKind::Eip712);
+        assert_eq!(ir.chain_id, entry.chain_id);
+        assert_eq!(ir.contract, entry.contract);
+        let file_name = entry
+            .source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("Session source name");
+        let domain_name = if file_name == "eip712-SessionManager-FT.json" {
+            "FT SessionManager"
+        } else {
+            "ftUSD SessionManager"
+        };
+        assert_eq!(
+            ir.domain_separator,
+            eip712_domain_separator(domain_name, "1", entry.chain_id, &entry.contract)
+        );
+        let formats = ir
+            .format_iter()
+            .map(|format| format.expect("Session format").type_hash)
+            .collect::<Vec<_>>();
+        assert_eq!(formats, vec![keccak256(SESSION_EIP712_TYPE.as_bytes())]);
+    }
+}
+
+#[test]
+fn upstream_v2_session_fixtures_map_to_stronger_production_semantics() {
+    let fixtures = [
+        (
+            "eip712-SessionManager-FT.tests.json",
+            "d85ea2ce1135dc7dfe7b3389bac3e298a35515ca21b8defe59676d0915cf5fba",
+            "eip712-SessionManager-FT.json",
+            "Create FT session",
+            "FT SessionManager",
+            "Create session",
+            146u64,
+            "109ae72778a0260571b9767477204f1ce41fbdff",
+        ),
+        (
+            "eip712-SessionManager-ftUSD.tests.json",
+            "5e8bddc530f0617a4b5c3343ab74ef0c3b03ab3c9c05f14359c3f667df63b116",
+            "eip712-SessionManager-ftUSD.json",
+            "Create ftUSD session",
+            "ftUSD SessionManager",
+            "Create ftUSD session",
+            1u64,
+            "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9",
+        ),
+    ];
+    let expected_domain_members = serde_json::json!([
+        { "name": "name", "type": "string" },
+        { "name": "version", "type": "string" },
+        { "name": "chainId", "type": "uint256" },
+        { "name": "verifyingContract", "type": "address" }
+    ]);
+    let expected_limit_members = serde_json::json!([
+        { "name": "token", "type": "address" },
+        { "name": "limit", "type": "uint256" }
+    ]);
+    let expected_session_members = serde_json::json!([
+        { "name": "owner", "type": "address" },
+        { "name": "delegate", "type": "address" },
+        { "name": "validAfter", "type": "uint48" },
+        { "name": "validUntil", "type": "uint48" },
+        { "name": "maxCalls", "type": "uint32" },
+        { "name": "maxFeeBps", "type": "uint16" },
+        { "name": "limits", "type": "AssetLimit[]" },
+        { "name": "salt", "type": "bytes32" }
+    ]);
+
+    let registry = production_registry();
+    let registry_root = workspace_root().join("secure/data/erc7730-registry/registry/flyingtulip");
+    let erc20_records = dbgen::load_erc20_records(&workspace_root().join("secure/data/erc20.json"))
+        .expect("load production ERC20 metadata");
+    let type_hash = keccak256(SESSION_EIP712_TYPE.as_bytes());
+    let limit_type_hash = keccak256(ASSET_LIMIT_EIP712_TYPE.as_bytes());
+    let resolver = NameResolver::new();
+
+    for (
+        fixture_name,
+        fixture_sha256,
+        source_name,
+        description,
+        domain_name,
+        production_intent,
+        chain_id,
+        contract_hex,
+    ) in fixtures
+    {
+        let fixture_path = upstream_fixture_root().join(fixture_name);
+        let fixture_bytes = fs::read(&fixture_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", fixture_path.display()));
+        assert_eq!(
+            sha256_hex(&fixture_bytes),
+            fixture_sha256,
+            "{fixture_name} must remain the exact pulled registry-v2 artifact"
+        );
+        let fixture: Value = serde_json::from_slice(&fixture_bytes)
+            .unwrap_or_else(|error| panic!("parse {}: {error}", fixture_path.display()));
+        assert_eq!(
+            fixture["$schema"].as_str(),
+            Some("../../../specs/erc7730-tests-v2.schema.json")
+        );
+        let expected_descriptor = format!("../{source_name}");
+        assert_eq!(
+            fixture["descriptor"].as_str(),
+            Some(expected_descriptor.as_str())
+        );
+        assert!(
+            fixture["dataProvider"]
+                .as_object()
+                .is_some_and(serde_json::Map::is_empty),
+            "FlyingTulip fixture carries no external data-provider authority"
+        );
+        let tests = fixture["tests"].as_array().expect("fixture tests");
+        assert_eq!(tests.len(), 1, "fixture has one signed case");
+        let test = &tests[0];
+        assert_eq!(test["description"].as_str(), Some(description));
+        let data = &test["data"];
+        assert_eq!(data["primaryType"].as_str(), Some("Session"));
+        assert_eq!(data["types"]["EIP712Domain"], expected_domain_members);
+        assert_eq!(data["types"]["AssetLimit"], expected_limit_members);
+        assert_eq!(data["types"]["Session"], expected_session_members);
+        assert_eq!(
+            data["types"].as_object().expect("fixture type map").len(),
+            3,
+            "no unexamined signed types"
+        );
+
+        let domain = &data["domain"];
+        assert_eq!(domain["name"].as_str(), Some(domain_name));
+        assert_eq!(domain["version"].as_str(), Some("1"));
+        assert_eq!(domain["chainId"].as_u64(), Some(chain_id));
+        assert_eq!(
+            normalized_address(
+                domain["verifyingContract"]
+                    .as_str()
+                    .expect("fixture verifying contract")
+            ),
+            contract_hex
+        );
+        assert_eq!(
+            domain.as_object().expect("fixture domain").len(),
+            4,
+            "domain shape is exact"
+        );
+
+        let message = &data["message"];
+        assert_eq!(
+            message.as_object().expect("fixture Session message").len(),
+            8,
+            "every signed top-level member is inspected"
+        );
+        let owner = fixture_address(&message["owner"]);
+        let delegate = fixture_address(&message["delegate"]);
+        assert_eq!(
+            hex::encode(owner),
+            "d8da6bf26964af9d7eed9e03e53415d37aa96045"
+        );
+        assert_eq!(delegate, [0x11; 20]);
+        assert_eq!(message["validAfter"].as_u64(), Some(1_770_000_000));
+        assert_eq!(message["validUntil"].as_u64(), Some(1_770_600_000));
+        assert_eq!(message["maxCalls"].as_u64(), Some(100));
+        assert_eq!(message["maxFeeBps"].as_u64(), Some(500));
+        let limits = message["limits"].as_array().expect("fixture limits");
+        assert_eq!(limits.len(), 1);
+        assert_eq!(limits[0].as_object().expect("fixture AssetLimit").len(), 2);
+        let token = fixture_address(&limits[0]["token"]);
+        assert_eq!(
+            hex::encode(token),
+            "f7d85ec4e7710f71992752eac2111312e73e9c9c"
+        );
+        let limit_text = limits[0]["limit"]
+            .as_str()
+            .expect("fixture uint256 limit is a decimal string");
+        assert_eq!(limit_text, "100000000000000000000");
+        let limit_word = word_decimal(limit_text);
+        let salt: [u8; 32] =
+            decode_hex_text(message["salt"].as_str().expect("fixture salt is hex text"))
+                .try_into()
+                .expect("fixture salt is one word");
+        assert_eq!(salt, [0x55; 32]);
+
+        let contract = fixture_address(&domain["verifyingContract"]);
+        let source = registry_root.join(source_name);
+        let entry = registry
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.chain_id == chain_id && entry.contract == contract && entry.source == source
+            })
+            .unwrap_or_else(|| panic!("{fixture_name} maps to one production catalogue leaf"));
+        let bundle = synth_bundle(&registry, entry);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .unwrap_or_else(|error| panic!("{fixture_name} Merkle proof: {error:?}"));
+        assert_eq!(verified.ir.context_kind, ContextKind::Eip712);
+        let domain_separator = eip712_domain_separator(domain_name, "1", chain_id, &contract);
+        assert_eq!(verified.ir.domain_separator, domain_separator);
+        cross_check_eip712(&verified.ir, chain_id, &domain_separator)
+            .unwrap_or_else(|error| panic!("{fixture_name} domain binding: {error:?}"));
+
+        let limit_body = [word_address(&token), limit_word].concat();
+        let limits_hash = hash_struct_array(&limit_type_hash, &[limit_body.as_slice()]);
+        let encoded = [
+            word_address(&owner),
+            word_address(&delegate),
+            word_u64(1_770_000_000),
+            word_u64(1_770_600_000),
+            word_u64(100),
+            word_u64(500),
+            limits_hash,
+            salt,
+        ]
+        .concat();
+        let mut nested = Vec::new();
+        nested.extend_from_slice(&1u16.to_be_bytes());
+        nested.extend_from_slice(&(limit_body.len() as u16).to_be_bytes());
+        nested.extend_from_slice(&limit_body);
+
+        let record = erc20_records
+            .iter()
+            .find(|record| {
+                record.chain_id == chain_id
+                    && dbgen::parse_hex_address(&record.address).ok() == Some(token)
+            })
+            .unwrap_or_else(|| panic!("{fixture_name} token has production metadata"));
+        assert_eq!(
+            (
+                record.name.as_str(),
+                record.symbol.as_str(),
+                record.decimals
+            ),
+            ("Flying Tulip USD", "ftUSD", 6)
+        );
+        let metadata = Erc20Metadata {
+            chain_id,
+            contract: token,
+            decimals: record.decimals,
+            name: record.name.as_bytes(),
+            symbol: record.symbol.as_bytes(),
+        };
+        let pages = render_erc7730_eip712_pages_v3(
+            chain_id,
+            &contract,
+            &type_hash,
+            &encoded,
+            &nested,
+            &verified,
+            Some(&metadata),
+            &resolver,
+        )
+        .unwrap_or_else(|error| panic!("{fixture_name} production render: {error:?}"));
+        let text = pages_text(&pages);
+        let lower = text.to_ascii_lowercase();
+        assert!(
+            compact_display(&text).contains(&compact_display(production_intent)),
+            "curated intent is missing from {fixture_name}:\n{text}"
+        );
+        assert!(
+            lower.contains(&address_transcript("Owner", &owner).to_ascii_lowercase()),
+            "complete owner is missing from {fixture_name}:\n{text}"
+        );
+        assert!(
+            lower.contains(&address_transcript("Delegate", &delegate).to_ascii_lowercase()),
+            "complete delegate is missing from {fixture_name}:\n{text}"
+        );
+        assert!(text.contains("Valid after\n2026-02-02\n02:40:00 UTC"));
+        assert!(text.contains("Valid until\n2026-02-09\n01:20:00 UTC"));
+        assert!(
+            text.contains(&raw_word_transcript("Max calls", &word_u64(100))),
+            "complete maxCalls word is missing from {fixture_name}:\n{text}"
+        );
+        assert!(
+            text.contains("Max fee\n500 bps"),
+            "exact fee cap and unit are missing from {fixture_name}:\n{text}"
+        );
+        assert!(text.contains("Item 1 of 1"));
+        assert!(
+            text.contains("Token limit\n100000000000000\nftUSD\n> next"),
+            "complete scaled token-limit page is missing from {fixture_name}:\n{text}"
+        );
+        assert!(
+            lower.contains(&address_transcript("Token contract", &token).to_ascii_lowercase()),
+            "authenticated token identity is missing from {fixture_name}:\n{text}"
+        );
+        assert!(
+            text.contains(&raw_word_transcript("Salt", &salt)),
+            "complete visible salt is missing from {fixture_name}:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn flyingtulip_session_eip712_nested_boundaries_and_binding_mutations_fail_closed() {
+    let registry = production_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && hex::encode(entry.contract) == FT_EIP712_DEPLOYMENTS[0].1
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("eip712-SessionManager-FT.json")
+        })
+        .expect("production FT SessionManager EIP-712 leaf");
+    let bundle = synth_bundle(&registry, entry);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Session Merkle proof verifies");
+    let contract = entry.contract;
+    let type_hash = keccak256(SESSION_EIP712_TYPE.as_bytes());
+    let domain_separator = eip712_domain_separator("FT SessionManager", "1", 1, &contract);
+    cross_check_eip712(&verified.ir, 1, &domain_separator)
+        .expect("exact Session domain and chain bind");
+    assert_eq!(verified.ir.contract, contract);
+    assert_eq!(verified.ir.format_count(), Ok(1));
+
+    let resolver = NameResolver::new();
+    for limit_count in [1, 6] {
+        let (encoded, nested) = session_vector(limit_count);
+        let pages = render_erc7730_eip712_pages_v3(
+            1, &contract, &type_hash, &encoded, &nested, &verified, None, &resolver,
+        )
+        .unwrap_or_else(|error| panic!("render {limit_count} Session limits: {error:?}"));
+        let text = pages_text(&pages);
+        assert!(
+            text.contains(&format!("Item 1 of {limit_count}")),
+            "first signed limit is not represented:\n{text}"
+        );
+        assert!(
+            text.contains(&format!("Item {limit_count} of {limit_count}")),
+            "last signed limit is not represented:\n{text}"
+        );
+        assert!(text.contains("Token limit"), "limit value label is absent");
+
+        let mut tampered_tail = nested.clone();
+        *tampered_tail.last_mut().expect("nonempty nested evidence") ^= 1;
+        assert!(
+            render_erc7730_eip712_pages_v3(
+                1,
+                &contract,
+                &type_hash,
+                &encoded,
+                &tampered_tail,
+                &verified,
+                None,
+                &resolver,
+            )
+            .is_err(),
+            "an edited final limit must invalidate the signed array binding"
+        );
+    }
+
+    for refused_count in [0, 7] {
+        let (encoded, nested) = session_vector(refused_count);
+        assert!(
+            render_erc7730_eip712_pages_v3(
+                1, &contract, &type_hash, &encoded, &nested, &verified, None, &resolver,
+            )
+            .is_err(),
+            "{refused_count} limits must fail atomically with no fallback"
+        );
+    }
+
+    let (encoded, nested) = session_vector(1);
+    let mut wrong_domain = domain_separator;
+    wrong_domain[0] ^= 1;
+    assert!(
+        cross_check_eip712(&verified.ir, 1, &wrong_domain).is_err(),
+        "wrong EIP-712 domain must refuse"
+    );
+    assert!(
+        cross_check_eip712(&verified.ir, 146, &domain_separator).is_err(),
+        "wrong EIP-712 domain chain must refuse"
+    );
+
+    let mut wrong_type = type_hash;
+    wrong_type[0] ^= 1;
+    assert!(
+        render_erc7730_eip712_pages_v3(
+            1,
+            &contract,
+            &wrong_type,
+            &encoded,
+            &nested,
+            &verified,
+            None,
+            &resolver,
+        )
+        .is_err(),
+        "wrong primary type must refuse"
+    );
+
+    let mut wrong_deployment = contract;
+    wrong_deployment[0] ^= 1;
+    let wrong_deployment_domain =
+        eip712_domain_separator("FT SessionManager", "1", 1, &wrong_deployment);
+    assert!(
+        cross_check_eip712(&verified.ir, 1, &wrong_deployment_domain).is_err(),
+        "wrong verifying deployment must refuse"
+    );
 }

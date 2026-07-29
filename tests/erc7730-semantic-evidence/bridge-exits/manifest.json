@@ -1,0 +1,322 @@
+{
+  "schema_version": 2,
+  "scope": "Four bounded bridge and exit ERC-7730 calldata families",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/497",
+  "lombard_eip712_issue": "https://github.com/EthereumPhone/PQ1/issues/498",
+  "captured_at_utc": "2026-07-28T10:45:30Z",
+  "fixed_blocks": {
+    "igra": {
+      "chain_id": 38833,
+      "number": 12831744,
+      "number_hex": "0xc3cc00",
+      "hash": "0x0171afba2a066c674b4fff9e25bbbddc34ef159d430de93a5d95478913149d25",
+      "state_root": "0xe2b2379a4a2f46a0ed9be2a58f225e1537039bb7a3b766d932a234700ef6b176",
+      "timestamp": 1785235530
+    },
+    "sepolia": {
+      "chain_id": 11155111,
+      "number": 11367936,
+      "number_hex": "0xad7600",
+      "hash": "0xab08b06d380d5fc12e60c1a21407014dcc5251aa8b37690432ba836d00c2bd88",
+      "state_root": "0xd147557d47e084e7c546a79dd46f5f320c839e01d3f1da1f5feb4af0ff27b648",
+      "timestamp": 1785233580
+    },
+    "ethereum": {
+      "chain_id": 1,
+      "number": 25630720,
+      "number_hex": "0x1871800",
+      "hash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+      "state_root": "0x56201c1863e551e47e584fbe807a6200b8937e7d62a373a37e1342c0f113e27d",
+      "timestamp": 1785234491
+    }
+  },
+  "contracts": {
+    "igra_proxy": "0x4bb88c213d3ed9dc4bae694f1bc1bf745903b2d0",
+    "igra_implementation": "0x00d39E05A20b2C4f6D0D6CfC3C5718066B861334",
+    "lombard_sepolia_proxy": "0x731eFa688F3679688cf60A3993b8658138953ED6",
+    "lombard_sepolia_implementation": "0xfcC108e3E588cb85018aB736091d134f26151670",
+    "starkgate_proxy": "0xcE5485Cfb26914C5dcE00B9BAF0580364daFC7a4",
+    "starkgate_implementation": "0x6ad74D4B79A06A492C288eF66Ef868Dd981fdC85",
+    "swissborg_ntt_proxy": "0x66a28B080918184851774a89aB94850a41f6a1e5",
+    "swissborg_ntt_implementation": "0xd048a8D52da402611A0C5eb6f7388ffC41cd1417",
+    "borg_token": "0x64d0f55Cd8C7133a9D7102b13987235F486F2224",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+  },
+  "routes": {
+    "igra_admitted": [
+      {
+        "canonical_signature": "requestExit(string,uint64)",
+        "selector": "0x5f8b1cce"
+      }
+    ],
+    "lombard_sepolia_admitted": [
+      {
+        "canonical_signature": "approve(address,uint256)",
+        "selector": "0x095ea7b3"
+      },
+      {
+        "canonical_signature": "burn(uint256)",
+        "selector": "0x42966c68"
+      },
+      {
+        "canonical_signature": "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+        "selector": "0xd505accf"
+      },
+      {
+        "canonical_signature": "redeem(uint256)",
+        "selector": "0xdb006a75"
+      },
+      {
+        "canonical_signature": "transfer(address,uint256)",
+        "selector": "0xa9059cbb"
+      },
+      {
+        "canonical_signature": "transferFrom(address,address,uint256)",
+        "selector": "0x23b872dd"
+      }
+    ],
+    "lombard_sepolia_refused": [
+      {
+        "canonical_signature": "mint(bytes,bytes)",
+        "selector": "0x6bc63893"
+      },
+      {
+        "canonical_signature": "redeemForBtc(bytes,uint256)",
+        "selector": "0x30b93d85"
+      }
+    ],
+    "lombard_sepolia_eip712_refused": [
+      {
+        "canonical_type": "feeApproval(uint256 chainId,uint256 fee,uint256 expiry)",
+        "typehash": "0x40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725",
+        "domain_name": "Lombard Staked Bitcoin",
+        "domain_version": "1",
+        "chain_id": 11155111,
+        "verifying_contract": "0x731eFa688F3679688cf60A3993b8658138953ED6",
+        "display_unit": "raw LBTC base units",
+        "reason": "The existing evidence package does not pin the Sepolia AssetRouter consumer required to prove that fee is a maximum ceiling."
+      }
+    ],
+    "starkgate_admitted": [
+      {
+        "canonical_signature": "deposit(address,uint256,uint256)",
+        "selector": "0x0efe6a8b"
+      }
+    ],
+    "swissborg_admitted": [
+      {
+        "canonical_signature": "transfer(uint256,uint16,bytes32)",
+        "selector": "0x961b94d0"
+      }
+    ],
+    "swissborg_refused": [
+      {
+        "canonical_signature": "transfer(uint256,uint16,bytes32,bytes32,bool,bytes)",
+        "selector": "0xb293f97f"
+      }
+    ]
+  },
+  "rpc": {
+    "igra_provider": "official Igra RPC",
+    "sepolia_providers": [
+      "dRPC",
+      "Tenderly"
+    ],
+    "ethereum_providers": [
+      "dRPC",
+      "MEV Blocker"
+    ],
+    "historical_query_binding": "Every eth_getCode, eth_getStorageAt, and eth_call request uses EIP-1898 blockHash plus requireCanonical:true."
+  },
+  "boundary": "Historical fixed-block evidence covers only the listed route/deployment pairs. Sepolia feeApproval domain/type identity is recorded only to bind an exact structural refusal; this package does not pin the Sepolia AssetRouter consumer and grants no maximum-fee display authority. Mutable fees, limits, routes, peers, implementations, metadata, execution success, destination processing, fallback, blind signing, hardware, production, and shipment are outside authority.",
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "e756cc6f76d78ca53093396261e122d5de04f1910b3924e312c8e6571cb04d0e"
+    },
+    {
+      "path": "abi/IgraKasExitBridge.routes.json",
+      "sha256": "55cef902d9de7428c74bf1393fc8cca8c99e2bddd820fcad629c99b874315f3c"
+    },
+    {
+      "path": "abi/LombardLBTC.routes.sepolia.json",
+      "sha256": "d7003a40379bc7fb4c413528962648cc092ecc25c8cfb390cc40910478ae4afb"
+    },
+    {
+      "path": "abi/StarkGate.routes.ethereum.json",
+      "sha256": "34ff3a8d96ffaf2cc1ca226aa8d38c6fd1de112500e1bb88d0e8985cba01d6d7"
+    },
+    {
+      "path": "abi/SwissborgNtt.routes.ethereum.json",
+      "sha256": "1b2c245e886195077ee9640315f24dce44df336179f04a21732fb6339119be07"
+    },
+    {
+      "path": "blockscout/IgraKasExitBridge.implementation.json",
+      "sha256": "b894c4f06d68912d7910e80a71291f722efe8edd0ba8d9f20473755b81cd308c"
+    },
+    {
+      "path": "blockscout/IgraKasExitBridge.proxy.json",
+      "sha256": "e0ded691a485ae3e7de8c5ff1b4651a93b106a1b6836919e5d15e1affa26d683"
+    },
+    {
+      "path": "blockscout/LombardLBTC.implementation.sepolia.json",
+      "sha256": "4611c4ae11cacc27597106cef76380b55d2f58ad1af37f45e5abb9ebe6a43c3e"
+    },
+    {
+      "path": "blockscout/LombardLBTC.proxy.sepolia.json",
+      "sha256": "6864dbee5f7c5316d64d39ef8c5b3d5fccd8b203da731773245f517f439ec910"
+    },
+    {
+      "path": "blockscout/StarkGate.implementation.ethereum.json",
+      "sha256": "49fe4bf08ae3385e1e696d6e38ca4b764aacb79bbfad1a64535fe5eec575cfdd"
+    },
+    {
+      "path": "blockscout/StarkGate.proxy.ethereum.json",
+      "sha256": "619f26c74e85df72d8d578044b0657d83a64e2d45f70901d3bd95c485dfcd3ba"
+    },
+    {
+      "path": "blockscout/SwissborgBorgToken.ethereum.json",
+      "sha256": "ec009560ba6f4664576ec5dd8040b94b580cc28acb7fdcbdf9ea85cf80ece3ef"
+    },
+    {
+      "path": "blockscout/SwissborgNtt.implementation.ethereum.json",
+      "sha256": "65b09f204716ae40e1c291d3e9e80a142bedfd96f923fb5091c88ec8979a0d72"
+    },
+    {
+      "path": "blockscout/SwissborgNtt.proxy.ethereum.json",
+      "sha256": "e85a1b3845cc8d0f6c0fbe85f00200bcfd39efec27c3d5d4e2558c5583819145"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "d58999f65559072083400f319dea611a8630a80f0858d65f019bcc4351095f1d"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-borg-metadata.json",
+      "sha256": "d51f4e716ea3f4f91d5354fe1b620c0a16dc4b457c4b50da0e57bc6a750ad866"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-borg-state.json",
+      "sha256": "27d23ca273ce1a5cfac46802e22bcb6e037770166d7856d083866dd8a1df5c8c"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-identity.json",
+      "sha256": "947988038a38c1080d07f9cb11bf02ff3ca70c1a5d49a571a1ccdb1111fd648f"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-ntt-config.json",
+      "sha256": "477b2d9daefd52830eafcb42ed89a99bc3f6be26da7d427fcee154be33072a15"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-ntt-state.json",
+      "sha256": "26326fe55924c023ea1d5a2acb19fb70eb74301e67c6bb25d87f4791e1e85600"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-starkgate.json",
+      "sha256": "87cd795eb91a157973d59b04f91eebbd8811da70e8cc29bd9b093ab2d0c89c56"
+    },
+    {
+      "path": "rpc/raw/request-igra-state.json",
+      "sha256": "8af3b05ca805b119bd5131bd3cb64933fb655f0782e110e71343f45536238ea3"
+    },
+    {
+      "path": "rpc/raw/request-sepolia-identity.json",
+      "sha256": "a9bfed030cce84f7f0290a59d05f8a1e1bcd0cddf43ef9351a226ab606faf59f"
+    },
+    {
+      "path": "rpc/raw/request-sepolia-metadata.json",
+      "sha256": "73085686e4dcd2cf40b69cc008c5736699ed395d9712e07b9e66b19701a19ed0"
+    },
+    {
+      "path": "rpc/raw/request-sepolia-router.json",
+      "sha256": "004cc76cd7e4bfe58e803ee9ae5f441f0ecfacda4f132ce0d5f48daf1eb0c8d5"
+    },
+    {
+      "path": "rpc/raw/request-sepolia-state.json",
+      "sha256": "73d25121beb550e126410add4513f7f7f10693b4b1491e7c90eb8b69056c850d"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-borg-metadata.json",
+      "sha256": "51cf11118e2093a8b7c48574915c574bee4b206ee0d4ca24abc2a27c35fe7cac"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-borg-state.json",
+      "sha256": "79e41160fd7fc5247beff142acb7100960859b424d1961de0709f0f5bb2284d0"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-identity.json",
+      "sha256": "1d4c568b641ace9538bf1d57ba500745f71a1563884d504f6acd8a2e31b1316f"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-ntt-config.json",
+      "sha256": "40f078aa2a5bdd92f5dc479e8314080ec17a7758b5f666e31347b292585f5ee1"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-ntt-state.json",
+      "sha256": "17a8f5205969fd6746cbfcde51e4544b845ca0e5fc94eaa2e194dee133db2bc0"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-starkgate.json",
+      "sha256": "6445720ed1d28b7856319f10cb9cfb779ff22403cb905d0845548790debc4e75"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-borg-metadata.json",
+      "sha256": "51cf11118e2093a8b7c48574915c574bee4b206ee0d4ca24abc2a27c35fe7cac"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-borg-state.json",
+      "sha256": "79e41160fd7fc5247beff142acb7100960859b424d1961de0709f0f5bb2284d0"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-identity.json",
+      "sha256": "1d4c568b641ace9538bf1d57ba500745f71a1563884d504f6acd8a2e31b1316f"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-ntt-config.json",
+      "sha256": "40f078aa2a5bdd92f5dc479e8314080ec17a7758b5f666e31347b292585f5ee1"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-ntt-state.json",
+      "sha256": "17a8f5205969fd6746cbfcde51e4544b845ca0e5fc94eaa2e194dee133db2bc0"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker-starkgate.json",
+      "sha256": "6445720ed1d28b7856319f10cb9cfb779ff22403cb905d0845548790debc4e75"
+    },
+    {
+      "path": "rpc/raw/response-igra-official-state.json",
+      "sha256": "6d1a60d8ed1e7cae615e3ba26d944cee1ca69b3df29b655bd2671024f25414f9"
+    },
+    {
+      "path": "rpc/raw/response-sepolia-drpc-identity.json",
+      "sha256": "5210539386ed034cdb6aa84f0a61818e94bc8105db85d324745c4ad4bba6ad75"
+    },
+    {
+      "path": "rpc/raw/response-sepolia-drpc-metadata.json",
+      "sha256": "b6a537eea65a295636a9718159859609891e8ab5af66b5fe03fc405cbed3ae8d"
+    },
+    {
+      "path": "rpc/raw/response-sepolia-drpc-router.json",
+      "sha256": "ef82ac02f273117b7842a7d564a0883d4fb5fa7b6de87223a74f287cccb83867"
+    },
+    {
+      "path": "rpc/raw/response-sepolia-drpc-state.json",
+      "sha256": "b68f37af152c295c284410162d3ae44ffea0ab184b3dea8cd3e2f3839bf8d4ef"
+    },
+    {
+      "path": "rpc/raw/response-sepolia-tenderly-identity.json",
+      "sha256": "5210539386ed034cdb6aa84f0a61818e94bc8105db85d324745c4ad4bba6ad75"
+    },
+    {
+      "path": "rpc/raw/response-sepolia-tenderly-metadata.json",
+      "sha256": "b6a537eea65a295636a9718159859609891e8ab5af66b5fe03fc405cbed3ae8d"
+    },
+    {
+      "path": "rpc/raw/response-sepolia-tenderly-router.json",
+      "sha256": "ef82ac02f273117b7842a7d564a0883d4fb5fa7b6de87223a74f287cccb83867"
+    },
+    {
+      "path": "rpc/raw/response-sepolia-tenderly-state.json",
+      "sha256": "b68f37af152c295c284410162d3ae44ffea0ab184b3dea8cd3e2f3839bf8d4ef"
+    }
+  ]
+}

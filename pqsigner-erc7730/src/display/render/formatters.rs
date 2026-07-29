@@ -2272,10 +2272,11 @@ pub(crate) fn validate_contract_calldata_framing(
     Ok(ContractCalldataMode::Standard)
 }
 
-/// Evaluate every authenticated scalar word guard before the contract intent
-/// banner or any field page is published. Deep IR validation restricts guards
-/// to always-visible static address/unsigned fields; these local checks retain
-/// that fail-closed contract if a faulted in-memory view reaches the renderer.
+/// Evaluate every authenticated scalar word guard before an intent banner or
+/// field page is published. Deep IR validation restricts contract guards to
+/// static scalars and EIP-712 guards to one top-level encodeData word; these
+/// local checks retain that fail-closed contract if a faulted in-memory view
+/// reaches either renderer.
 pub(crate) fn validate_contract_word_guards(
     ir: &Erc7730Ir<'_>,
     format: &FormatHeader<'_>,
@@ -2290,6 +2291,13 @@ pub(crate) fn validate_contract_word_guards(
         let Some(guard) = params.word_guard else {
             continue;
         };
+        if ir.context_kind == crate::ir::ContextKind::Eip712 {
+            let path = ir
+                .path_bytes(field.path_off)
+                .map_err(|_| RenderErr::Reject("7730 bad eip712 guard path"))?;
+            crate::ir::validate_eip712_word_guard_path(path)
+                .map_err(|_| RenderErr::Reject("7730 bad eip712 guard path"))?;
+        }
         if params.visibility != crate::ir::Visibility::Always {
             return Err(RenderErr::Reject("7730 guarded field hidden"));
         }
@@ -5518,7 +5526,7 @@ mod adversarial_renderer_regressions {
         ContractContainerCtx::outer(1, [0u8; 20], U256::zero(), 0, Some(sender))
     }
 
-    fn guarded_pool(path: [u8; 4], mode: u8, expected: [u8; 32]) -> std::vec::Vec<u8> {
+    fn guarded_pool(path: &[u8], mode: u8, expected: [u8; 32]) -> std::vec::Vec<u8> {
         use crate::render::params::{PARAM_INTEGER_WIDTH, PARAM_TERMINAL_KIND, PARAM_WORD_GUARD};
         let mut body = std::vec![PARAM_WORD_GUARD, 33, mode];
         body.extend_from_slice(&expected);
@@ -5611,7 +5619,7 @@ mod adversarial_renderer_regressions {
         let structured = [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
         let mut forbidden = [0u8; 32];
         forbidden[31] = 2;
-        let pool = guarded_pool(structured, WORD_GUARD_NE, forbidden);
+        let pool = guarded_pool(&structured, WORD_GUARD_NE, forbidden);
         let fields = one_field_bytes(FormatOp::Amount as u8, 1, 6);
         let fmt = format(&fields, 1, 1);
         let descriptor = ir(&pool);
@@ -5646,7 +5654,7 @@ mod adversarial_renderer_regressions {
             (container_field::VALUE >> 8) as u8,
             container_field::VALUE as u8,
         ];
-        let pool = guarded_pool(container_value, WORD_GUARD_EQ, [0u8; 32]);
+        let pool = guarded_pool(&container_value, WORD_GUARD_EQ, [0u8; 32]);
         let descriptor = ir(&pool);
         let fields = one_field_bytes(FormatOp::Amount as u8, 1, 6);
         let fmt = format(&fields, 1, 1);
@@ -5673,6 +5681,46 @@ mod adversarial_renderer_regressions {
                 &funded,
             ),
             Err(RenderErr::Reject("7730 word guard failed"))
+        );
+
+        let mut eip712_container_descriptor = descriptor;
+        eip712_container_descriptor.context_kind = ContextKind::Eip712;
+        assert_eq!(
+            validate_contract_word_guards(
+                &eip712_container_descriptor,
+                &fmt,
+                &[0u8; 32],
+                &[0u8; 32],
+                ContractCalldataMode::Standard,
+                &tx(),
+            ),
+            Err(RenderErr::Reject("7730 bad eip712 guard path"))
+        );
+
+        let nested = [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+        ];
+        let pool = guarded_pool(&nested, WORD_GUARD_EQ, [0u8; 32]);
+        let mut descriptor = ir(&pool);
+        descriptor.context_kind = ContextKind::Eip712;
+        let fields = one_field_bytes(FormatOp::Raw as u8, 1, 9);
+        let fmt = format(&fields, 1, 1);
+        assert_eq!(
+            validate_contract_word_guards(
+                &descriptor,
+                &fmt,
+                &[0u8; 32],
+                &[0u8; 32],
+                ContractCalldataMode::Standard,
+                &tx(),
+            ),
+            Err(RenderErr::Reject("7730 bad eip712 guard path"))
         );
     }
 
