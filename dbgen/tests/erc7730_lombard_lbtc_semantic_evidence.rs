@@ -778,6 +778,25 @@ fn mainnet_fee_approval_is_exactly_bound_and_renders_production_raw_base_units()
         "complete signed fee word missing:\n{text}"
     );
 
+    let wrong_signed_chain = [word_u128(2), exact_fee, word_u128(1_800_000_000)].concat();
+    let wrong_signed_chain_result = render_erc7730_eip712_pages_v3(
+        1,
+        &contract,
+        &typehash,
+        &wrong_signed_chain,
+        &[],
+        &verified,
+        None,
+        &resolver,
+    );
+    assert!(
+        matches!(
+            wrong_signed_chain_result,
+            Err(RenderErr::Reject("7730 word guard failed"))
+        ),
+        "Lombard constructs feeApproval with block.chainid, so the signed chainId word must equal the authenticated deployment chain"
+    );
+
     let adjacent_fee = word_u128(123_456_701);
     let adjacent = [word_u128(1), adjacent_fee, word_u128(1_800_000_000)].concat();
     let adjacent_pages = render_erc7730_eip712_pages_v3(

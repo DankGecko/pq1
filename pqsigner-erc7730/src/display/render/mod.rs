@@ -1108,6 +1108,18 @@ fn render_erc7730_eip712_pages_inner_into<'ir>(
     }
     let body = head_bounded_body(encoded_data, format.static_head_words)?;
     formatters::validate_eip712_integer_words(&descriptor.ir, &format, body)?;
+    // Exact, descriptor-enrolled signed-word predicates are evaluated before
+    // the trusted intent. EIP-712 guards are restricted by deep IR validation
+    // to one top-level encodeData word, so the static body is both the head and
+    // complete value source.
+    formatters::validate_contract_word_guards(
+        &descriptor.ir,
+        &format,
+        body,
+        body,
+        formatters::ContractCalldataMode::Standard,
+        &container,
+    )?;
 
     let mut interpolation = InterpolationState::from_format(&descriptor.ir, &format)?;
     if interpolation.is_enrolled() {

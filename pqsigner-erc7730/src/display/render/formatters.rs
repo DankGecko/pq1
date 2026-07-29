@@ -2272,10 +2272,11 @@ pub(crate) fn validate_contract_calldata_framing(
     Ok(ContractCalldataMode::Standard)
 }
 
-/// Evaluate every authenticated scalar word guard before the contract intent
-/// banner or any field page is published. Deep IR validation restricts guards
-/// to always-visible static address/unsigned fields; these local checks retain
-/// that fail-closed contract if a faulted in-memory view reaches the renderer.
+/// Evaluate every authenticated scalar word guard before an intent banner or
+/// field page is published. Deep IR validation restricts contract guards to
+/// static scalars and EIP-712 guards to one top-level encodeData word; these
+/// local checks retain that fail-closed contract if a faulted in-memory view
+/// reaches either renderer.
 pub(crate) fn validate_contract_word_guards(
     ir: &Erc7730Ir<'_>,
     format: &FormatHeader<'_>,

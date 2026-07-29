@@ -531,6 +531,15 @@ const MORPHO_BLUE_DESCRIPTOR_HASH: [u8; 32] = [
     0x42, 0xbf, 0xe5, 0xa0, 0xf2, 0x5d, 0x8a, 0x73, 0x39, 0x1a, 0x51, 0x7c, 0x45, 0x97, 0x74, 0x99,
 ];
 
+/// SHA-256(JCS(resolved descriptor JSON)) for the curated Lombard mainnet
+/// feeApproval descriptor. The contract constructs the signed struct with
+/// `block.chainid`; this exact enrollment therefore guards the visible signed
+/// `chainId` word against the authenticated deployment chain.
+const LOMBARD_FEE_APPROVAL_DESCRIPTOR_HASH: [u8; 32] = [
+    0x10, 0xd4, 0x16, 0x68, 0x1a, 0x8d, 0x67, 0x64, 0x38, 0xd8, 0x06, 0x4c, 0x7d, 0xbb, 0x11, 0x74,
+    0xea, 0x2b, 0x9e, 0xe0, 0x66, 0x96, 0x10, 0x5e, 0xd5, 0xab, 0x77, 0xc7, 0xcd, 0xc6, 0x30, 0x90,
+];
+
 const ROUTER02_MAINNET: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
     0x86, 0x65, 0xfc, 0x45,
@@ -543,8 +552,19 @@ const MORPHO_BLUE: [u8; 20] = [
     0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0x9c, 0xc5, 0xe9, 0x0e, 0x3b, 0x3a, 0xf6, 0x4b, 0xda, 0xf6, 0x2c,
     0x37, 0xee, 0xff, 0xcb,
 ];
+const LOMBARD_LBTC_MAINNET: [u8; 20] = [
+    0x82, 0x36, 0xa8, 0x70, 0x84, 0xf8, 0xb8, 0x43, 0x06, 0xf7, 0x20, 0x07, 0xf3, 0x6f, 0x26, 0x18,
+    0xa5, 0x63, 0x44, 0x94,
+];
+const LOMBARD_FEE_APPROVAL_TYPE_HASH: [u8; 32] = [
+    0x40, 0xac, 0x9f, 0x6a, 0xa2, 0x70, 0x75, 0xe6, 0x4c, 0x1e, 0xd1, 0xea, 0x2e, 0x83, 0x1b, 0x20,
+    0xb8, 0xc2, 0x5e, 0xfd, 0xeb, 0x6b, 0x79, 0xfd, 0x0c, 0xf6, 0x83, 0xc9, 0xa9, 0xc5, 0x07, 0x25,
+];
 const ADDRESS_ZERO: [u8; 20] = [0u8; 20];
 const ADDRESS_ONE: [u8; 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+const ONE_WORD: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+];
 const ADDRESS_TWO_WORD: [u8; 32] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
 ];
@@ -579,6 +599,19 @@ struct SemanticFormatEnrollment {
     /// Permit the narrowly modeled dynamic `(bytes,address,uint256,uint256)`
     /// Router02 tuple and require exactly one full packed-path formatter.
     packed_v3_path: bool,
+}
+
+/// Exact authority for one or more EIP-712 signed-word predicates. Both the
+/// source descriptor hash and the full primary type hash are pinned so a
+/// source or encodeType drift cannot inherit the predicate silently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Eip712WordGuardEnrollment {
+    descriptor_hash: [u8; 32],
+    chain_id: u64,
+    contract: [u8; 20],
+    canonical_signature: &'static str,
+    type_hash: [u8; 32],
+    guards: &'static [SemanticWordGuard],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -619,6 +652,22 @@ struct Eip712StringPreimageEnrollment {
 /// strings remain opaque hash words unless a future evidence-backed catalogue
 /// reconciliation adds an exact descriptor/deployment/type/source enrollment.
 const EIP712_STRING_PREIMAGE_ENROLLMENTS: [Eip712StringPreimageEnrollment; 0] = [];
+
+const LOMBARD_FEE_APPROVAL_GUARDS: [SemanticWordGuard; 1] = [SemanticWordGuard {
+    path: "chainId",
+    terminal_type: "uint256",
+    operation: WORD_GUARD_EQ,
+    word: ONE_WORD,
+}];
+
+const EIP712_WORD_GUARD_ENROLLMENTS: [Eip712WordGuardEnrollment; 1] = [Eip712WordGuardEnrollment {
+    descriptor_hash: LOMBARD_FEE_APPROVAL_DESCRIPTOR_HASH,
+    chain_id: 1,
+    contract: LOMBARD_LBTC_MAINNET,
+    canonical_signature: "feeApproval(uint256 chainId,uint256 fee,uint256 expiry)",
+    type_hash: LOMBARD_FEE_APPROVAL_TYPE_HASH,
+    guards: &LOMBARD_FEE_APPROVAL_GUARDS,
+}];
 
 const ROUTER02_EXACT_INPUT_GUARDS: [SemanticWordGuard; 4] = [
     SemanticWordGuard {
@@ -5877,6 +5926,27 @@ fn compile_one_format_with_nested_calldata_enrollments(
     } else {
         None
     };
+    let eip712_word_guard_required = context_kind == CTX_EIP712
+        && eip712_word_guard_required_for(
+            interpolation_deployment,
+            sig,
+            eip712_type_hash.expect("EIP-712 type hash computed above"),
+        );
+    let eip712_word_guard_enrollment = if context_kind == CTX_EIP712 {
+        eip712_word_guard_enrollment_for(
+            ctx.descriptor_hash,
+            interpolation_deployment,
+            sig,
+            eip712_type_hash.expect("EIP-712 type hash computed above"),
+        )
+    } else {
+        None
+    };
+    if eip712_word_guard_required && eip712_word_guard_enrollment.is_none() {
+        return Err(format!(
+            "format `{sig}` requires an exact descriptor/deployment/type EIP-712 word-guard enrollment"
+        ));
+    }
     let string_preimage_count = match eip712_string_preimage_enrollment {
         Some(enrollment) => {
             validate_eip712_string_preimage_format_source(sig, fmt, &parsed, enrollment)?
@@ -6038,6 +6108,17 @@ fn compile_one_format_with_nested_calldata_enrollments(
             enrollment,
         )?;
     }
+    if let Some(enrollment) = eip712_word_guard_enrollment {
+        apply_word_guards(
+            sig,
+            fmt,
+            context_kind,
+            &parsed,
+            pool,
+            &mut compiled,
+            enrollment.guards,
+        )?;
+    }
 
     // `interpolatedIntent` is presentation derived from values that keep their
     // ordinary field pages. The host resolves braces to final emitted field
@@ -6170,6 +6251,41 @@ fn eip712_string_preimage_enrollment_for_in<'a>(
     enrollments.iter().find(|entry| {
         entry.descriptor_hash == descriptor_hash
             && entry.chain_id == deployment.chain_id
+            && entry.contract == deployment.contract
+            && entry.canonical_signature == canonical_signature
+            && entry.type_hash == type_hash
+    })
+}
+
+fn eip712_word_guard_enrollment_for(
+    descriptor_hash: [u8; 32],
+    deployment: Option<&InterpolationDeployment<'_>>,
+    canonical_signature: &str,
+    type_hash: [u8; 32],
+) -> Option<&'static Eip712WordGuardEnrollment> {
+    let deployment = deployment?;
+    EIP712_WORD_GUARD_ENROLLMENTS.iter().find(|entry| {
+        entry.descriptor_hash == descriptor_hash
+            && entry.chain_id == deployment.chain_id
+            && entry.contract == deployment.contract
+            && entry.canonical_signature == canonical_signature
+            && entry.type_hash == type_hash
+    })
+}
+
+/// Return true when this deployment/type has contract semantics that require a
+/// signed-word predicate. Descriptor-hash drift must refuse instead of
+/// compiling the same semantic identity without its reviewed guard.
+fn eip712_word_guard_required_for(
+    deployment: Option<&InterpolationDeployment<'_>>,
+    canonical_signature: &str,
+    type_hash: [u8; 32],
+) -> bool {
+    let Some(deployment) = deployment else {
+        return false;
+    };
+    EIP712_WORD_GUARD_ENROLLMENTS.iter().any(|entry| {
+        entry.chain_id == deployment.chain_id
             && entry.contract == deployment.contract
             && entry.canonical_signature == canonical_signature
             && entry.type_hash == type_hash
@@ -6760,8 +6876,35 @@ fn apply_semantic_enrollment(
         &sender_payload,
     )?;
 
+    apply_word_guards(
+        sig,
+        fmt,
+        context_kind,
+        parsed,
+        pool,
+        compiled,
+        enrollment.guards,
+    )
+}
+
+/// Validate and lower exact, always-visible scalar predicates shared by the
+/// contract and EIP-712 enrollment paths.
+fn apply_word_guards(
+    sig: &str,
+    fmt: &Format,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    pool: &mut Pool,
+    compiled: &mut [CompiledFieldOut],
+    guards: &[SemanticWordGuard],
+) -> Result<(), String> {
+    if compiled.len() != fmt.fields.len() {
+        return Err(format!(
+            "format `{sig}` word-guard enrollment requires one flat field per source field"
+        ));
+    }
     let mut guarded_paths = BTreeSet::new();
-    for guard in enrollment.guards {
+    for guard in guards {
         if !guarded_paths.insert(guard.path) {
             return Err(format!(
                 "format `{sig}` semantic enrollment repeats guard path `{}`",
@@ -16515,6 +16658,37 @@ mod tests {
         payload[0] = operation;
         payload[1..].copy_from_slice(&word);
         payload
+    }
+
+    #[test]
+    fn lombard_eip712_word_guard_enrollment_is_exact_and_required() {
+        let capabilities = Erc20Capabilities::default();
+        let deployment = InterpolationDeployment {
+            chain_id: 1,
+            contract: LOMBARD_LBTC_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+        let signature = "feeApproval(uint256 chainId,uint256 fee,uint256 expiry)";
+        assert!(eip712_word_guard_required_for(
+            Some(&deployment),
+            signature,
+            LOMBARD_FEE_APPROVAL_TYPE_HASH,
+        ));
+        let enrollment = eip712_word_guard_enrollment_for(
+            LOMBARD_FEE_APPROVAL_DESCRIPTOR_HASH,
+            Some(&deployment),
+            signature,
+            LOMBARD_FEE_APPROVAL_TYPE_HASH,
+        )
+        .expect("exact Lombard descriptor/deployment/type enrollment");
+        assert_eq!(enrollment.guards, &LOMBARD_FEE_APPROVAL_GUARDS);
+        assert!(eip712_word_guard_enrollment_for(
+            [0x55; 32],
+            Some(&deployment),
+            signature,
+            LOMBARD_FEE_APPROVAL_TYPE_HASH,
+        )
+        .is_none());
     }
 
     #[test]
