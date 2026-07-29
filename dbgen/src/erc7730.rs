@@ -539,6 +539,8 @@ const LOMBARD_FEE_APPROVAL_DESCRIPTOR_HASH: [u8; 32] = [
     0xff, 0x31, 0xd7, 0x22, 0xaf, 0x07, 0x8f, 0xe8, 0xed, 0x04, 0x2f, 0x8f, 0xb4, 0x69, 0x95, 0xba,
     0x50, 0x77, 0x10, 0xb1, 0x59, 0x15, 0xba, 0xa5, 0xa6, 0xad, 0xfc, 0xc0, 0x79, 0x51, 0xb1, 0xa0,
 ];
+const LOMBARD_FEE_APPROVAL_SOURCE_SUFFIX: &str =
+    "registry/lombard/eip712-network-fee-authorization-mainnet.json";
 
 const ROUTER02_MAINNET: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
@@ -611,6 +613,7 @@ struct Eip712WordGuardEnrollment {
     contract: [u8; 20],
     canonical_signature: &'static str,
     type_hash: [u8; 32],
+    deployment_chain_guard_path: Option<&'static str>,
     guards: &'static [SemanticWordGuard],
 }
 
@@ -666,6 +669,7 @@ const EIP712_WORD_GUARD_ENROLLMENTS: [Eip712WordGuardEnrollment; 1] = [Eip712Wor
     contract: LOMBARD_LBTC_MAINNET,
     canonical_signature: "feeApproval(uint256 chainId,uint256 fee,uint256 expiry)",
     type_hash: LOMBARD_FEE_APPROVAL_TYPE_HASH,
+    deployment_chain_guard_path: Some("chainId"),
     guards: &LOMBARD_FEE_APPROVAL_GUARDS,
 }];
 
@@ -4131,6 +4135,13 @@ fn compile_resolved_descriptor_with_nested_calldata_enrollments(
     // best-effort string match during leaf emission.
     let (context_kind, deployments) =
         resolve_deployments(&descriptor.context).map_err(|e| format!("deployments: {e}"))?;
+    let eip712_word_guard_source_required = eip712_word_guard_source_required(path);
+    if eip712_word_guard_source_required && context_kind != CTX_EIP712 {
+        return Err(format!(
+            "descriptor source `{}` requires exact EIP-712 word-guard enrollment",
+            path.display()
+        ));
+    }
     let deployment_formats = validate_deployment_format_admissions(
         descriptor.pqsigner.as_ref(),
         context_kind,
@@ -4152,6 +4163,7 @@ fn compile_resolved_descriptor_with_nested_calldata_enrollments(
         descriptor_hash,
         owner: owner.clone(),
         contract_name: contract_name.clone(),
+        eip712_word_guard_source_required,
     };
 
     // Interpolation enrollment can differ by deployment: a static token may
@@ -4714,6 +4726,10 @@ struct CompileCtx {
     owner: String,
     #[allow(dead_code)]
     contract_name: String,
+    /// A source-path policy boundary independent of descriptor/deployment/type
+    /// bytes. Every admitted EIP-712 format from this source must match one
+    /// exact word-guard enrollment or fail closed.
+    eip712_word_guard_source_required: bool,
 }
 
 /// Deployment-bound interpolation authority. The ERC-20 key set comes from
@@ -5927,11 +5943,12 @@ fn compile_one_format_with_nested_calldata_enrollments(
         None
     };
     let eip712_word_guard_required = context_kind == CTX_EIP712
-        && eip712_word_guard_required_for(
-            interpolation_deployment,
-            sig,
-            eip712_type_hash.expect("EIP-712 type hash computed above"),
-        );
+        && (ctx.eip712_word_guard_source_required
+            || eip712_word_guard_required_for(
+                interpolation_deployment,
+                sig,
+                eip712_type_hash.expect("EIP-712 type hash computed above"),
+            ));
     let eip712_word_guard_enrollment = if context_kind == CTX_EIP712 {
         eip712_word_guard_enrollment_for(
             ctx.descriptor_hash,
@@ -6109,6 +6126,7 @@ fn compile_one_format_with_nested_calldata_enrollments(
         )?;
     }
     if let Some(enrollment) = eip712_word_guard_enrollment {
+        validate_eip712_deployment_chain_guard(sig, enrollment)?;
         apply_word_guards(
             sig,
             fmt,
@@ -6271,6 +6289,10 @@ fn eip712_word_guard_enrollment_for(
             && entry.canonical_signature == canonical_signature
             && entry.type_hash == type_hash
     })
+}
+
+fn eip712_word_guard_source_required(path: &Path) -> bool {
+    path.ends_with(Path::new(LOMBARD_FEE_APPROVAL_SOURCE_SUFFIX))
 }
 
 /// Return true when this deployment/type has contract semantics that require a
@@ -6889,6 +6911,39 @@ fn apply_semantic_enrollment(
 
 /// Validate and lower exact, always-visible scalar predicates shared by the
 /// contract and EIP-712 enrollment paths.
+fn validate_eip712_deployment_chain_guard(
+    sig: &str,
+    enrollment: &Eip712WordGuardEnrollment,
+) -> Result<(), String> {
+    let Some(path) = enrollment.deployment_chain_guard_path else {
+        return Ok(());
+    };
+    let matching: Vec<_> = enrollment
+        .guards
+        .iter()
+        .filter(|guard| guard.path == path)
+        .collect();
+    if matching.len() != 1 {
+        return Err(format!(
+            "format `{sig}` deployment-chain guard path `{path}` must have exactly one enrolled predicate, found {}",
+            matching.len()
+        ));
+    }
+    let guard = matching[0];
+    let mut expected = [0u8; 32];
+    expected[24..].copy_from_slice(&enrollment.chain_id.to_be_bytes());
+    if guard.terminal_type != "uint256"
+        || guard.operation != WORD_GUARD_EQ
+        || guard.word != expected
+    {
+        return Err(format!(
+            "format `{sig}` deployment-chain guard path `{path}` must equal the enrollment chain_id {} as uint256",
+            enrollment.chain_id
+        ));
+    }
+    Ok(())
+}
+
 fn apply_word_guards(
     sig: &str,
     fmt: &Format,
@@ -14599,6 +14654,7 @@ mod tests {
             descriptor_hash: [0u8; 32],
             owner: String::new(),
             contract_name: String::new(),
+            eip712_word_guard_source_required: false,
         };
         // STRICT: the unrenderable `swap` fails the WHOLE descriptor.
         assert!(compile_formats(&display, CTX_CONTRACT, &mut ctx, false).is_err());
@@ -15765,6 +15821,7 @@ mod tests {
             descriptor_hash: [0u8; 32],
             owner: String::new(),
             contract_name: String::new(),
+            eip712_word_guard_source_required: false,
         };
         let mut pool = Pool::new();
         let cf = compile_one_field(
@@ -15852,6 +15909,7 @@ mod tests {
             descriptor_hash: [0u8; 32],
             owner: String::new(),
             contract_name: String::new(),
+            eip712_word_guard_source_required: false,
         };
         let mut pool = Pool::new();
         let mut out = Vec::new();
@@ -16228,6 +16286,7 @@ mod tests {
             descriptor_hash: [0u8; 32],
             owner: String::new(),
             contract_name: String::new(),
+            eip712_word_guard_source_required: false,
         }
     }
 
@@ -16660,6 +16719,50 @@ mod tests {
         payload
     }
 
+    fn lombard_fee_approval_format() -> Format {
+        serde_json::from_value(serde_json::json!({
+            "intent": "Max LBTC fee",
+            "fields": [
+                {
+                    "path": "chainId",
+                    "label": "Chain ID",
+                    "format": "raw",
+                    "visible": "always"
+                },
+                {
+                    "path": "fee",
+                    "label": "Base units (hex)",
+                    "format": "raw",
+                    "visible": "always"
+                },
+                {
+                    "path": "expiry",
+                    "label": "Expiry",
+                    "format": "date",
+                    "visible": "always"
+                }
+            ]
+        }))
+        .expect("valid Lombard feeApproval test format")
+    }
+
+    fn compile_lombard_fee_approval_test_format(
+        ctx: &mut CompileCtx,
+        deployment: &InterpolationDeployment<'_>,
+        signature: &str,
+    ) -> Result<(), String> {
+        compile_one_format(
+            signature,
+            &lombard_fee_approval_format(),
+            CTX_EIP712,
+            ctx,
+            &mut Pool::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
+            Some(deployment),
+        )
+    }
+
     #[test]
     fn lombard_eip712_word_guard_enrollment_is_exact_and_required() {
         let capabilities = Erc20Capabilities::default();
@@ -16689,6 +16792,92 @@ mod tests {
             LOMBARD_FEE_APPROVAL_TYPE_HASH,
         )
         .is_none());
+    }
+
+    #[test]
+    fn lombard_source_boundary_refuses_descriptor_deployment_contract_or_type_drift() {
+        let source =
+            Path::new("/catalogue").join(LOMBARD_FEE_APPROVAL_SOURCE_SUFFIX);
+        assert!(eip712_word_guard_source_required(&source));
+        assert!(!eip712_word_guard_source_required(Path::new(
+            "/catalogue/registry/lombard/eip712-network-fee-authorization-mainnet-copy.json"
+        )));
+
+        let capabilities = Erc20Capabilities::default();
+        let exact_deployment = InterpolationDeployment {
+            chain_id: 1,
+            contract: LOMBARD_LBTC_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+        let exact_signature = "feeApproval(uint256 chainId,uint256 fee,uint256 expiry)";
+        let mut exact_ctx = test_ctx();
+        exact_ctx.descriptor_hash = LOMBARD_FEE_APPROVAL_DESCRIPTOR_HASH;
+        exact_ctx.eip712_word_guard_source_required = true;
+        compile_lombard_fee_approval_test_format(
+            &mut exact_ctx,
+            &exact_deployment,
+            exact_signature,
+        )
+        .expect("exact source identity compiles with its guard");
+
+        let mut drifted_descriptor_ctx = exact_ctx.clone();
+        drifted_descriptor_ctx.descriptor_hash[0] ^= 0x80;
+        let mut drifted_contract = exact_deployment;
+        drifted_contract.contract[0] ^= 0x80;
+        let drifted_chain = InterpolationDeployment {
+            chain_id: 2,
+            ..exact_deployment
+        };
+        for result in [
+            compile_lombard_fee_approval_test_format(
+                &mut drifted_descriptor_ctx,
+                &exact_deployment,
+                exact_signature,
+            ),
+            compile_lombard_fee_approval_test_format(
+                &mut exact_ctx.clone(),
+                &drifted_chain,
+                exact_signature,
+            ),
+            compile_lombard_fee_approval_test_format(
+                &mut exact_ctx.clone(),
+                &drifted_contract,
+                exact_signature,
+            ),
+            compile_lombard_fee_approval_test_format(
+                &mut exact_ctx.clone(),
+                &exact_deployment,
+                "feeApproval(uint256 chainId,uint256 fee,uint64 expiry)",
+            ),
+        ] {
+            let error = result.expect_err("source identity drift must fail closed");
+            assert!(
+                error.contains("requires an exact descriptor/deployment/type"),
+                "unexpected refusal: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn deployment_chain_guard_word_is_derived_from_enrollment_chain() {
+        let enrollment = &EIP712_WORD_GUARD_ENROLLMENTS[0];
+        validate_eip712_deployment_chain_guard(enrollment.canonical_signature, enrollment)
+            .expect("exact chain guard matches deployment");
+
+        const WRONG_CHAIN_GUARDS: [SemanticWordGuard; 1] = [SemanticWordGuard {
+            path: "chainId",
+            terminal_type: "uint256",
+            operation: WORD_GUARD_EQ,
+            word: ZERO_WORD,
+        }];
+        let mut wrong = *enrollment;
+        wrong.guards = &WRONG_CHAIN_GUARDS;
+        let error = validate_eip712_deployment_chain_guard(wrong.canonical_signature, &wrong)
+            .expect_err("copied or stale chain guard word must refuse");
+        assert!(
+            error.contains("must equal the enrollment chain_id 1"),
+            "unexpected refusal: {error}"
+        );
     }
 
     #[test]
