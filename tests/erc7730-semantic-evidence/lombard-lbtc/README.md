@@ -72,10 +72,13 @@ therefore source-bound to the executing chain rather than being cosmetic.
 The fee is a maximum LBTC ceiling, not a promise that the full amount will be
 charged. `AssetRouter._mintWithFee` verifies the recipient's signature over the
 complete signed fee and expiry, then computes the charged fee as
-`min(maximumMintCommission, feeAction.fee)`. The trusted mainnet display
-therefore labels the value `Maximum LBTC network fee` and resolves `@.to`
-through the exact LBTC metadata leaf (8 decimals). Values that need more than
-the device's six supported fractional digits must refuse instead of rounding.
+`min(maximumMintCommission, feeAction.fee)`. The production off-chain
+typed-data path carries no authenticated ERC-20 metadata proof. The trusted
+mainnet display therefore uses the intent `Max fee approval`, labels
+the field `LBTC base units`, and renders the complete signed 256-bit word as
+raw hexadecimal. It never scales or rounds that value. Fixed-block metadata
+confirms that LBTC uses 8 decimals for this semantic evidence, but it does not
+grant runtime display-metadata authority.
 
 ## Signed meaning of the accepted calls
 

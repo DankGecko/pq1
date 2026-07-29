@@ -195,8 +195,8 @@
   "result": {
     "catalogue_source_count": 214,
     "catalogue_leaf_count": 365,
-    "catalogue_root": "88c2064fd6448112e339e59a78758573b6316a347469c72399015757b4871a2c",
-    "catalogue_blob_sha256": "1597c3d7adaf7b4a7a0209fe4974776e51958d1ad6569987b202d6eb535b2251",
+    "catalogue_root": "b020c3ad8ed1d5a63973fdd41baa0d57a7c3b53bd5d78b6a6a84cf4adc8aae61",
+    "catalogue_blob_sha256": "f65a7562e136d5922813566019a7ebf21c2fd0310c4ea541c0a214dfd0b1b8d3",
     "known_call_count": 4615,
     "forced_eligible_set_sha256": "6f4f8020c26d23304598025df4b0447a9979557573f444a211e55641934b198c",
     "known_call_bloom_sha256": "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"

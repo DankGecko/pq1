@@ -16,7 +16,6 @@ use pqsigner_erc7730::bundle::verify_erc7730_bundle;
 use pqsigner_erc7730::display::render::render_erc7730_eip712_pages_v3;
 use pqsigner_erc7730::ir::ContextKind;
 use pqsigner_erc7730::render::RenderErr;
-use pqsigner_tx::erc20::bundle::Erc20Metadata;
 use pqsigner_tx::names::NameResolver;
 use pqsigner_tx_core::hash::keccak256;
 use serde_json::Value;
@@ -666,9 +665,13 @@ fn exact_abi_and_sources_support_only_the_claimed_signed_meaning() {
         serde_json::json!([FEE_APPROVAL_TYPE])
     );
     let fee_field = &fee_descriptor["display"]["formats"][FEE_APPROVAL_TYPE]["fields"][1];
-    assert_eq!(fee_field["label"], "Maximum LBTC network fee");
-    assert_eq!(fee_field["format"], "tokenAmount");
-    assert_eq!(fee_field["params"]["tokenPath"], "@.to");
+    assert_eq!(
+        fee_descriptor["display"]["formats"][FEE_APPROVAL_TYPE]["intent"],
+        "Max fee approval"
+    );
+    assert_eq!(fee_field["label"], "LBTC base units");
+    assert_eq!(fee_field["format"], "raw");
+    assert!(fee_field.get("params").is_none());
     assert_eq!(fee_field["visible"], "always");
 
     let request_state = read_json(&evidence.join("rpc/raw/request-lbtc-state.json"));
@@ -686,7 +689,7 @@ fn exact_abi_and_sources_support_only_the_claimed_signed_meaning() {
 }
 
 #[test]
-fn mainnet_fee_approval_is_exactly_bound_rendered_and_refuses_drift_or_rounding() {
+fn mainnet_fee_approval_is_exactly_bound_and_renders_production_raw_base_units() {
     let registry = production_registry();
     let registry_root = workspace_root().join("secure/data/erc7730-registry");
     let contract = address(LBTC_PROXY);
@@ -739,38 +742,9 @@ fn mainnet_fee_approval_is_exactly_bound_rendered_and_refuses_drift_or_rounding(
 
     let typehash = keccak256(FEE_APPROVAL_TYPE.as_bytes());
     assert_eq!(hex::encode(typehash), FEE_APPROVAL_TYPEHASH);
-    let erc20_db = read_json(&workspace_root().join("secure/data/erc20.json"));
-    let record = erc20_db
-        .as_array()
-        .expect("ERC20 records")
-        .iter()
-        .find(|record| {
-            record["chain_id"].as_u64() == Some(1)
-                && record["address"].as_str().and_then(|value| {
-                    decode_hex(value)
-                        .try_into()
-                        .ok()
-                        .map(|candidate: [u8; 20]| candidate == contract)
-                }) == Some(true)
-        })
-        .expect("exact mainnet LBTC metadata leaf");
-    assert_eq!(record["name"], DOMAIN_NAME);
-    assert_eq!(record["symbol"], "LBTC");
-    assert_eq!(record["decimals"].as_u64(), Some(8));
-    let metadata = Erc20Metadata {
-        chain_id: 1,
-        contract,
-        decimals: record["decimals"].as_u64().unwrap() as u8,
-        name: record["name"].as_str().unwrap().as_bytes(),
-        symbol: record["symbol"].as_str().unwrap().as_bytes(),
-    };
     let resolver = NameResolver::new();
-    let exact = [
-        word_u128(1),
-        word_u128(123_456_700),
-        word_u128(1_800_000_000),
-    ]
-    .concat();
+    let exact_fee = word_u128(123_456_700);
+    let exact = [word_u128(1), exact_fee, word_u128(1_800_000_000)].concat();
     let pages = render_erc7730_eip712_pages_v3(
         1,
         &contract,
@@ -778,39 +752,62 @@ fn mainnet_fee_approval_is_exactly_bound_rendered_and_refuses_drift_or_rounding(
         &exact,
         &[],
         &verified,
-        Some(&metadata),
+        None,
         &resolver,
     )
-    .expect("exact eight-decimal LBTC fee renders");
+    .expect("production metadata-less LBTC fee renders as raw base units");
     let text = pages_text(&pages);
     assert!(
-        text.contains("Maximum LBTC"),
-        "maximum-fee label missing:\n{text}"
+        text.contains("Max fee approval"),
+        "maximum-fee intent missing:\n{text}"
     );
     assert!(
-        text.contains("1.234567 LBTC"),
-        "exact LBTC amount missing:\n{text}"
+        text.contains("LBTC base units"),
+        "base-unit label missing:\n{text}"
+    );
+    let exact_hex = hex::encode(exact_fee);
+    let exact_raw_pages = format!(
+        "LBTC base units\n{}\n{}\n1/2 > next\nLBTC base units\n{}\n{}\n2/2 > next",
+        &exact_hex[0..16],
+        &exact_hex[16..32],
+        &exact_hex[32..48],
+        &exact_hex[48..64]
+    );
+    assert!(
+        text.contains(&exact_raw_pages),
+        "complete signed fee word missing:\n{text}"
     );
 
-    let inexact = [
-        word_u128(1),
-        word_u128(123_456_701),
-        word_u128(1_800_000_000),
-    ]
-    .concat();
-    assert!(matches!(
-        render_erc7730_eip712_pages_v3(
-            1,
-            &contract,
-            &typehash,
-            &inexact,
-            &[],
-            &verified,
-            Some(&metadata),
-            &resolver,
-        ),
-        Err(RenderErr::Reject("7730 inexact scaled value"))
-    ));
+    let adjacent_fee = word_u128(123_456_701);
+    let adjacent = [word_u128(1), adjacent_fee, word_u128(1_800_000_000)].concat();
+    let adjacent_pages = render_erc7730_eip712_pages_v3(
+        1,
+        &contract,
+        &typehash,
+        &adjacent,
+        &[],
+        &verified,
+        None,
+        &resolver,
+    )
+    .expect("adjacent raw base-unit fee renders without rounding");
+    let adjacent_text = pages_text(&adjacent_pages);
+    let adjacent_hex = hex::encode(adjacent_fee);
+    let adjacent_raw_pages = format!(
+        "LBTC base units\n{}\n{}\n1/2 > next\nLBTC base units\n{}\n{}\n2/2 > next",
+        &adjacent_hex[0..16],
+        &adjacent_hex[16..32],
+        &adjacent_hex[32..48],
+        &adjacent_hex[48..64]
+    );
+    assert!(
+        adjacent_text.contains(&adjacent_raw_pages),
+        "adjacent complete signed fee word missing:\n{adjacent_text}"
+    );
+    assert_ne!(
+        text, adjacent_text,
+        "distinct signed base-unit values must remain visibly distinct"
+    );
 
     let wrong_typehash = keccak256(b"feeApproval(uint256 chainId,uint256 fee,uint64 expiry)");
     assert!(matches!(
@@ -821,7 +818,7 @@ fn mainnet_fee_approval_is_exactly_bound_rendered_and_refuses_drift_or_rounding(
             &exact,
             &[],
             &verified,
-            Some(&metadata),
+            None,
             &resolver,
         ),
         Err(RenderErr::NoFormat)
