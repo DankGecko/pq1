@@ -536,8 +536,8 @@ const MORPHO_BLUE_DESCRIPTOR_HASH: [u8; 32] = [
 /// `block.chainid`; this exact enrollment therefore guards the visible signed
 /// `chainId` word against the authenticated deployment chain.
 const LOMBARD_FEE_APPROVAL_DESCRIPTOR_HASH: [u8; 32] = [
-    0x10, 0xd4, 0x16, 0x68, 0x1a, 0x8d, 0x67, 0x64, 0x38, 0xd8, 0x06, 0x4c, 0x7d, 0xbb, 0x11, 0x74,
-    0xea, 0x2b, 0x9e, 0xe0, 0x66, 0x96, 0x10, 0x5e, 0xd5, 0xab, 0x77, 0xc7, 0xcd, 0xc6, 0x30, 0x90,
+    0xff, 0x31, 0xd7, 0x22, 0xaf, 0x07, 0x8f, 0xe8, 0xed, 0x04, 0x2f, 0x8f, 0xb4, 0x69, 0x95, 0xba,
+    0x50, 0x77, 0x10, 0xb1, 0x59, 0x15, 0xba, 0xa5, 0xa6, 0xad, 0xfc, 0xc0, 0x79, 0x51, 0xb1, 0xa0,
 ];
 
 const ROUTER02_MAINNET: [u8; 20] = [
@@ -17489,6 +17489,30 @@ mod tests {
         assert_eq!(
             hash, MORPHO_BLUE_DESCRIPTOR_HASH,
             "exact-empty enrollment must remain bound to exact final curation"
+        );
+    }
+
+    /// Owner utility for replacing `LOMBARD_FEE_APPROVAL_DESCRIPTOR_HASH`
+    /// after an intentional display or semantic curation update.
+    #[test]
+    #[ignore = "owner utility: prints SHA-256(JCS(resolved Lombard feeApproval descriptor))"]
+    fn print_lombard_fee_approval_descriptor_hash_after_curation() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root.join(
+            "secure/data/erc7730/curations/files/registry/lombard/eip712-network-fee-authorization-mainnet.json",
+        );
+        let json = load_resolved_descriptor_json(&descriptor, None).expect("load descriptor");
+        let hash = sha256_of(&jcs_canonicalize(&json).expect("JCS descriptor"));
+        eprintln!(
+            "Lombard feeApproval semantic enrollment descriptor hash: 0x{}",
+            hex::encode(hash)
+        );
+        assert_eq!(
+            hash, LOMBARD_FEE_APPROVAL_DESCRIPTOR_HASH,
+            "semantic enrollment must remain bound to exact final curation"
         );
     }
 

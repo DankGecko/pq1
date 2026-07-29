@@ -91,7 +91,7 @@
     "permit": "all owner, spender, allowance, deadline, v, r, and s operands are visible; this is an ECDSA permit submission and not a PQ signature claim",
     "standards": "approve, transfer, and transferFrom inherit OpenZeppelin ERC-20 behavior; permit inherits OpenZeppelin ERC20Permit",
     "fee_approval": "getFeeDigest hashes the canonical feeApproval typehash with block.chainid, fee, and expiry under the StakedLBTC EIP-712 domain; AssetRouter treats signed fee as a maximum LBTC fee ceiling and may charge less",
-    "fee_display": "production carries no authenticated ERC-20 metadata proof; mainnet labels the exact 256-bit raw word as LBTC base units and never scales or rounds it",
+    "fee_display": "production carries no authenticated ERC-20 metadata proof; mainnet identifies a maximum LBTC fee, labels the exact 256-bit raw base-unit word as hexadecimal, and never scales or rounds it",
     "dynamic_exclusions": "mint(bytes,bytes) and redeemForBtc(bytes,uint256) remain fail-closed because dynamic-tail clear signing is outside this phase"
   },
   "rpc": {
@@ -106,7 +106,7 @@
   "artifacts": [
     {
       "path": "README.md",
-      "sha256": "380c6249cb81bdc0db4a85e6cf4240473d934e0dd5125f9a011dd19a218f0270"
+      "sha256": "86ee7c673e1d8728043b989e5c12ef3930a066027c00a959865c3ece8ed4700e"
     },
     {
       "path": "abi/StakedLBTC.accepted-routes.abi.json",

@@ -3108,7 +3108,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(
         hex::encode(result.root),
         // Re-derived after the bounded Phase-4 semantic curations.
-        "093a9ccc0452543660b8b05b160617ea59847e2029536106322aabe0843025ce"
+        "c3f20eca651c3d147dddcc48ca27a5ae464839e84181ca3849eb501681d6a08b"
     );
 }
 

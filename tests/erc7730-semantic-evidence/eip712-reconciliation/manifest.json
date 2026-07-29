@@ -5,7 +5,7 @@
   "baseline": {
     "commit": "4e83292364889e9f9007e571843c80e57ed657b3",
     "tree": "ba77147ac597dfa77dcfb8918415cd96d41a0df9",
-    "accepted_family_inventory_sha256": "6c7af295882041028aeb95ad4df6d1c61927c4f0ecca56a294df702188779324",
+    "accepted_family_inventory_sha256": "aeb13267b2ac0eedd00cb88c1429f32feebb76525f074c8d91aa87c5c1a6c60f",
     "upstream_registry_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_registry_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
     "source_count": 27,
@@ -195,8 +195,8 @@
   "result": {
     "catalogue_source_count": 214,
     "catalogue_leaf_count": 365,
-    "catalogue_root": "093a9ccc0452543660b8b05b160617ea59847e2029536106322aabe0843025ce",
-    "catalogue_blob_sha256": "f0b8807dc00585bfde0e02c5b5fbbe3aa7a86a394586cc04ad9587d6b4fc3313",
+    "catalogue_root": "c3f20eca651c3d147dddcc48ca27a5ae464839e84181ca3849eb501681d6a08b",
+    "catalogue_blob_sha256": "a46c1faf70c0ffb2e0b677eed77be986d289bb097c4ed1c15eeafb7b0131d17c",
     "known_call_count": 4615,
     "forced_eligible_set_sha256": "6f4f8020c26d23304598025df4b0447a9979557573f444a211e55641934b198c",
     "known_call_bloom_sha256": "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"

@@ -74,8 +74,8 @@ charged. `AssetRouter._mintWithFee` verifies the recipient's signature over the
 complete signed fee and expiry, then computes the charged fee as
 `min(maximumMintCommission, feeAction.fee)`. The production off-chain
 typed-data path carries no authenticated ERC-20 metadata proof. The trusted
-mainnet display therefore uses the intent `Max fee approval`, labels
-the field `LBTC base units`, and renders the complete signed 256-bit word as
+mainnet display therefore uses the intent `Max LBTC fee`, labels
+the field `Base units (hex)`, and renders the complete signed 256-bit word as
 raw hexadecimal. It never scales or rounds that value. Fixed-block metadata
 confirms that LBTC uses 8 decimals for this semantic evidence, but it does not
 grant runtime display-metadata authority.

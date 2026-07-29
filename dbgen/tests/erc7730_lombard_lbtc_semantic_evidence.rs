@@ -667,9 +667,9 @@ fn exact_abi_and_sources_support_only_the_claimed_signed_meaning() {
     let fee_field = &fee_descriptor["display"]["formats"][FEE_APPROVAL_TYPE]["fields"][1];
     assert_eq!(
         fee_descriptor["display"]["formats"][FEE_APPROVAL_TYPE]["intent"],
-        "Max fee approval"
+        "Max LBTC fee"
     );
-    assert_eq!(fee_field["label"], "LBTC base units");
+    assert_eq!(fee_field["label"], "Base units (hex)");
     assert_eq!(fee_field["format"], "raw");
     assert!(fee_field.get("params").is_none());
     assert_eq!(fee_field["visible"], "always");
@@ -758,16 +758,16 @@ fn mainnet_fee_approval_is_exactly_bound_and_renders_production_raw_base_units()
     .expect("production metadata-less LBTC fee renders as raw base units");
     let text = pages_text(&pages);
     assert!(
-        text.contains("Max fee approval"),
+        text.contains("Max LBTC fee"),
         "maximum-fee intent missing:\n{text}"
     );
     assert!(
-        text.contains("LBTC base units"),
-        "base-unit label missing:\n{text}"
+        text.contains("Base units (hex)"),
+        "base-unit radix label missing:\n{text}"
     );
     let exact_hex = hex::encode(exact_fee);
     let exact_raw_pages = format!(
-        "LBTC base units\n{}\n{}\n1/2 > next\nLBTC base units\n{}\n{}\n2/2 > next",
+        "Base units (hex)\n{}\n{}\n1/2 > next\nBase units (hex)\n{}\n{}\n2/2 > next",
         &exact_hex[0..16],
         &exact_hex[16..32],
         &exact_hex[32..48],
@@ -813,7 +813,7 @@ fn mainnet_fee_approval_is_exactly_bound_and_renders_production_raw_base_units()
     let adjacent_text = pages_text(&adjacent_pages);
     let adjacent_hex = hex::encode(adjacent_fee);
     let adjacent_raw_pages = format!(
-        "LBTC base units\n{}\n{}\n1/2 > next\nLBTC base units\n{}\n{}\n2/2 > next",
+        "Base units (hex)\n{}\n{}\n1/2 > next\nBase units (hex)\n{}\n{}\n2/2 > next",
         &adjacent_hex[0..16],
         &adjacent_hex[16..32],
         &adjacent_hex[32..48],

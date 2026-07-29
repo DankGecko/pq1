@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 979240,
-    "sha256": "96e9a544897a741f6e591c187534bd2f944ac29df64c57bf8ac9cac717185d86"
+    "bytes": 979277,
+    "sha256": "e87406e66d897ea90653134d8850fbd7fe0c9ca7d02857a057feb501c86b306c"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -461,15 +461,15 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 50,
-      "bytes": 2886766,
-      "sha256": "92d2b523c64e3328ff96235de5f06b902c9f2d26b1d5a49b1c40306c0586fca6"
+      "bytes": 2887879,
+      "sha256": "292e57a6278486e9acf60cff8890682fc1c32ca79556d67d1c74886f2280d697"
     },
     {
       "path": "pqsigner-erc7730",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 29,
-      "bytes": 1146598,
-      "sha256": "048f31565d33fb90229d5d9e6d9722fe9da38dd7c7c6f9738e18b483fe61681d"
+      "bytes": 1148263,
+      "sha256": "2e17508dcf46c357d8c584887d071a24d11893c49d154d36640555e22a24b1cf"
     },
     {
       "path": "pqsigner-fi",
@@ -511,7 +511,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 313679,
-      "sha256": "3b9e5777e05f2456a0f05ed710aef68da6138ee55ba8d07aaf5c131cfc79e688"
+      "sha256": "dac6246e62228ea5b95b18adfc67a9ea333127b31522f72a37c044317fd94c73"
     }
   ],
   "capability_inputs": [
@@ -889,8 +889,8 @@
       "path": "registry/lombard/eip712-network-fee-authorization-mainnet.json",
       "upstream_bytes": 814,
       "upstream_sha256": "169e528382579935261bac01972152b2458a9b6983deb571b73f5354a97fbfd8",
-      "replacement_bytes": 2230,
-      "replacement_sha256": "2fc8b6efc6f0eacbd58d22c541509251ee19e0d93c20ebfdfbeec2d264bb9455"
+      "replacement_bytes": 2267,
+      "replacement_sha256": "6137485cfc72be7e96cdaf8431f0effdff880f3f10a8be66ef2352078fed003b"
     },
     {
       "path": "registry/lombard/eip712-network-fee-authorization-sepolia.json",

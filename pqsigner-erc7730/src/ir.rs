@@ -1373,7 +1373,7 @@ fn validate_word_guard(
     }
 }
 
-fn validate_eip712_word_guard_path(path: &[u8]) -> Result<(), IrError> {
+pub(crate) fn validate_eip712_word_guard_path(path: &[u8]) -> Result<(), IrError> {
     if path.len() == 4
         && path[0] == PathOp::RootStructured as u8
         && path[1] == PathOp::FieldIdx as u8
