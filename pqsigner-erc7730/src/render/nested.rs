@@ -345,6 +345,12 @@ pub fn validate_nested_structure(
         let kind = params
             .terminal_kind
             .ok_or(RenderErr::Reject("7730 nested terminal kind"))?;
+        // Signed-word predicates are defined only for direct top-level EIP-712
+        // members. Nested members are already bound through hashStruct; never
+        // accept a guard TLV here that the nested renderer would not evaluate.
+        if params.word_guard.is_some() {
+            return Err(RenderErr::Reject("7730 nested word guard"));
+        }
         if params.eip712_string_preimage_ordinal.is_some()
             || kind == TerminalKind::Eip712StringHashWord
         {
@@ -616,6 +622,58 @@ mod tests {
         assert_eq!(
             validate_nested_integer_words(&ir, &np, &[0u8; 32]),
             Err(RenderErr::Reject("7730 nested string preimage"))
+        );
+    }
+
+    #[test]
+    fn nested_subfields_reject_top_level_word_guard_authority() {
+        use crate::render::params::{
+            PARAM_INTEGER_WIDTH, PARAM_TERMINAL_KIND, PARAM_WORD_GUARD, WORD_GUARD_EQ,
+        };
+
+        let mut pool = std::vec![0xFF, 4];
+        pool.extend_from_slice(&[
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+        ]);
+        let mut params = std::vec![
+            PARAM_TERMINAL_KIND,
+            1,
+            TerminalKind::Unsigned as u8,
+            PARAM_INTEGER_WIDTH,
+            1,
+            32,
+            PARAM_WORD_GUARD,
+            33,
+            WORD_GUARD_EQ,
+        ];
+        params.extend_from_slice(&[0u8; 32]);
+        pool.push(params.len() as u8);
+        pool.extend_from_slice(&params);
+
+        let mut payload = std::vec![NESTED_V3];
+        payload.extend_from_slice(&0u16.to_be_bytes());
+        payload.extend_from_slice(&[0xAB; 32]);
+        payload.extend_from_slice(&1u16.to_be_bytes());
+        payload.push(0); // flags
+        payload.push(0); // address bitmap
+        payload.push(1); // sub-field count
+        payload.extend_from_slice(&[FormatOp::Raw as u8, 1, b'V']);
+        payload.extend_from_slice(&1u16.to_be_bytes());
+        payload.extend_from_slice(&6u16.to_be_bytes());
+
+        let np = parse_nested_struct_param(&payload).expect("nested block parses");
+        let ir_bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&ir_bytes).expect("minimal IR");
+        assert_eq!(
+            validate_nested_structure(&ir, &np, false),
+            Err(RenderErr::Reject("7730 nested word guard"))
+        );
+        assert_eq!(
+            validate_nested_ir(&ir, &payload, 1, 1),
+            Err(IrError::BadField)
         );
     }
 

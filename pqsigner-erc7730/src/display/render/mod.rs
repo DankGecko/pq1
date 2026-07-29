@@ -2068,6 +2068,11 @@ fn render_nested_subfields(
         if sf_params.exact_empty_bytes {
             return Err(RenderErr::Reject("7730 exact-empty nested"));
         }
+        // Word guards are top-level EIP-712 predicates. Re-parse and reject at
+        // the publication boundary as a local belt behind deep IR validation.
+        if sf_params.word_guard.is_some() {
+            return Err(RenderErr::Reject("7730 nested word guard"));
+        }
         // This phase authenticates direct top-level EIP-712 member words only.
         // A marker or terminal-kind smuggled into a nested sub-field must not
         // reach ordinary Raw dispatch and display the hash as though it were
