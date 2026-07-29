@@ -71,6 +71,18 @@ floor-bound accepted-manifest binding only as an evidentiary record.
 Amendment (round-2 review): burn-window §11 rows + `FirstBootLockWriter`
 owner added; answers findings B3 and A38-new.
 
+Amendment (Opus-5-leg review, 2026-07-26): §5 reassigns bank-1 page 127 from
+the retired Tropic01-key reservation to the first-boot provisioning journal +
+TRNG salt record; §6.3 adds the typed `FirstBootJournalWriter` (page-127
+commit-LAST appends + journal-gated page-126 erase-and-reprogram);
+FROZEN-FLASH-MUT-1's enumeration gains both operations; §12.6 item 4's
+required-component list names the every-boot option-byte read-back tripwire
+(issue #366 row tz-1). Answers the Opus-5 leg's BLOCKER-1 (the mandatory
+Phase-B journal had no page owner in §5 and no writer owner in §6.3 while
+`docs/provisioning/first-boot-requirements.md` R3.x and
+`secure/src/first_boot/journal.rs` already own page 127) and its
+§12.6/row-2 observation.
+
 ---
 
 ## 1. Purpose
@@ -728,9 +740,11 @@ ICACHE invalidation alone nor repeated volatile loads is a freshness proof.
 Every operation that can make bank 1 or the FLASH/OTP controller busy uses one
 private SRAM execution capsule: inactive secure-image page erase/program,
 manifest erase/program, Route-1 journal erase/program/compaction, install-ID,
-PENDING, both CONFIRMED replicas, OTP programming, and the confirm-gated
+PENDING, both CONFIRMED replicas, OTP programming, the confirm-gated
 first-boot RDP option-byte program with `OBL_LAUNCH` (Section 6.3
-`FirstBootLockWriter`). Masking interrupts while
+`FirstBootLockWriter`), and the first-boot page-127 journal append plus the
+journal-gated page-126 erase-and-reprogram (Section 6.3
+`FirstBootJournalWriter`). Masking interrupts while
 executing ordinary bank-1 `.text` is nonconforming.
 
 ```rust
@@ -1612,7 +1626,7 @@ the owning feature is disabled:
 | bank 1 | 124 | `0x0C0F_8000..0x0C0F_A000` | MCU PIN-attempt state |
 | bank 1 | 125 | `0x0C0F_A000..0x0C0F_C000` | admin-wipe/duress state; old admin-PIN owner retired |
 | bank 1 | 126 | `0x0C0F_C000..0x0C0F_E000` | wrapped SE050 BHK only |
-| bank 1 | 127 | `0x0C0F_E000..0x0C10_0000` | persistent/Tropic01-key reservation |
+| bank 1 | 127 | `0x0C0F_E000..0x0C10_0000` | first-boot provisioning journal + TRNG salt record (Section 6.3 `FirstBootJournalWriter`) |
 | bank 2 | 0–4 | `0x0810_0000..0x0810_A000` | byte-identical complete FSBL mirror, 40,960 B |
 | bank 2 | 5–65 | `0x0810_A000..0x0818_4000` | nonsecure slot A, `0x7A000` B |
 | bank 2 | 66–126 | `0x0818_4000..0x081F_E000` | nonsecure slot B, `0x7A000` B |
@@ -1633,8 +1647,11 @@ page 127. Bank-2 pages 0–4 are never part of an NS slot or updater allowlist,
 even before protection is burned. Bank-1 pages 64 and 122 are a symmetric,
 pairwise-disjoint, FSBL-owned erasable journal pair; they are never image
 capacity, updater scratch, manifest space, or runtime-owned persistent state.
-Bank-1 page 127 remains owned by the supported Tropic01 configuration, while
-bank-2 page 127 remains nonsecure/reserved under the frozen SECWM design;
+Bank-1 page 127 is the first-boot ceremony's commit-LAST append-only
+provisioning journal (one 512-QW page, fail-closed on exhaustion) including
+its TRNG salt record; the Tropic01-key reservation formerly assigned here was
+retired with that backend's removal on 2026-07-14. Bank-2 page 127 remains
+nonsecure/reserved under the frozen SECWM design;
 neither may be borrowed for rollback intent.
 
 Every newly authenticated field-update BEGIN creates a fresh staging attempt
@@ -2250,6 +2267,20 @@ one of these owners:
   intent; failure parks the device. With this entry the lock ceremony needs no
   bypass of the frozen mutation boundary; every other option-byte writer
   remains bench/factory-host-only tooling, never device firmware.
+- `FirstBootJournalWriter` owns exactly two operations of the first-boot
+  ceremony (`docs/provisioning/first-boot-requirements.md` R3.x/R4.x):
+  (a) commit-LAST append-only quad-word programs into the bank-1 page-127
+  provisioning journal, and (b) the journal-gated erase-and-reprogram of the
+  page-126 wrapped-BHK page (anti-pre-plant). It cannot construct any
+  rollback, manifest, image, TAMP, OTP, or other runtime-state mutation. It
+  runs only during the first-boot ceremony before `ALL_DONE`; classification
+  after any interruption is by journal re-scan and read-back only, never by
+  remembered intent; a full journal fails closed to RMA with no further
+  write; and it is fenced to production builds at compile time against
+  debug-log, e2e-test, and mock-SE profiles. Operation (b) is a full-page
+  erase sequenced against a record on a different page — a two-page protocol
+  the `RuntimeStateWriter` page-126 allowlist does not express — so this
+  writer is its sole typed owner.
 
 Each map is generated from the one geometry registry and checked twice with
 address/complement and range/owner equality immediately before entering SRAM.
@@ -4061,7 +4092,10 @@ and measured only afterward. Before an option can be final:
    dead-stage/no-floor repair logic, orphan scan,
    handoff, measured-boot decoder/table actually proposed, the selected
    master-closure/stale-DMA-abort logic, ES0499 TAMP/BDRST sanitation and IWDG
-   restart, and every load-bearing trust-root FI check;
+   restart, the FSBL-resident every-boot option-byte read-back tripwire
+   (OPTR/WRP/SECWM/TZEN/BOOT_LOCK/RDP against compiled-in phase-appropriate
+   constants, fail-only, never writes — issue #366 row tz-1), and every
+   load-bearing trust-root FI check;
 5. its report gives the initialized physical FLASH LOAD span from the FSBL
    origin, including vectors, SG stubs, vendor key, `.data` LMA, alignment and
    loadable padding, plus a section/symbol breakdown and device capacity under

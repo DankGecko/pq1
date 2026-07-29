@@ -6,13 +6,17 @@ No approval by inheritance: this draft requires its own exact-digest dual
 review + owner approval before anything it selects is implemented.
 
 **Base:** Draft 1.1 review candidate, `docs/security/a-b-firmware-rollback-architecture.md`,
-file SHA-256 `57b7e359ca1f8f0367e83ba355f61de35a8b6f25c6050435870227e4a5488293`
-(post-errata-3, 2026-07-26: the owner-decision errata striking
+file SHA-256 `abc058b1667d76cecf73f563340d24da17af4a35af61312e7abe61ee86da6284`
+(post-errata-4, 2026-07-26: the owner-decision errata striking
 `RecoverySameEpoch`/`FloorBoundAccepted` and all degraded boot authority,
-the §11 burn-window rows + R5-2 phase-profile precision, and the
-`FirstBootLockWriter` owner entry — see its ERRATA section. Lineage back
+the §11 burn-window rows + R5-2 phase-profile precision, the
+`FirstBootLockWriter` owner entry, and the Opus-leg BLOCKER-1 remediation
+(§5 page-127 first-boot-journal reassignment, §6.3 `FirstBootJournalWriter`,
+FROZEN-FLASH-MUT-1 enumeration, §12.6 item-4 tz-1) — see its ERRATA
+section. Lineage back
 to the original pin commit `93da7567` / `743bc156…3d7ad` = +
-reviewer-lineup `589fb771` + the errata passes, each hop verified by
+reviewer-lineup `589fb771` + the errata passes + the BLOCKER-1
+remediation, each hop verified by
 diff). Except where a section below explicitly amends
 a named Draft 1.1 row, **Draft 1.1 is inherited unchanged** — geometry (§5),
 manifest/journal (§6),
@@ -202,9 +206,13 @@ tomorrow, with the colleague — this draft decides neither.**
    after the factory lifecycle closes". Under the adopted lock flow the
    factory lifecycle does NOT close the locks: the receipt binds the
    *staged* profile (F2, everything except RDP), and the final lock closes
-   at the first-boot ceremony. Amended accordingly in the 2026-07-26
-   errata; without this amendment the composite text holds the same RDP-0
-   unit simultaneously factory-closed and not finally locked.
+   at the first-boot ceremony. This amendment is executed by THIS ROW
+   under the inheritance rule — Draft 1.1's 2026-07-26 errata does not
+   touch §7.4's text (an earlier wording of this row mis-attributed the
+   amendment there; corrected 2026-07-26 on the Opus-5 leg's §6-Q4
+   traceability finding). Without this amendment the composite text holds
+   the same RDP-0 unit simultaneously factory-closed and not finally
+   locked.
 7. **§11 power-cut matrix** — added 2026-07-26 (review finding B3,
    confirmed); **executed in Draft 1.1's text 2026-07-26** (round-2
    remediation): three burn-window rows now exist in §11 — cut during the
@@ -503,3 +511,54 @@ heal (Draft 1.1 §11 row + carve-out now say so verbatim; tz-1 row 2
 above carries the same rule). Note: this run's report honestly could not
 attest its serving-model identity beyond "GPT-5 family"; runs 1–4
 attested GPT-5.6 SOL.
+
+**Gate runs 6–7 (2026-07-26, GPT-5.6 SOL `ultra`).** Run 6: one finding
+(**R6-1**, administrative — receipt/Base naming precision), remediated
+same-day. Run 7: **APPROVE** over Draft 1.1 at
+`57b7e359ca1f8f0367e83ba355f61de35a8b6f25c6050435870227e4a5488293` paired
+with this file at
+`eb856dd4220bc906f5b12e257a0a9cb6d74c76f228111e2d7ec04345728a700b`; no
+stage-blocking defect; the 12 remaining §18 GAPs are Draft 1.1's declared
+OPEN register. Full record:
+`docs/security/fw-rollback-freeze-receipt-2026-07-26.md`.
+
+**Second-leg run 1 (2026-07-26, Claude Opus 5, runtime `claude-opus-5`;
+effort attestation gap — the runtime exposes numeric effort `60`, not the
+policy's `xhigh` label; recorded, not claimed).** Digests verified exact.
+**NO-GO** on one stage-blocker. **BLOCKER-1**: the Phase-B provisioning
+journal this draft makes a condition of Option B (§2.2, OPEN-LOCK-1,
+Reconciliation) had no page owner in Draft 1.1 §5 (bank-1 page 127 was
+still assigned to the Tropic01-key reservation retired with that backend
+on 2026-07-14) and no writer owner in §6.3 (`FirstBootLockWriter`
+performs no flash write; `RuntimeStateWriter` allowlists stop at page
+126) — while `docs/provisioning/first-boot-requirements.md` R3.x/R4.x and
+`secure/src/first_boot/journal.rs` already own page 127. The
+unremediated sibling of A38-new: same shape, same treatment. Coordinator
+reproduction confirmed every load-bearing claim before remediation.
+Remediated in Draft 1.1's text (executed, not promised): §5 page-127
+reassignment + prose, §6.3 `FirstBootJournalWriter` (page-127 commit-LAST
+appends + journal-gated page-126 erase-and-reprogram,
+`FirstBootLockWriter`-equivalent fencing), FROZEN-FLASH-MUT-1
+enumeration, and §12.6 item 4 now names the tz-1 tripwire (the leg's
+row-2/§12.6 observation). In this file: §3 row 6's false "amended in the
+errata" attribution corrected to "executed by this row" (the leg's §6-Q4
+traceability finding). Non-blocking observations banked in the freeze
+receipt: OPTSTRT programs the whole option-byte shadow set (an
+implementation constraint — §6.3's "programs no option byte other than
+RDP" is a net-effect requirement); OPEN-LOCK-2's canonical comparison
+ranges should enumerate the 32-QW OTP bank (catches interdiction
+OTP-poisoning); Q16 advisory (`SurvivingInstallGeneration`
+simplification) deferred to planning; the §5 warning build must be
+re-run with tz-1 linked in before Foundation A selects a family (now
+structural via §12.6 item 4). Its §18 tally: 23 RESOLVED, 5
+RESOLVED-rule/GAP-evidence, 1 advisory, 10 declared-OPEN GAPs, 1 new GAP
+(= BLOCKER-1). §6: Q1 no missed binding signal; Q2 yes, conditionally
+(conditions recorded in its report); Q3 burn window fully covered,
+Phase-B rows = declared OPEN-LOCK-1; Q4 the row-6 attribution defect
+(fixed above), no frozen-row contradiction.
+
+**Next gate run:** both legs re-review over the re-frozen pair (Draft 1.1
+at `abc058b1667d76cecf73f563340d24da17af4a35af61312e7abe61ee86da6284` +
+this file's new digest, named in the freeze receipt — a file cannot embed
+its own), scoped: BLOCKER-1 remediation confirmation + no-new-defects
+sweep.
