@@ -69,6 +69,10 @@ fn evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/lombard-lbtc")
 }
 
+fn upstream_fixture_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-upstream-fixtures/registry-v2/lombard/testsv2")
+}
+
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(
         &fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
@@ -259,6 +263,17 @@ fn pages_text(pages: &pqsigner_erc7730::display::Pages) -> String {
         .map(|row| String::from_utf8_lossy(row).trim().to_owned())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn raw_word_transcript(label: &str, word: &[u8; 32]) -> String {
+    let encoded = hex::encode(word);
+    format!(
+        "{label}\n{}\n{}\n1/2 > next\n{label}\n{}\n{}\n2/2 > next",
+        &encoded[0..16],
+        &encoded[16..32],
+        &encoded[32..48],
+        &encoded[48..64]
+    )
 }
 
 #[test]
@@ -686,6 +701,229 @@ fn exact_abi_and_sources_support_only_the_claimed_signed_meaning() {
             .trim_start_matches("0x"),
         LBTC_PROXY
     );
+}
+
+#[test]
+fn upstream_v2_fee_fixtures_preserve_mainnet_exactness_and_sepolia_refusal() {
+    let fixtures = [
+        (
+            "eip712-network-fee-authorization-mainnet.tests.json",
+            "43f8267b1804af15dd114772fe0a2d294324188c8281c3199ef8a40623220f03",
+            "eip712-network-fee-authorization-mainnet.json",
+            1u64,
+            "8236a87084f8b84306f72007f36f2618a5634494",
+            300_000_000_000_000u128,
+            1_779_321_600u64,
+            true,
+        ),
+        (
+            "eip712-network-fee-authorization-sepolia.tests.json",
+            "1ffa565c0d694bbe09fdbacafa115131f2946d8bfce06b0d6707e0d6532c2dfc",
+            "eip712-network-fee-authorization-sepolia.json",
+            11_155_111u64,
+            "731efa688f3679688cf60a3993b8658138953ed6",
+            2_000_000_000_000_000u128,
+            1_782_345_600u64,
+            false,
+        ),
+    ];
+    let expected_domain_members = serde_json::json!([
+        { "name": "name", "type": "string" },
+        { "name": "version", "type": "string" },
+        { "name": "chainId", "type": "uint256" },
+        { "name": "verifyingContract", "type": "address" }
+    ]);
+    let expected_fee_members = serde_json::json!([
+        { "name": "chainId", "type": "uint256" },
+        { "name": "fee", "type": "uint256" },
+        { "name": "expiry", "type": "uint256" }
+    ]);
+    let registry = production_registry();
+    let registry_root = workspace_root().join("secure/data/erc7730-registry/registry/lombard");
+    let typehash = keccak256(FEE_APPROVAL_TYPE.as_bytes());
+    let resolver = NameResolver::new();
+
+    for (
+        fixture_name,
+        fixture_sha256,
+        source_name,
+        chain_id,
+        contract_hex,
+        expected_fee,
+        expected_expiry,
+        admitted,
+    ) in fixtures
+    {
+        let fixture_path = upstream_fixture_root().join(fixture_name);
+        let fixture_bytes = fs::read(&fixture_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", fixture_path.display()));
+        assert_eq!(
+            sha256_hex(&fixture_bytes),
+            fixture_sha256,
+            "{fixture_name} must remain the exact pulled registry-v2 artifact"
+        );
+        let fixture: Value = serde_json::from_slice(&fixture_bytes)
+            .unwrap_or_else(|error| panic!("parse {}: {error}", fixture_path.display()));
+        assert_eq!(
+            fixture["$schema"].as_str(),
+            Some("../../../specs/erc7730-tests-v2.schema.json")
+        );
+        let expected_descriptor = format!("../{source_name}");
+        assert_eq!(
+            fixture["descriptor"].as_str(),
+            Some(expected_descriptor.as_str())
+        );
+        let tests = fixture["tests"].as_array().expect("fixture tests");
+        assert_eq!(tests.len(), 1, "fixture has one signed case");
+        let test = &tests[0];
+        assert_eq!(
+            test["description"].as_str(),
+            Some("Lombard Network Fee Authorization")
+        );
+        let data = &test["data"];
+        assert_eq!(data["primaryType"].as_str(), Some("feeApproval"));
+        assert_eq!(data["types"]["EIP712Domain"], expected_domain_members);
+        assert_eq!(data["types"]["feeApproval"], expected_fee_members);
+        assert_eq!(
+            data["types"].as_object().expect("fixture type map").len(),
+            2,
+            "no unexamined signed types"
+        );
+        let domain = &data["domain"];
+        assert_eq!(domain["name"].as_str(), Some(DOMAIN_NAME));
+        assert_eq!(domain["version"].as_str(), Some(DOMAIN_VERSION));
+        assert_eq!(domain["chainId"].as_u64(), Some(chain_id));
+        assert_eq!(
+            domain["verifyingContract"]
+                .as_str()
+                .expect("fixture verifying contract")
+                .trim_start_matches("0x")
+                .to_ascii_lowercase(),
+            contract_hex
+        );
+        assert_eq!(
+            domain.as_object().expect("fixture domain").len(),
+            4,
+            "domain shape is exact"
+        );
+        let message = &data["message"];
+        assert_eq!(
+            message
+                .as_object()
+                .expect("fixture feeApproval message")
+                .len(),
+            3,
+            "every signed feeApproval member is inspected"
+        );
+        assert_eq!(message["chainId"].as_u64(), Some(chain_id));
+        let fixture_fee = message["fee"]
+            .as_str()
+            .map(|value| value.parse::<u128>().expect("decimal fixture fee"))
+            .or_else(|| message["fee"].as_u64().map(u128::from))
+            .expect("fixture fee is a uint");
+        assert_eq!(fixture_fee, expected_fee);
+        assert_eq!(message["expiry"].as_u64(), Some(expected_expiry));
+
+        let contract = address(
+            domain["verifyingContract"]
+                .as_str()
+                .expect("fixture verifying contract"),
+        );
+        let source = registry_root.join(source_name);
+        if admitted {
+            assert_eq!(
+                source,
+                workspace_root()
+                    .join("secure/data/erc7730-registry")
+                    .join(EIP712_DESCRIPTOR),
+                "mainnet fixture must bind the exact curated source"
+            );
+            let entry = registry
+                .entries
+                .iter()
+                .find(|entry| {
+                    entry.chain_id == chain_id
+                        && entry.contract == contract
+                        && entry.source == source
+                })
+                .expect("mainnet fixture maps to one production catalogue leaf");
+            let bundle = synth_bundle(&registry, entry);
+            let verified = verify_erc7730_bundle(&bundle, &registry.root)
+                .expect("mainnet fixture Merkle proof verifies");
+            assert_eq!(verified.ir.context_kind, ContextKind::Eip712);
+            assert_eq!(verified.ir.chain_id, chain_id);
+            assert_eq!(verified.ir.contract, contract);
+            assert_eq!(verified.ir.format_count(), Ok(1));
+            let domain_separator = eip712_domain_separator(chain_id, &contract);
+            assert_eq!(verified.ir.domain_separator, domain_separator);
+            assert_eq!(
+                cross_check_eip712(&verified.ir, chain_id, &domain_separator),
+                Ok(())
+            );
+
+            let chain_word = word_u128(u128::from(chain_id));
+            let fee_word = word_u128(fixture_fee);
+            let expiry_word = word_u128(u128::from(expected_expiry));
+            let encoded = [chain_word, fee_word, expiry_word].concat();
+            let pages = render_erc7730_eip712_pages_v3(
+                chain_id,
+                &contract,
+                &typehash,
+                &encoded,
+                &[],
+                &verified,
+                None,
+                &resolver,
+            )
+            .expect("mainnet fixture renders through the production catalogue");
+            let text = pages_text(&pages);
+            assert!(text.contains("Max LBTC fee"));
+            assert!(
+                text.contains(&raw_word_transcript("Chain ID", &chain_word)),
+                "complete signed chain word is missing:\n{text}"
+            );
+            assert!(
+                text.contains(&raw_word_transcript("Base units (hex)", &fee_word)),
+                "complete exact raw base-unit fee is missing:\n{text}"
+            );
+            assert!(
+                text.contains("Expiry\n2026-05-21\n00:00:00 UTC"),
+                "exact expiry is missing:\n{text}"
+            );
+            assert!(
+                !text.contains("0.0003 ETH"),
+                "unauthenticated upstream denomination must not replace raw LBTC base units"
+            );
+        } else {
+            let descriptor = read_json(&source);
+            assert_eq!(
+                descriptor["_pqsigner"]["deploymentFormats"],
+                serde_json::json!([])
+            );
+            assert_eq!(
+                descriptor["_pqsigner"]["refusalOnlyFormats"],
+                serde_json::json!([FEE_APPROVAL_TYPE])
+            );
+            assert!(
+                !registry.entries.iter().any(|entry| entry.source == source),
+                "Sepolia refusal-only descriptor must emit no production leaf"
+            );
+            assert!(
+                !registry.entries.iter().any(|entry| {
+                    if entry.chain_id != chain_id || entry.contract != contract {
+                        return false;
+                    }
+                    let ir = pqsigner_erc7730::ir::Erc7730Ir::parse(&entry.ir_bytes)
+                        .expect("production IR parses");
+                    ir.context_kind == ContextKind::Eip712
+                        && ir
+                            .format_iter()
+                            .any(|format| format.is_ok_and(|format| format.type_hash == typehash))
+                }),
+                "Sepolia feeApproval tuple must remain unregistered and therefore unrenderable"
+            );
+        }
+    }
 }
 
 #[test]

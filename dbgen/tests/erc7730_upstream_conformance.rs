@@ -39,6 +39,18 @@ const UPSTREAM_SHA: &str = "784c87c925e8438e7b4736b2af85a501f8d2a265";
 const FIXTURE_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-excluded-fixture-corpus-v1";
 const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
+const V2_SUBSET_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-upstream-v2-validation-subset-v1";
+const V2_SUBSET_RECEIPT_HEX: &str =
+    "9fe717b33e3b40c1c5175ac10107a645acde2dbb6b2e7923ff4e9402f549a750";
+const V2_SUBSET_PATHS: [&str; 7] = [
+    "registry-v2/flyingtulip/testsv2/eip712-SessionManager-FT.tests.json",
+    "registry-v2/flyingtulip/testsv2/eip712-SessionManager-ftUSD.tests.json",
+    "registry-v2/lido/testsv2/calldata-WithdrawalQueueERC721.tests.json",
+    "registry-v2/lido/testsv2/calldata-stETH.tests.json",
+    "registry-v2/lido/testsv2/calldata-wstETH.tests.json",
+    "registry-v2/lombard/testsv2/eip712-network-fee-authorization-mainnet.tests.json",
+    "registry-v2/lombard/testsv2/eip712-network-fee-authorization-sepolia.tests.json",
+];
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
 const PROD_ROOT_HEX: &str = "c3f20eca651c3d147dddcc48ca27a5ae464839e84181ca3849eb501681d6a08b";
@@ -106,9 +118,13 @@ fn fixture_files() -> Vec<PathBuf> {
 
 fn fixture_receipt(files: &[PathBuf]) -> ([u8; 32], u64) {
     let root = fixture_root();
+    fixture_receipt_with_domain(&root, FIXTURE_RECEIPT_DOMAIN, files)
+}
+
+fn fixture_receipt_with_domain(root: &Path, domain: &[u8], files: &[PathBuf]) -> ([u8; 32], u64) {
     let count = u64::try_from(files.len()).expect("fixture count fits u64");
     let mut aggregate = Sha256::new();
-    aggregate.update(FIXTURE_RECEIPT_DOMAIN);
+    aggregate.update(domain);
     aggregate.update(count.to_be_bytes());
     let mut total_bytes = 0u64;
     for path in files {
@@ -1548,6 +1564,47 @@ fn fixture_case(relative: &str, case_index: usize) -> (Value, Vec<u8>) {
     (fixture, raw)
 }
 
+fn v2_calldata_fixture_case(
+    relative: &str,
+    expected_descriptor: &str,
+    case_index: usize,
+    expected_description: &str,
+) -> Vec<u8> {
+    let fixture: Value = serde_json::from_slice(
+        &std::fs::read(fixture_root().join(relative)).expect("read v2 calldata fixture"),
+    )
+    .expect("parse v2 calldata fixture");
+    assert_eq!(
+        fixture.get("$schema").and_then(Value::as_str),
+        Some("../../../specs/erc7730-tests-v2.schema.json")
+    );
+    assert_eq!(
+        fixture.get("descriptor").and_then(Value::as_str),
+        Some(expected_descriptor)
+    );
+    let case = fixture
+        .get("tests")
+        .and_then(Value::as_array)
+        .and_then(|tests| tests.get(case_index))
+        .expect("selected v2 calldata case");
+    assert_eq!(
+        case.get("description").and_then(Value::as_str),
+        Some(expected_description)
+    );
+    assert!(
+        case.get("expected").is_some_and(Value::is_object),
+        "v2 fixture keeps structured upstream presentation separate"
+    );
+    // `dataProvider` and `expected` are intentionally not returned: neither is
+    // a PQ1 metadata or presentation oracle. Only the signed transaction bytes
+    // enter the production leaf/binding/renderer checks below.
+    let raw_hex = case
+        .get("rawTx")
+        .and_then(Value::as_str)
+        .expect("v2 fixture rawTx");
+    hex::decode(raw_hex.strip_prefix("0x").expect("0x v2 rawTx")).expect("v2 rawTx hex")
+}
+
 #[test]
 fn unsupported_typed_fixture_envelopes_refuse_before_projection() {
     let (_, type2_raw) = fixture_case(
@@ -1808,6 +1865,99 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
     );
 }
 
+#[test]
+fn upstream_v2_validation_subset_is_exact_structured_and_test_only() {
+    let root = fixture_root();
+    let subset_root = root.join("registry-v2");
+    let mut fixtures = Vec::new();
+    // An empty suffix enumerates every regular file. The shared collector
+    // rejects symlinked directories, symlinked entries, and special files.
+    collect_regular_files(&subset_root, "", &mut fixtures);
+    fixtures.sort();
+
+    let actual_paths: Vec<_> = fixtures
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&root)
+                .expect("v2 fixture beneath test-only root")
+                .to_str()
+                .expect("UTF-8 v2 fixture path")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        actual_paths, V2_SUBSET_PATHS,
+        "the bounded v2 subset must contain exactly the reviewed seven files"
+    );
+
+    let (receipt, fixture_bytes) =
+        fixture_receipt_with_domain(&root, V2_SUBSET_RECEIPT_DOMAIN, &fixtures);
+    assert_eq!(hex::encode(receipt), V2_SUBSET_RECEIPT_HEX);
+    assert_eq!(fixture_bytes, 22_579);
+
+    let mut total_cases = 0usize;
+    for (path, relative) in fixtures.iter().zip(actual_paths.iter()) {
+        let fixture: Value = serde_json::from_slice(
+            &std::fs::read(path).expect("read reviewed upstream v2 fixture"),
+        )
+        .expect("parse reviewed upstream v2 fixture");
+        assert_eq!(
+            fixture.get("$schema").and_then(Value::as_str),
+            Some("../../../specs/erc7730-tests-v2.schema.json"),
+            "unexpected v2 schema in {relative}"
+        );
+
+        let fixture_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("UTF-8 v2 fixture filename");
+        let source_stem = fixture_name
+            .strip_suffix(".tests.json")
+            .expect("v2 fixture uses .tests.json");
+        let expected_source = format!("{source_stem}.json");
+        let descriptor = fixture
+            .get("descriptor")
+            .and_then(Value::as_str)
+            .expect("v2 fixture descriptor string");
+        assert_eq!(
+            descriptor,
+            format!("../{expected_source}"),
+            "descriptor must resolve by exactly one lexical parent step to its expected project sibling in {relative}"
+        );
+        assert!(
+            !expected_source.contains(['/', '\\'])
+                && expected_source != "."
+                && expected_source != "..",
+            "derived descriptor sibling cannot escape its project in {relative}"
+        );
+
+        let tests = fixture
+            .get("tests")
+            .and_then(Value::as_array)
+            .expect("v2 fixture tests array");
+        assert!(!tests.is_empty(), "empty v2 tests array in {relative}");
+        total_cases += tests.len();
+        let mut descriptions = BTreeSet::new();
+        for case in tests {
+            let description = case
+                .get("description")
+                .and_then(Value::as_str)
+                .filter(|description| !description.is_empty())
+                .expect("nonempty v2 case description");
+            assert!(
+                descriptions.insert(description),
+                "duplicate v2 case description {description:?} in {relative}"
+            );
+        }
+    }
+    assert_eq!(total_cases, 21);
+
+    let subset_canonical = std::fs::canonicalize(&subset_root).expect("canonical v2 subset root");
+    let prod_canonical = std::fs::canonicalize(prod_registry_root()).expect("canonical prod root");
+    assert!(!subset_canonical.starts_with(&prod_canonical));
+    assert!(!prod_canonical.starts_with(&subset_canonical));
+}
+
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
     let proof_depth = u32::from_le_bytes(blob[24..28].try_into().expect("proof depth")) as usize;
     let proofs_off = u32::from_le_bytes(blob[28..32].try_into().expect("proof offset")) as usize;
@@ -2057,6 +2207,234 @@ fn lido_claim_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waive
             && rendered.iter().any(|row| row == "000000000001c90f"),
         "non-vacuity: expected authenticated Lido semantics were not all rendered: {rendered:?}"
     );
+}
+
+#[test]
+fn lido_v2_withdrawal_vectors_bind_signed_identity_to_production_pages() {
+    const FIXTURE: &str = "registry-v2/lido/testsv2/calldata-WithdrawalQueueERC721.tests.json";
+    const SOURCE: &str = "calldata-WithdrawalQueueERC721.json";
+
+    let request_raw = v2_calldata_fixture_case(
+        FIXTURE,
+        "../calldata-WithdrawalQueueERC721.json",
+        0,
+        "Request Withdrawal - chain 1 (1)",
+    );
+    assert_eq!(
+        supported_fixture_shell(&request_raw),
+        FixtureShellKind::Type2
+    );
+    assert_eq!(rlp_field_count(&request_raw, true), Some(9));
+    let request =
+        eip1559::parse(&request_raw).expect("v2 Lido request is canonical unsigned Type-2");
+    let contract = request.tx.to.expect("v2 Lido request target");
+
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == request.tx.chain_id
+                && entry.contract == contract
+                && entry.source.file_name().and_then(|name| name.to_str()) == Some(SOURCE)
+        })
+        .expect("accepted production Lido WithdrawalQueue leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify Lido v2 leaf");
+    cross_check_contract(&verified.ir, request.tx.chain_id, &contract)
+        .expect("bind Lido v2 request to production leaf");
+
+    assert_eq!(
+        request.data.get(..4),
+        Some(&keccak256(b"requestWithdrawals(uint256[],address)")[..4])
+    );
+    assert_eq!(request.data.len(), 132, "one amount and one beneficiary");
+    let beneficiary: [u8; 20] = request.data[48..68]
+        .try_into()
+        .expect("complete signed beneficiary word");
+    assert_eq!(
+        hex::encode(beneficiary),
+        "ba782baf2ee66f6fc76a711b6554975afb2805e4"
+    );
+    let amount: [u8; 32] = request.data[100..132]
+        .try_into()
+        .expect("complete signed withdrawal amount word");
+    assert_eq!(
+        hex::encode(amount),
+        "0000000000000000000000000000000000000000000000000003e99b888f3eb3"
+    );
+    let steth = dbgen::parse_hex_address("0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84")
+        .expect("production descriptor stETH constant");
+    let request_pages = render_erc7730_pages(
+        &request.tx,
+        request.data,
+        &verified,
+        None,
+        &NameResolver::new(),
+    )
+    .expect("render v2 Lido request via production leaf");
+    let request_rows = normalized_rows(&request_pages);
+    let mut request_cursor = 0usize;
+    consume_normalized_token(&request_rows, &mut request_cursor, "Request withdraw");
+    consume_normalized_token(&request_rows, &mut request_cursor, "al");
+    consume_normalized_token(&request_rows, &mut request_cursor, "Amount");
+    consume_normalized_token(&request_rows, &mut request_cursor, "1 items");
+    consume_normalized_token(&request_rows, &mut request_cursor, "Token (UNVERIFI~");
+    consume_full_address(&request_rows, &mut request_cursor, &steth);
+    consume_normalized_token(&request_rows, &mut request_cursor, "Amount");
+    consume_normalized_token(&request_rows, &mut request_cursor, "1101279150423731");
+    consume_normalized_token(&request_rows, &mut request_cursor, "! raw, dec=?");
+    // PQ1's authenticated curation names this signed beneficiary word by its
+    // contract role, rather than adopting the upstream presentation label.
+    consume_normalized_token(&request_rows, &mut request_cursor, "Initial NFT own~");
+    consume_full_address(&request_rows, &mut request_cursor, &beneficiary);
+    assert!(
+        !request_rows.iter().any(|row| row == "conan26.eth"),
+        "upstream ENS dataProvider must not replace the signed beneficiary"
+    );
+
+    let claim_raw = v2_calldata_fixture_case(
+        FIXTURE,
+        "../calldata-WithdrawalQueueERC721.json",
+        2,
+        "claim withdrawal - chain 1",
+    );
+    assert_eq!(supported_fixture_shell(&claim_raw), FixtureShellKind::Type2);
+    assert_eq!(rlp_field_count(&claim_raw, true), Some(9));
+    let claim = eip1559::parse(&claim_raw).expect("v2 Lido claim is canonical unsigned Type-2");
+    assert_eq!(claim.tx.chain_id, request.tx.chain_id);
+    assert_eq!(claim.tx.to, Some(contract));
+    assert_eq!(
+        claim.data.get(..4),
+        Some(&keccak256(b"claimWithdrawal(uint256)")[..4])
+    );
+    assert_eq!(claim.data.len(), 36, "selector and one request-ID word");
+    let request_id: [u8; 32] = claim.data[4..36]
+        .try_into()
+        .expect("complete signed request-ID word");
+    assert_eq!(
+        u64::from_be_bytes(request_id[24..].try_into().expect("request-ID low word")),
+        117_007
+    );
+    let claim_pages =
+        render_erc7730_pages(&claim.tx, claim.data, &verified, None, &NameResolver::new())
+            .expect("render v2 Lido claim via production leaf");
+    let claim_rows = normalized_rows(&claim_pages);
+    let mut claim_cursor = 0usize;
+    consume_normalized_token(&claim_rows, &mut claim_cursor, "Claim withdrawal");
+    consume_normalized_token(&claim_rows, &mut claim_cursor, "Request ID");
+    consume_raw_word(&claim_rows, &mut claim_cursor, &request_id);
+}
+
+#[test]
+fn lido_v2_wsteth_legacy_vector_uses_production_leaf_and_metadata() {
+    let raw = v2_calldata_fixture_case(
+        "registry-v2/lido/testsv2/calldata-wstETH.tests.json",
+        "../calldata-wstETH.json",
+        3,
+        "Transfer wstETH - chain 1",
+    );
+    assert_eq!(
+        supported_fixture_shell(&raw),
+        FixtureShellKind::LegacyOrBare
+    );
+    assert_eq!(rlp_field_count(&raw, false), Some(9));
+    let adapted = adapt_legacy_eip155_fixture(&raw);
+    assert_eq!(adapted.kind, FixtureEnvelopeKind::LegacyEip155Preimage);
+    assert_eq!(adapted.tx.chain_id, 1);
+
+    // Deliberately ignore the fixture's dataProvider. Metadata comes only from
+    // the exact production ERC-20 capability input used by the renderer.
+    let records = dbgen::load_erc20_records(&workspace_root().join("secure/data/erc20.json"))
+        .expect("load production ERC20 metadata");
+    let record = records
+        .iter()
+        .find(|record| {
+            record.chain_id == adapted.tx.chain_id
+                && dbgen::parse_hex_address(&record.address).ok() == adapted.tx.to
+        })
+        .expect("production wstETH metadata");
+    let metadata = Erc20Metadata {
+        chain_id: record.chain_id,
+        contract: adapted.tx.to.expect("wstETH target"),
+        decimals: record.decimals,
+        name: record.name.as_bytes(),
+        symbol: record.symbol.as_bytes(),
+    };
+    let rendered =
+        render_adapted_contract_fixture(&adapted, "calldata-wstETH.json", Some(&metadata));
+
+    assert_eq!(
+        &adapted.data[..4],
+        &keccak256(b"transfer(address,uint256)")[..4]
+    );
+    let recipient: [u8; 20] = adapted.data[16..36]
+        .try_into()
+        .expect("complete signed recipient word");
+    let amount: [u8; 32] = adapted.data[36..68]
+        .try_into()
+        .expect("complete signed amount word");
+    assert_eq!(
+        hex::encode(amount),
+        "000000000000000000000000000000000000000000000000000009184e72a000"
+    );
+    let mut cursor = 0usize;
+    consume_normalized_token(&rendered, &mut cursor, "Transfer wstETH");
+    consume_normalized_token(&rendered, &mut cursor, "Recipient");
+    consume_full_address(&rendered, &mut cursor, &recipient);
+    consume_normalized_token(&rendered, &mut cursor, "Amount");
+    consume_normalized_token(&rendered, &mut cursor, "0.00001 wstETH");
+}
+
+#[test]
+fn lido_v2_steth_high_precision_stake_reaches_leaf_then_refuses_exactly() {
+    let raw = v2_calldata_fixture_case(
+        "registry-v2/lido/testsv2/calldata-stETH.tests.json",
+        "../calldata-stETH.json",
+        1,
+        "Stake ETH - chain 1",
+    );
+    assert_eq!(supported_fixture_shell(&raw), FixtureShellKind::Type2);
+    assert_eq!(rlp_field_count(&raw, true), Some(9));
+    let parsed = eip1559::parse(&raw).expect("v2 stETH stake is canonical unsigned Type-2");
+    let contract = parsed.tx.to.expect("v2 stETH target");
+    assert_eq!(
+        parsed.data.get(..4),
+        Some(&keccak256(b"submit(address)")[..4])
+    );
+    assert!(
+        !amount_is_exact_at_fraction_digits(&parsed.tx.value, 18, 6),
+        "high-precision fixture unexpectedly became exactly displayable"
+    );
+
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == parsed.tx.chain_id
+                && entry.contract == contract
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-stETH.json")
+        })
+        .expect("v2 stETH vector reaches an accepted production leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify stETH v2 leaf");
+    cross_check_contract(&verified.ir, parsed.tx.chain_id, &contract)
+        .expect("bind stETH v2 vector to production leaf");
+
+    match render_erc7730_pages(
+        &parsed.tx,
+        parsed.data,
+        &verified,
+        None,
+        &NameResolver::new(),
+    ) {
+        Err(error) => assert_eq!(error, RenderErr::Reject("7730 inexact scaled value")),
+        Ok(_) => panic!("high-precision stETH fixture unexpectedly rendered"),
+    }
 }
 
 #[test]
