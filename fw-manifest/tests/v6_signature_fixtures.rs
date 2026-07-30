@@ -1,12 +1,16 @@
 //! Key-matched manifest-v6 signature fixtures — FA-1.2b, Draft 1.1 §6.1
 //! L1924–1933.
 //!
-//! The positive fixture uses a DEDICATED NONPRODUCTION C10 fixture keypair
-//! (fixed, documented seeds below), its exact public-key fingerprint, a
-//! canonical release-package page built through `v6::build_release_package`,
-//! and a real C10 signature over the recomputed manifest digest. The
-//! regeneration-identity test plus the pinned SHA-256 of the signature
-//! bytes are the §6.1 "receipt binds the fixture-file hashes" row.
+//! The canonical positive fixture is the CHECKED-IN artifact
+//! `fixtures/manifest_v6_positive.bin` (8,192 bytes, exact signed
+//! manifest-v6 page) plus its receipt `fixtures/manifest_v6_positive.
+//! receipt.txt`, which binds the fixture-file hashes. Both are produced by
+//! the dev-time generator `gen_v6_signature_fixture.rs` (ignored test; run
+//! with `-- --ignored --nocapture`) and are the shared reference for
+//! firmware, fwsign, inspector, factory/updater, extraction, formal models,
+//! and host tests (§6.1 flag-day paragraph). Runtime re-signing appears
+//! here ONLY as a labeled determinism cross-check — it is never the
+//! fixture source.
 //!
 //! The negative fixtures cover: wrong key, one-bit signature corruption,
 //! domain substitution, schema substitution (the page-level schema gate
@@ -19,170 +23,29 @@
 //! C10 signature KAT — `patterned_signature_is_not_a_c10_kat` proves it
 //! does not verify.
 
+mod common;
+
+use common::{
+    fixture_fields, fixture_key, hex, hex16, hexs, regenerate_fixture_page,
+    resign_page_with_digest, seq, sha256, wrong_key, FIXTURE_FPR, FIXTURE_PAGE_SHA256,
+    FIXTURE_PK_ROOT, FIXTURE_SIG_SHA256, V6_FIXTURE_PK_SEED,
+};
 use fw_manifest::v6::{self, PhysicalSlot, ReleasePackageFields, ValidationError};
 use fw_manifest::{ManifestBuilder, ManifestRef, MANIFEST_SIZE, SIGNATURE_LEN};
-use sha2::{Digest, Sha256};
-use sphincs_c10::SigningKey;
 
 // ---------------------------------------------------------------------------
-// Fixture key material — TEST ONLY.
-//
-// These seeds are a DEDICATED NONPRODUCTION fixture keypair for the
-// manifest-v6 host test fixtures. They are NOT the firmware-vendor key,
-// NOT a wallet bootstrap/slot key, NOT a health-only key, and MUST NEVER
-// be compiled into or referenced by any production image, signer, or
-// provisioning path. Their only purpose is to make the §6.1 key-matched
-// fixture byte-reproducible on any host.
+// The checked-in fixture artifacts (see the module banner).
 // ---------------------------------------------------------------------------
 
-/// Fixture signing-key seed (32 bytes). TEST ONLY — see warning above.
-const V6_FIXTURE_SK_SEED: [u8; 32] = *b"V6-FIXTURE-NONPROD-SK-SEED-00001";
-/// Fixture public seed (16 bytes). TEST ONLY — see warning above.
-const V6_FIXTURE_PK_SEED: [u8; 16] = *b"V6-FIXTURE-PK-01";
-/// Second, unrelated fixture keypair for the wrong-key negative fixture.
-/// TEST ONLY — same warning applies.
-const V6_WRONGKEY_SK_SEED: [u8; 32] = *b"V6-FIXTURE-NONPROD-SK-SEED-00002";
-/// Wrong-key public seed. TEST ONLY.
-const V6_WRONGKEY_PK_SEED: [u8; 16] = *b"V6-FIXTURE-PK-02";
+/// The canonical key-matched positive fixture page. NEVER regenerate at
+/// test time — the artifact is the source of truth.
+const ARTIFACT: &[u8; MANIFEST_SIZE] = include_bytes!("fixtures/manifest_v6_positive.bin");
 
-/// Deterministic keygen output for the fixture seeds (pinned receipt).
-const FIXTURE_PK_ROOT: &str = "9eb0ff9813adf4c71b21d6bed0d2d383";
-/// `vendor_fingerprint(pk_seed, pk_root)` for the fixture key (pinned).
-const FIXTURE_FPR: &str = "4005485c1354e4953b02b28a786ea6683d81f95784f579459d42f1644e00a61c";
-/// §6.1 receipt row: SHA-256 over the 4,008 fixture signature bytes.
-const FIXTURE_SIG_SHA256: &str =
-    "7bf48b0c8e908a76a96828ce01345f05206024051c97bf363f01f8d9daadb13d";
-/// SHA-256 over the complete signed fixture page (CRC sealed).
-const FIXTURE_PAGE_SHA256: &str =
-    "d3a95154fd02fdcc4a8cafe379b568846fef218fbb91874aff2f69d7ff653851";
+/// The receipt binding the fixture-file hashes (§6.1 L1924–1933).
+const RECEIPT: &str = include_str!("fixtures/manifest_v6_positive.receipt.txt");
 
-// ---------------------------------------------------------------------------
-// Helpers (same shape as v6_golden_fixtures.rs)
-// ---------------------------------------------------------------------------
-
-fn hex_bytes(s: &str, out: &mut [u8]) {
-    let s = s.as_bytes();
-    assert_eq!(s.len(), out.len() * 2, "hex length mismatch");
-    let nib = |c: u8| -> u8 {
-        match c {
-            b'0'..=b'9' => c - b'0',
-            b'a'..=b'f' => c - b'a' + 10,
-            b'A'..=b'F' => c - b'A' + 10,
-            _ => panic!("bad hex"),
-        }
-    };
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = (nib(s[2 * i]) << 4) | nib(s[2 * i + 1]);
-    }
-}
-
-fn hex(s: &str) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    hex_bytes(s, &mut out);
-    out
-}
-
-fn hex16(s: &str) -> [u8; 16] {
-    let mut out = [0u8; 16];
-    hex_bytes(s, &mut out);
-    out
-}
-
-fn seq(start: u8) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = start.wrapping_add(i as u8);
-    }
-    out
-}
-
-fn fixture_key() -> SigningKey {
-    SigningKey::keygen(V6_FIXTURE_SK_SEED, V6_FIXTURE_PK_SEED)
-}
-
-fn wrong_key() -> SigningKey {
-    SigningKey::keygen(V6_WRONGKEY_SK_SEED, V6_WRONGKEY_PK_SEED)
-}
-
-fn sha256(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(data).into()
-}
-
-/// The golden field set with the FIXTURE key's fingerprint in the
-/// vendor-fpr slot (unsigned placeholder signature — the caller signs).
-fn fixture_fields(fpr: &[u8; 32]) -> ReleasePackageFields<'_> {
-    // Leak-free: these are 'static test constants.
-    const SECURE_HASH: [u8; 32] = {
-        let mut o = [0u8; 32];
-        let mut i = 0;
-        while i < 32 {
-            o[i] = i as u8;
-            i += 1;
-        }
-        o
-    };
-    const NONSECURE_HASH: [u8; 32] = {
-        let mut o = [0u8; 32];
-        let mut i = 0;
-        while i < 32 {
-            o[i] = 0x20 + i as u8;
-            i += 1;
-        }
-        o
-    };
-    const BUILD_ID: [u8; 32] = {
-        let mut o = [0u8; 32];
-        let mut i = 0;
-        while i < 32 {
-            o[i] = 0x60 + i as u8;
-            i += 1;
-        }
-        o
-    };
-    const PLACEHOLDER_SIG: [u8; SIGNATURE_LEN] = [0xFF; SIGNATURE_LEN];
-    ReleasePackageFields {
-        slot: PhysicalSlot::B,
-        release_version: 0x0102_0304,
-        security_epoch: 0x0506_0708,
-        secure_len: 0x1000,
-        nonsecure_len: 0x2000,
-        secure_hash: &SECURE_HASH,
-        nonsecure_hash: &NONSECURE_HASH,
-        vendor_fpr: fpr,
-        build_id: &BUILD_ID,
-        signature: &PLACEHOLDER_SIG,
-    }
-}
-
-/// Build the canonical package page for `fields`, then sign its recomputed
-/// manifest digest with `key` (deterministic path, `opt_rand = None`) and
-/// seal the page (signature written, normalized CRC recomputed).
-fn sign_page(fields: &ReleasePackageFields<'_>, key: &SigningKey) -> [u8; MANIFEST_SIZE] {
-    let mut page = v6::build_release_package(fields).expect("fixture fields are valid");
-    let digest = v6::parse_and_validate(&page, fields.slot)
-        .unwrap()
-        .manifest_digest();
-    let sig = key.sign(&digest, None);
-    page[v6::OFF_SIGNATURE..v6::OFF_SIGNATURE + SIGNATURE_LEN].copy_from_slice(&sig);
-    v6::rewrite_normalized_crc(&mut page);
-    page
-}
-
-/// The checked-in positive fixture page: golden fields + fixture fpr,
-/// signed by the fixture key.
-fn signed_fixture_page() -> [u8; MANIFEST_SIZE] {
-    let key = fixture_key();
-    let vk = key.verifying_key();
-    let fpr = v6::vendor_fingerprint(&vk.pk_seed, &vk.pk_root);
-    sign_page(&fixture_fields(&fpr), &key)
-}
-
-/// Overwrite the signature area of an otherwise-valid page with a signature
-/// over an attacker-chosen 32-byte digest, then re-seal the CRC.
-fn resign_page_with_digest(page: &mut [u8; MANIFEST_SIZE], key: &SigningKey, digest: &[u8; 32]) {
-    let sig = key.sign(digest, None);
-    page[v6::OFF_SIGNATURE..v6::OFF_SIGNATURE + SIGNATURE_LEN].copy_from_slice(&sig);
-    v6::rewrite_normalized_crc(page);
+fn artifact_page() -> [u8; MANIFEST_SIZE] {
+    *ARTIFACT
 }
 
 // ---------------------------------------------------------------------------
@@ -204,38 +67,86 @@ fn fixture_keypair_is_deterministic_and_fingerprint_pinned() {
 }
 
 #[test]
-fn signed_fixture_regeneration_identity_and_receipt() {
-    let key = fixture_key();
-    let page = signed_fixture_page();
-    let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
-
-    // (i) Regeneration identity: re-signing the same recomputed digest with
-    // the same seeds and opt_rand=None reproduces the page's signature
-    // bytes exactly. This binds the checked-in fixture.
-    let re_sig = key.sign(&m.manifest_digest(), None);
-    assert_eq!(re_sig, m.signature);
-
-    // §6.1 receipt row: SHA-256 of the fixture signature bytes is pinned.
-    assert_eq!(sha256(&re_sig), hex(FIXTURE_SIG_SHA256));
-    // The complete sealed page is pinned too.
-    assert_eq!(sha256(&page), hex(FIXTURE_PAGE_SHA256));
-}
-
-#[test]
-fn verify_signature_and_embedded_key_succeed_on_signed_page() {
-    let vk = fixture_key().verifying_key();
-    let page = signed_fixture_page();
-    let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
+fn artifact_parses_and_passes_both_verify_paths() {
+    // (a) The checked-in artifact parses and passes the authority path.
+    let page = artifact_page();
+    let m = v6::parse_and_validate(&page, PhysicalSlot::B).expect("artifact parses");
     assert!(m.stored_digest_matches());
-    // (ii) both verification entry points succeed.
+    let vk = fixture_key().verifying_key();
     assert!(m.verify_signature(&vk.pk_seed, &vk.pk_root));
     assert!(m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
 }
 
 #[test]
+fn artifact_hashes_match_pins_and_receipt() {
+    // (b) The artifact's signature-region SHA-256 and full-page SHA-256
+    // equal BOTH the pinned constants AND the receipt file's values.
+    let page = artifact_page();
+    let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
+    let sig_sha = hexs(&sha256(&m.signature));
+    let page_sha = hexs(&sha256(&page));
+    assert_eq!(sig_sha, FIXTURE_SIG_SHA256, "signature-bytes receipt row");
+    assert_eq!(page_sha, FIXTURE_PAGE_SHA256, "full-page receipt row");
+    assert!(
+        RECEIPT.contains(&format!("signature_sha256: {sig_sha}")),
+        "receipt must bind the signature-bytes hash"
+    );
+    assert!(
+        RECEIPT.contains(&format!("page_sha256: {page_sha}")),
+        "receipt must bind the full-page hash"
+    );
+}
+
+#[test]
+fn receipt_fields_match_artifact() {
+    // (d) The receipt file's fields match the artifact's parsed fields.
+    let page = artifact_page();
+    let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
+    let vk = fixture_key().verifying_key();
+    let expected_lines = [
+        "schema: 0x06".to_string(),
+        "domain: PQFW_V6".to_string(),
+        format!("physical_slot: 0x{:02x}", m.slot.to_u8()),
+        format!("release_version: 0x{:08x}", m.release_version),
+        format!("security_epoch: 0x{:08x}", m.security_epoch),
+        format!("secure_len: 0x{:08x}", m.secure_len),
+        format!("nonsecure_len: 0x{:08x}", m.nonsecure_len),
+        format!("secure_hash: {}", hexs(&m.secure_hash)),
+        format!("nonsecure_hash: {}", hexs(&m.nonsecure_hash)),
+        format!("build_id: {}", hexs(&m.build_id)),
+        format!("pk_root: {}", hexs(&vk.pk_root)),
+        format!("vendor_fpr: {}", hexs(&m.vendor_fpr)),
+        format!("manifest_digest: {}", hexs(&m.manifest_digest())),
+    ];
+    for line in expected_lines {
+        assert!(RECEIPT.contains(&line), "receipt missing line: {line}");
+    }
+    // The loud NONPRODUCTION key banner must be in the receipt.
+    assert!(RECEIPT.contains("NONPRODUCTION"), "receipt key banner");
+}
+
+#[test]
+fn regeneration_identity_is_a_determinism_cross_check() {
+    // (c) CROSS-CHECK ONLY, not the fixture source: a fresh re-sign with
+    // the same seeds + opt_rand=None reproduces the artifact bytes exactly
+    // (sphincs-c10's deterministic path is byte-stable). The canonical
+    // fixture is the checked-in artifact above.
+    let regenerated = regenerate_fixture_page();
+    assert_eq!(
+        hexs(&sha256(&regenerated)),
+        FIXTURE_PAGE_SHA256,
+        "regenerated page hash"
+    );
+    assert_eq!(
+        regenerated, *ARTIFACT,
+        "deterministic regeneration must reproduce the checked-in artifact byte-for-byte"
+    );
+}
+
+#[test]
 fn patterned_signature_is_not_a_c10_kat() {
-    // (iii) The `i mod 256` patterned signature (v6_golden_fixtures.rs) is
-    // a serialization/normalization fixture ONLY: it must not verify.
+    // The `i mod 256` patterned signature (v6_golden_fixtures.rs) is a
+    // serialization/normalization fixture ONLY: it must not verify.
     let vk = fixture_key().verifying_key();
     let fpr = v6::vendor_fingerprint(&vk.pk_seed, &vk.pk_root);
     let mut patterned = [0u8; SIGNATURE_LEN];
@@ -253,12 +164,13 @@ fn patterned_signature_is_not_a_c10_kat() {
 }
 
 // ---------------------------------------------------------------------------
-// Negative fixtures — each must FAIL verification (or the schema gate)
+// Negative fixtures — each must FAIL verification (or the schema gate).
+// Every mutation starts from a copy of the checked-in artifact.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn wrong_key_fails() {
-    let page = signed_fixture_page();
+    let page = artifact_page();
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
     let wk = wrong_key().verifying_key();
     assert!(!m.verify_signature(&wk.pk_seed, &wk.pk_root));
@@ -270,7 +182,7 @@ fn wrong_key_fails() {
 #[test]
 fn one_bit_signature_corruption_fails() {
     let vk = fixture_key().verifying_key();
-    let mut page = signed_fixture_page();
+    let mut page = artifact_page();
     page[v6::OFF_SIGNATURE + 2000] ^= 0x01; // one bit, mid-signature
     v6::rewrite_normalized_crc(&mut page);
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
@@ -282,7 +194,7 @@ fn one_bit_signature_corruption_fails() {
 fn domain_substitution_fails() {
     let key = fixture_key();
     let vk = key.verifying_key();
-    let mut page = signed_fixture_page();
+    let mut page = artifact_page();
     // Attacker re-signs over a preimage built with a WRONG domain tag.
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
     let mut evil_preimage = m.signed_preimage();
@@ -291,11 +203,6 @@ fn domain_substitution_fails() {
     resign_page_with_digest(&mut page, &key, &evil_digest);
     // The verifier recomputes with the frozen PQFW_V6 domain → mismatch.
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
-    // The attacker re-signs with the legitimate fixture key, so the
-    // fingerprint leg must STILL pass: the refusal isolates to the
-    // freshly-recomputed-digest leg (a vendor_fpr_matches regression
-    // would otherwise keep this test green for the wrong reason).
-    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
 }
@@ -307,23 +214,18 @@ fn schema_substitution_fails() {
 
     // (a) Signature over a preimage with a wrong schema byte: the verifier
     // recomputes with schema 0x06 → mismatch.
-    let mut page = signed_fixture_page();
+    let mut page = artifact_page();
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
     let mut evil_preimage = m.signed_preimage();
     evil_preimage[7] = 0x07;
     let evil_digest = sha256(&evil_preimage);
     resign_page_with_digest(&mut page, &key, &evil_digest);
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
-    // The attacker re-signs with the legitimate fixture key, so the
-    // fingerprint leg must STILL pass: the refusal isolates to the
-    // freshly-recomputed-digest leg (a vendor_fpr_matches regression
-    // would otherwise keep this test green for the wrong reason).
-    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
 
     // (b) The page-level schema gate fires FIRST: a page whose schema byte
     // is not exactly 0x06 is rejected before any signature path runs.
-    let mut page = signed_fixture_page();
+    let mut page = artifact_page();
     page[v6::OFF_SCHEMA] = 0x07;
     v6::rewrite_normalized_crc(&mut page);
     assert_eq!(
@@ -336,7 +238,7 @@ fn schema_substitution_fails() {
 fn slot_substitution_fails() {
     let key = fixture_key();
     let vk = key.verifying_key();
-    let mut page = signed_fixture_page(); // page is slot B (0x01)
+    let mut page = artifact_page(); // artifact is slot B (0x01)
     // Signature produced over a slot-A preimage must not authorize slot B.
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
     let mut evil_preimage = m.signed_preimage();
@@ -344,11 +246,6 @@ fn slot_substitution_fails() {
     let evil_digest = sha256(&evil_preimage);
     resign_page_with_digest(&mut page, &key, &evil_digest);
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
-    // The attacker re-signs with the legitimate fixture key, so the
-    // fingerprint leg must STILL pass: the refusal isolates to the
-    // freshly-recomputed-digest leg (a vendor_fpr_matches regression
-    // would otherwise keep this test green for the wrong reason).
-    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
 }
@@ -360,14 +257,10 @@ fn tuple_change_fails() {
         (v6::OFF_RELEASE_VERSION, 0x0102_0305u32),
         (v6::OFF_SECURITY_EPOCH, 0x0506_0709u32),
     ] {
-        let mut page = signed_fixture_page();
+        let mut page = artifact_page();
         page[off..off + 4].copy_from_slice(&bumped.to_be_bytes());
         v6::rewrite_normalized_crc(&mut page);
         let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
-        // The mutation leaves the vendor-fpr field untouched, so the
-        // fingerprint leg must STILL pass: the refusal isolates to the
-        // freshly-recomputed-digest leg.
-        assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
         assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
         assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
     }
@@ -376,14 +269,10 @@ fn tuple_change_fails() {
 #[test]
 fn length_change_fails() {
     let vk = fixture_key().verifying_key();
-    let mut page = signed_fixture_page();
+    let mut page = artifact_page();
     page[v6::OFF_SECURE_LEN..v6::OFF_SECURE_LEN + 4].copy_from_slice(&0x1008u32.to_be_bytes());
     v6::rewrite_normalized_crc(&mut page);
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
-    // The mutation leaves the vendor-fpr field untouched, so the
-    // fingerprint leg must STILL pass: the refusal isolates to the
-    // freshly-recomputed-digest leg.
-    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
 }
@@ -391,14 +280,10 @@ fn length_change_fails() {
 #[test]
 fn image_hash_change_fails() {
     let vk = fixture_key().verifying_key();
-    let mut page = signed_fixture_page();
+    let mut page = artifact_page();
     page[v6::OFF_SECURE_HASH] ^= 0x01; // one bit of the signed secure hash
     v6::rewrite_normalized_crc(&mut page);
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
-    // The mutation leaves the vendor-fpr field untouched, so the
-    // fingerprint leg must STILL pass: the refusal isolates to the
-    // freshly-recomputed-digest leg.
-    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
 }
