@@ -11,20 +11,18 @@ name: A3.1 transcription lint
 # part of its shared fail-closed trust root. See
 # contracts/verification/docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
 #
-# `verify-transcription` runs THREE pure-Python checks: (1) the POSITIONAL statistical
-# lint (constant-sets / kind-histogram / gate-vars); (2) the STRUCTURAL AST check
-# (check_c10_transcription_ast.py) — parses both the .sol Yul and the c10Program literal
-# into the Interpreter.Yul AST and asserts TREE EQUALITY, closing the statistical lint's
-# intra-fragment hole (reorder / var-swap / operand-swap); (3) the NEGATIVE-CONTROL harness
-# proving those mutants are invisible to (1) yet caught by (2).
+# `verify-transcription` runs five pure-Python checks: the positional statistical
+# lint, structural AST equality, the structural negative-control harness, the
+# source byte-pin, and the Rust/Solidity/Lean signed-digest field-order pin.
 #
-# Scope reminder: these are REGRESSION GATES + a structural cross-check, not a proof. They
-# are the ONLY CI-enforced piece of the A3.1 Lean track (this job installs the
-# elan shim for the common Makefile preflight but does not run the Lean build
-# suite). The structural check now covers intra-fragment
-# source<->AST fidelity in CI (previously local-only); the source->deployed-bytecode leg
-# (R1) and the both-N-masked functional behaviour stay covered by the local `verify-interp`
-# 396-vector corpus + the kernel `execC10Asm_eq`.
+# Scope reminder: these are regression gates and a structural cross-check, not a
+# proof. This workflow is the dedicated CI enforcement for the
+# source<->transcription leg; `lean-fv.yml` separately enforces the Lean proof
+# and axiom-closure legs. This job installs the elan shim for the common
+# Makefile preflight but does not run the Lean build suite. The structural check
+# covers intra-fragment source<->AST fidelity; the source->deployed-bytecode leg
+# (R1) and both-N-masked functional behaviour stay covered by the local
+# `verify-interp` corpus plus the kernel `execC10Asm_eq`.
 
 on:
   push:
@@ -37,6 +35,10 @@ on:
       - 'contracts/verification/scripts/test_c10_transcription_ast_negative.py'
       - 'contracts/verification/scripts/check_c10_source_pin.py'
       - 'contracts/verification/lean/SphincsCVerify/Interpreter/C10Source.lean'
+      - 'contracts/verification/scripts/check_sphincs_digest_field_order.py'
+      - 'aa/src/userop.rs'
+      - 'contracts/smart-wallet/src/PQSmartWallet.sol'
+      - 'contracts/verification/lean/SphincsCVerify/Wallet/ValidateUserOp.lean'
       - 'contracts/verification/Makefile'
       - '.github/workflows/a31-transcription.yml'
   pull_request:
@@ -48,6 +50,10 @@ on:
       - 'contracts/verification/scripts/test_c10_transcription_ast_negative.py'
       - 'contracts/verification/scripts/check_c10_source_pin.py'
       - 'contracts/verification/lean/SphincsCVerify/Interpreter/C10Source.lean'
+      - 'contracts/verification/scripts/check_sphincs_digest_field_order.py'
+      - 'aa/src/userop.rs'
+      - 'contracts/smart-wallet/src/PQSmartWallet.sol'
+      - 'contracts/verification/lean/SphincsCVerify/Wallet/ValidateUserOp.lean'
       - 'contracts/verification/Makefile'
       - '.github/workflows/a31-transcription.yml'
 
