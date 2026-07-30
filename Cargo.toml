@@ -23,6 +23,10 @@ members = [
     # wire size that crosses a TrustZone, on-chain, or USB boundary.
     # Zero-dependency by policy. Phase 3 of the modularity refactor.
     "proto",
+    # Frozen §5 flash-geometry registry (Draft 1.1, post-errata-4): all
+    # 256 pages, exactly one owner each, const exact-once coverage
+    # checks. Zero-dependency by policy (same rule as proto). FA-1.1.
+    "geometry",
     # Pure-logic Ethereum tx primitives (RLP, EIP-1559 envelope, U256,
     # keccak256). Phase 5 PR 5.1 of the modularity refactor.
     "tx-core",

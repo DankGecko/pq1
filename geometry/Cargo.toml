@@ -1,0 +1,24 @@
+# pqsigner-geometry — single source of truth for the frozen Section-5
+# flash geometry of the A/B rollback architecture (Draft 1.1,
+# post-errata-4, SHA-256 abc058b1).
+#
+# Every one of the 256 flash pages (2 banks × 128 × 8 KiB) is assigned
+# exactly one owner here, including when the owning feature is disabled.
+# Compile-time checks reject every gap, overlap, or second owner; host
+# tests re-derive the same properties and the exact address map.
+#
+# Consumers (Draft 1.1 §5 mandate): both linker families, updater, FSBL,
+# signer, inspector, extraction tool, QEMU model, and host tests MUST
+# consume this one registry. Reserved and retired roles remain explicit
+# page owners rather than ownerless gaps; there is no current boot-state
+# role (bank-1 page 6's sole owner is manifest B).
+#
+# Strict zero-dependency policy, same rule as `pqsigner-proto`.
+
+[package]
+name = "pqsigner-geometry"
+version = "0.1.0"
+edition.workspace = true
+
+[lints]
+workspace = true

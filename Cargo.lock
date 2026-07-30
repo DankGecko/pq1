@@ -1212,6 +1212,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pqsigner-geometry"
+version = "0.1.0"
+
+[[package]]
 name = "pqsigner-hal"
 version = "0.1.0"
 dependencies = [
