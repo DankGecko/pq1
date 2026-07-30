@@ -27,7 +27,8 @@
       ],
       "runs_in": "lean-fv.yml",
       "enforcement": "per_pr_blocking",
-      "note": "F1 (2026-07-01): docs/** was ABSENT from lean-fv.yml paths, so ledger-only edits never triggered it. Fixed 5c623c5d."
+      "required_run": "[[ ${UID} -ne 0 && -u /usr/bin/sudo && -x /usr/bin/sudo ]] &&\n  /usr/bin/sudo -n -u \"#${UID}\" -- \\\n    /usr/bin/env -i \\\n    /usr/bin/bash --noprofile --norc -p \\\n      contracts/verification/scripts/run_authoritative_make.sh \\\n      make -C contracts/verification verify-ledger-consistency\n",
+      "note": "F1 (2026-07-01): docs/** was ABSENT from lean-fv.yml paths, so ledger-only edits never triggered it. The exact required_run also prevents removal of the load-bearing authoritative launcher while retaining a diagnostic direct-make invocation."
     },
     {
       "id": "verify-fv-lints",

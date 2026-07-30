@@ -18,6 +18,9 @@ asserts the wiring matches the declared enforcement:
     trigger `paths:` COVER every `polices_paths` entry (or there is no paths filter).
     A polices path NOT covered by an allowlist `paths:` filter — OR one EXCLUDED by a
     `paths-ignore:` filter — = the F1 class = FAIL.
+    A gate with `required_run` must additionally match that complete step `run:` block
+    byte-for-byte; merely retaining the target text cannot downgrade a load-bearing
+    launcher to a diagnostic direct invocation.
   * nightly — the `runs_in` workflow invokes it AND has a `schedule` trigger.
   * local_documented — deliberately not CI-gated; a NOTE, never a FAIL (must carry a
     `why`). Surfaced so the non-enforcement is VISIBLE, not silent.
@@ -109,8 +112,11 @@ def _dispatch_only(cond: str) -> bool:
     return "workflow_dispatch" in cond and "schedule" not in cond
 
 
-def invokes_target(wf: dict, target: str) -> tuple[bool, bool, bool]:
-    """Scan every job's steps for a `make [-C dir] <target>` invocation. Returns
+def invokes_target(
+    wf: dict, target: str, required_run: str | None = None
+) -> tuple[bool, bool, bool]:
+    """Scan every job's steps for a `make [-C dir] <target>` invocation. If
+    `required_run` is supplied, only an exact complete run-block match counts. Returns
     (invoked, non_blocking, dispatch_only) where the two flags OR together the JOB-
     level and the matching STEP-level `continue-on-error` / `if:` (a non-blocking or
     workflow_dispatch-gated STEP defeats a per-PR gate just as a job-level one does)."""
@@ -123,7 +129,8 @@ def invokes_target(wf: dict, target: str) -> tuple[bool, bool, bool]:
         for s in job.get("steps") or []:
             if not isinstance(s, dict):
                 continue
-            if pat.search(str(s.get("run", ""))):
+            run = str(s.get("run", ""))
+            if pat.search(run) and (required_run is None or run == required_run):
                 coe = job_coe or bool(s.get("continue-on-error"))
                 dispatch_only = job_dispatch_only or _dispatch_only(str(s.get("if", "")))
                 return True, coe, dispatch_only
@@ -170,8 +177,22 @@ def check_gate(g: dict) -> list[str]:
         fails.append(f"{target}: declared runs_in={runs_in} but that workflow file is absent.")
         return fails
 
-    invoked, coe, dispatch_only = invokes_target(wf, target)
+    required_run = g.get("required_run")
+    if required_run is not None and (
+        not isinstance(required_run, str) or not required_run
+    ):
+        fails.append(f"{target}: `required_run` must be a non-empty string.")
+        return fails
+
+    invoked, coe, dispatch_only = invokes_target(wf, target, required_run)
     if not invoked:
+        if required_run is not None and invokes_target(wf, target)[0]:
+            fails.append(
+                f"{target}: {runs_in} retains the target text but its complete `run:` "
+                "block does not exactly match `required_run` — the authoritative "
+                "launcher boundary was changed or removed."
+            )
+            return fails
         # maybe another workflow invokes it — scan all, then report the mismatch
         other = [p.name for p in (REPO_ROOT / ".github/workflows").glob("*.yml")
                  if invokes_target(load_workflow(p) or {}, target)[0]]
@@ -404,13 +425,55 @@ def main() -> int:
     gates = manifest["gates"]
 
     if self_test:
-        # Two negative controls; both MUST be caught or the harness is void.
+        # Negative controls; every one MUST be caught or the harness is void.
         print("=== --self-test (negative controls) ===")
         broken_allow = {"id": "verify-ledger-consistency", "make": "x", "enforcement": "per_pr_blocking",
                         "runs_in": "lean-fv.yml", "polices_paths": ["totally/unpoliced/surface/**"]}
         fa = check_gate(broken_allow)
         if not fa:
             print("  SELF-TEST FAILED: uncovered-allowlist gate NOT caught — harness void.", file=sys.stderr)
+            return 2
+        ledger_gate = next(
+            (g for g in gates if g["id"] == "verify-ledger-consistency"), None
+        )
+        if ledger_gate is None or not isinstance(ledger_gate.get("required_run"), str):
+            print(
+                "  SELF-TEST FAILED: verify-ledger-consistency has no exact "
+                "`required_run` contract.",
+                file=sys.stderr,
+            )
+            return 2
+        live_ledger_wf = load_workflow(
+            REPO_ROOT / ".github" / "workflows" / ledger_gate["runs_in"]
+        )
+        if live_ledger_wf is None or not invokes_target(
+            live_ledger_wf,
+            ledger_gate["id"],
+            ledger_gate["required_run"],
+        )[0]:
+            print(
+                "  SELF-TEST FAILED: the live authoritative ledger invocation does "
+                "not match its exact `required_run` contract.",
+                file=sys.stderr,
+            )
+            return 2
+        prefix_deleted = {
+            "jobs": {
+                "ledger": {
+                    "steps": [{"run": ledger_gate["make"] + "\n"}],
+                }
+            }
+        }
+        if not invokes_target(prefix_deleted, ledger_gate["id"])[0] or invokes_target(
+            prefix_deleted,
+            ledger_gate["id"],
+            ledger_gate["required_run"],
+        )[0]:
+            print(
+                "  SELF-TEST FAILED: deleting the authoritative launcher prefix was "
+                "not distinguished from a valid ledger invocation.",
+                file=sys.stderr,
+            )
             return 2
         # The paths-ignore (denylist F1) branch is tested DIRECTLY against `_ignored`
         # rather than through a real workflow's `paths-ignore:` filter. CI trigger
@@ -457,7 +520,9 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        print(f"  self-test OK: allowlist gap caught ({len(fa)}), paths-ignore denylist logic verified "
+        print(f"  self-test OK: allowlist gap caught ({len(fa)}), exact authoritative "
+              "ledger invocation/prefix-deletion control verified, "
+              "paths-ignore denylist logic verified "
               f"(directly), kani-reverse gap caught ({len(rc)}), "
               f"kani-mutation-reverse gap caught ({len(rm)}), "
               f"extraction-reverse gap caught ({len(rext)}).")
