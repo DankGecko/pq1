@@ -399,10 +399,12 @@ receipt boundary below (run from the repository root):
 
 The outer `builtin exec -c` is part of the security boundary: it clears the
 environment before a new dynamic loader starts. The launcher accepts only the
-exact ledger target and requires its exact completion marker in a private
-receipt. A bare `make -C contracts/verification verify-ledger-consistency` is
-useful diagnostically, but is not an authoritative hostile-environment receipt:
-loader controls can otherwise suppress Make before its in-file guards run.
+exact ledger target, resolves its own physical single-link file identity before
+deriving the repository root, and requires its exact completion marker in a
+private receipt. A bare
+`make -C contracts/verification verify-ledger-consistency` is useful
+diagnostically, but is not an authoritative hostile-environment receipt: loader
+controls can otherwise suppress Make before its in-file guards run.
 
 ### Just the Lean kernel check (fastest, no Foundry/Halmos/Certora)
 

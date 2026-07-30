@@ -49,12 +49,36 @@ export PATH=/usr/bin:/bin
 export LC_ALL=C.UTF-8
 builtin unset CDPATH BASH_ENV ENV
 
+launcher_path=$(
+  /usr/bin/readlink -f -- "${BASH_SOURCE[0]}"
+) || fail_usage "cannot resolve the physical authoritative launcher file"
+readonly launcher_path
+# Resolve the file, not merely its lexical parent.  Otherwise a symlink to this
+# trusted script inside an attacker-controlled lookalike tree makes every
+# adjacent Makefile/checker presence test self-consistent.  A hard link has the
+# same ambiguity because readlink cannot distinguish which directory owns the
+# inode, so authoritative launchers must be single-linked.
+if [[ ! -f "${launcher_path}" ]] \
+    || [[ "${launcher_path##*/}" != "run_authoritative_make.sh" ]]; then
+  fail_usage "resolved authoritative launcher identity is invalid"
+fi
+launcher_links=$(/usr/bin/stat -c '%h' -- "${launcher_path}")
+readonly launcher_links
+if [[ "${launcher_links}" != "1" ]]; then
+  fail_usage \
+    "authoritative launcher must have exactly one hard link"
+fi
+
 script_dir="$(
   builtin unset CDPATH
-  builtin cd -P -- "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")"
+  builtin cd -P -- "$(/usr/bin/dirname -- "${launcher_path}")"
   /usr/bin/pwd -P
 )"
 readonly script_dir
+if [[ "${launcher_path}" != \
+      "${script_dir}/run_authoritative_make.sh" ]]; then
+  fail_usage "authoritative launcher path did not canonicalize exactly"
+fi
 verification_dir="$(
   builtin cd -P -- "${script_dir}/.."
   /usr/bin/pwd -P
