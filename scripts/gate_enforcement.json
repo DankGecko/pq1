@@ -27,12 +27,24 @@
       ],
       "runs_in": "lean-fv.yml",
       "enforcement": "per_pr_blocking",
-      "required_step": {
-        "name": "verify-ledger-consistency (AXIOM_STATUS.json falsifiable vs live dump)",
-        "shell": "/usr/bin/sudo -n -u runner -- /usr/bin/env -i /usr/bin/bash --noprofile --norc -p -e -o pipefail {0}",
-        "run": "exec /usr/bin/bash --noprofile --norc -p \\\n  contracts/verification/scripts/run_authoritative_make.sh \\\n  make -C contracts/verification verify-ledger-consistency\n"
+      "required_context": {
+        "step": {
+          "name": "verify-ledger-consistency (AXIOM_STATUS.json falsifiable vs live dump)",
+          "shell": "/usr/bin/sudo -n -u runner -- /usr/bin/env -i /usr/bin/bash --noprofile --norc -p -e -o pipefail {0}",
+          "run": "exec /usr/bin/bash --noprofile --norc -p \\\n  contracts/verification/scripts/run_authoritative_make.sh \\\n  make -C contracts/verification verify-ledger-consistency\n"
+        },
+        "job_equals": {
+          "runs-on": "ubuntu-latest"
+        },
+        "job_absent": [
+          "container",
+          "env",
+          "if",
+          "needs",
+          "strategy"
+        ]
       },
-      "note": "F1 (2026-07-01): docs/** was ABSENT from lean-fv.yml paths, so ledger-only edits never triggered it. The exact required_step also prevents removal, conditional suppression, hostile startup state, or a no-op shell from bypassing the load-bearing authoritative launcher."
+      "note": "F1 (2026-07-01): docs/** was ABSENT from lean-fv.yml paths, so ledger-only edits never triggered it. The exact required_context also pins the GitHub-hosted runner and forbids containers, removal, conditional suppression, hostile startup state, or a no-op shell from bypassing the load-bearing authoritative launcher."
     },
     {
       "id": "verify-fv-lints",

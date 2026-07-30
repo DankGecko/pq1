@@ -18,9 +18,10 @@ asserts the wiring matches the declared enforcement:
     trigger `paths:` COVER every `polices_paths` entry (or there is no paths filter).
     A polices path NOT covered by an allowlist `paths:` filter — OR one EXCLUDED by a
     `paths-ignore:` filter — = the F1 class = FAIL.
-    A gate with `required_step` must additionally match that complete parsed step and
-    an unconditional job byte-for-byte; merely retaining the target text cannot
-    downgrade, condition away, or no-op a load-bearing launcher.
+    A gate with `required_context` must additionally match its complete parsed step,
+    trusted runner, and forbidden-job-key policy; merely retaining the target text
+    cannot downgrade, relocate, containerize, condition away, or no-op a
+    load-bearing launcher.
   * nightly — the `runs_in` workflow invokes it AND has a `schedule` trigger.
   * local_documented — deliberately not CI-gated; a NOTE, never a FAIL (must carry a
     `why`). Surfaced so the non-enforcement is VISIBLE, not silent.
@@ -60,6 +61,61 @@ KANI_MUTATIONS = Path(__file__).resolve().parent / "kani_mutations.json"
 EXTRACTION_REGISTRY = (
     REPO_ROOT / "contracts" / "verification" / "extraction_registry.json"
 )
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[object, object]]) -> dict:
+    """Fail closed on duplicate JSON object keys instead of last-value-wins."""
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"duplicate JSON object key: {key!r}")
+        out[key] = value
+    return out
+
+
+def _load_json_unique(text: str) -> object:
+    return json.loads(text, object_pairs_hook=_reject_duplicate_json_keys)
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader variant that rejects duplicate mappings at every depth."""
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict:
+    loader.flatten_mapping(node)
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as e:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found an unhashable mapping key",
+                key_node.start_mark,
+            ) from e
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
+def _load_yaml_unique(text: str) -> object:
+    return yaml.load(text, Loader=_UniqueKeyLoader)
 
 
 def _norm_prefix(glob: str) -> str:
@@ -102,7 +158,7 @@ def load_workflow(wf_path: Path) -> dict | None:
     if not wf_path.exists():
         return None
     try:
-        return yaml.safe_load(wf_path.read_text(encoding="utf-8"))
+        return _load_yaml_unique(wf_path.read_text(encoding="utf-8"))
     except yaml.YAMLError as e:
         raise SystemExit(f"HARNESS ERROR: {wf_path} is not valid YAML: {e}")
 
@@ -113,11 +169,11 @@ def _dispatch_only(cond: str) -> bool:
 
 
 def invokes_target(
-    wf: dict, target: str, required_step: dict | None = None
+    wf: dict, target: str, required_context: dict | None = None
 ) -> tuple[bool, bool, bool]:
     """Scan every job's steps for a `make [-C dir] <target>` invocation. If
-    `required_step` is supplied, only an exact parsed step in a job with no `if`,
-    `strategy`, or `needs` skip controls counts. Returns (invoked, non_blocking,
+    `required_context` is supplied, only its exact parsed step on the pinned runner
+    with every forbidden job key absent counts. Returns (invoked, non_blocking,
     dispatch_only) where the two flags OR together the JOB-level and the matching
     STEP-level `continue-on-error` / `if:` (a non-blocking or workflow_dispatch-gated
     STEP defeats a per-PR gate just as a job-level one does)."""
@@ -131,9 +187,15 @@ def invokes_target(
             if not isinstance(s, dict):
                 continue
             run = str(s.get("run", ""))
-            exact_context = required_step is None or (
-                s == required_step
-                and not any(key in job for key in ("if", "strategy", "needs"))
+            exact_context = required_context is None or (
+                s == required_context["step"]
+                and all(
+                    key in job and job[key] == value
+                    for key, value in required_context["job_equals"].items()
+                )
+                and not any(
+                    key in job for key in required_context["job_absent"]
+                )
             )
             if pat.search(run) and exact_context:
                 coe = job_coe or bool(s.get("continue-on-error"))
@@ -182,28 +244,54 @@ def check_gate(g: dict) -> list[str]:
         fails.append(f"{target}: declared runs_in={runs_in} but that workflow file is absent.")
         return fails
 
-    required_step = g.get("required_step")
-    if required_step is not None and (
-        not isinstance(required_step, dict)
-        or not isinstance(required_step.get("run"), str)
-        or not required_step["run"]
-        or not isinstance(required_step.get("shell"), str)
-        or not required_step["shell"]
-    ):
-        fails.append(
-            f"{target}: `required_step` must be an object with non-empty "
-            "`run` and `shell` strings."
+    required_context = g.get("required_context")
+    if required_context is not None:
+        required_step = (
+            required_context.get("step")
+            if isinstance(required_context, dict)
+            else None
         )
-        return fails
-
-    invoked, coe, dispatch_only = invokes_target(wf, target, required_step)
-    if not invoked:
-        if required_step is not None and invokes_target(wf, target)[0]:
+        job_equals = (
+            required_context.get("job_equals")
+            if isinstance(required_context, dict)
+            else None
+        )
+        job_absent = (
+            required_context.get("job_absent")
+            if isinstance(required_context, dict)
+            else None
+        )
+        malformed = (
+            not isinstance(required_context, dict)
+            or set(required_context) != {"step", "job_equals", "job_absent"}
+            or not isinstance(required_step, dict)
+            or not isinstance(required_step.get("run"), str)
+            or not required_step["run"]
+            or not isinstance(required_step.get("shell"), str)
+            or not required_step["shell"]
+            or not isinstance(job_equals, dict)
+            or not job_equals
+            or not isinstance(job_absent, list)
+            or not job_absent
+            or any(not isinstance(key, str) or not key for key in job_absent)
+            or len(job_absent) != len(set(job_absent))
+            or bool(set(job_equals) & set(job_absent))
+        )
+        if malformed:
             fails.append(
-                f"{target}: {runs_in} retains the target text but its complete step "
-                "or unconditional job context does not exactly match `required_step` "
-                "— the authoritative launcher boundary was changed, skipped, or "
-                "replaced with a no-op shell."
+                f"{target}: `required_context` must carry a non-empty exact "
+                "step, job_equals mapping, and unique disjoint job_absent keys."
+            )
+            return fails
+
+    invoked, coe, dispatch_only = invokes_target(wf, target, required_context)
+    if not invoked:
+        if required_context is not None and invokes_target(wf, target)[0]:
+            fails.append(
+                f"{target}: {runs_in} retains the target text but its step, runner, "
+                "or job context does not exactly match `required_context` — the "
+                "authoritative launcher boundary was changed, skipped, containerized, "
+                "or replaced with a no-op shell."
             )
             return fails
         # maybe another workflow invokes it — scan all, then report the mismatch
@@ -371,8 +459,8 @@ def kani_mutation_manifest_coverage(policed: list[str], mutation_files: list[str
 
 def _kani_mutation_files() -> list[str]:
     try:
-        manifest = json.loads(KANI_MUTATIONS.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        manifest = _load_json_unique(KANI_MUTATIONS.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
         raise SystemExit(f"HARNESS ERROR: cannot read {KANI_MUTATIONS}: {e}")
     mutations = manifest.get("mutations")
     if not isinstance(mutations, list) or any(
@@ -411,8 +499,8 @@ def extraction_freshness_coverage(
 
 def _extraction_rust_files() -> list[str]:
     try:
-        registry = json.loads(EXTRACTION_REGISTRY.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        registry = _load_json_unique(EXTRACTION_REGISTRY.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
         raise SystemExit(f"HARNESS ERROR: cannot read {EXTRACTION_REGISTRY}: {e}")
     entries = registry.get("entries")
     if not isinstance(entries, list):
@@ -431,8 +519,8 @@ def _extraction_rust_files() -> list[str]:
 def main() -> int:
     self_test = "--self-test" in sys.argv[1:]
     try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        manifest = _load_json_unique(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
         print(f"HARNESS ERROR: cannot read {MANIFEST}: {e}", file=sys.stderr)
         return 2
     gates = manifest["gates"]
@@ -446,15 +534,45 @@ def main() -> int:
         if not fa:
             print("  SELF-TEST FAILED: uncovered-allowlist gate NOT caught — harness void.", file=sys.stderr)
             return 2
+        try:
+            _load_yaml_unique(
+                "jobs:\n"
+                "  ledger:\n"
+                "    steps:\n"
+                "      - run: make verify-ledger-consistency\n"
+                "        run: /bin/true\n"
+            )
+        except yaml.YAMLError:
+            pass
+        else:
+            print(
+                "  SELF-TEST FAILED: duplicate workflow YAML keys were accepted "
+                "last-value-wins.",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            _load_json_unique(
+                '{"required_context":"trusted","required_context":"no-op"}'
+            )
+        except ValueError:
+            pass
+        else:
+            print(
+                "  SELF-TEST FAILED: duplicate manifest JSON keys were accepted "
+                "last-value-wins.",
+                file=sys.stderr,
+            )
+            return 2
         ledger_gate = next(
             (g for g in gates if g["id"] == "verify-ledger-consistency"), None
         )
         if ledger_gate is None or not isinstance(
-            ledger_gate.get("required_step"), dict
+            ledger_gate.get("required_context"), dict
         ):
             print(
                 "  SELF-TEST FAILED: verify-ledger-consistency has no exact "
-                "`required_step` contract.",
+                "`required_context` contract.",
                 file=sys.stderr,
             )
             return 2
@@ -464,19 +582,25 @@ def main() -> int:
         if live_ledger_wf is None or not invokes_target(
             live_ledger_wf,
             ledger_gate["id"],
-            ledger_gate["required_step"],
+            ledger_gate["required_context"],
         )[0]:
             print(
-                "  SELF-TEST FAILED: the live authoritative ledger step does not "
-                "match its exact `required_step` contract.",
+                "  SELF-TEST FAILED: the live authoritative ledger execution does "
+                "not match its exact `required_context` contract.",
                 file=sys.stderr,
             )
             return 2
-        required_step = ledger_gate["required_step"]
+        required_context = ledger_gate["required_context"]
+        required_step = required_context["step"]
+        base_job = {
+            **required_context["job_equals"],
+            "steps": [required_step],
+        }
         context_mutations = {
             "launcher deletion": {
                 "jobs": {
                     "ledger": {
+                        **base_job,
                         "steps": [
                             {
                                 **required_step,
@@ -489,6 +613,7 @@ def main() -> int:
             "step if:false": {
                 "jobs": {
                     "ledger": {
+                        **base_job,
                         "steps": [{**required_step, "if": False}],
                     }
                 }
@@ -496,14 +621,15 @@ def main() -> int:
             "job if:false": {
                 "jobs": {
                     "ledger": {
+                        **base_job,
                         "if": False,
-                        "steps": [required_step],
                     }
                 }
             },
             "no-op shell": {
                 "jobs": {
                     "ledger": {
+                        **base_job,
                         "steps": [{**required_step, "shell": "/bin/true {0}"}],
                     }
                 }
@@ -511,6 +637,7 @@ def main() -> int:
             "hostile shell startup env": {
                 "jobs": {
                     "ledger": {
+                        **base_job,
                         "steps": [
                             {
                                 **required_step,
@@ -520,12 +647,36 @@ def main() -> int:
                     }
                 }
             },
+            "hostile job startup env": {
+                "jobs": {
+                    "ledger": {
+                        **base_job,
+                        "env": {"BASH_ENV": "/dev/stdin"},
+                    }
+                }
+            },
+            "untrusted runner": {
+                "jobs": {
+                    "ledger": {
+                        **base_job,
+                        "runs-on": "self-hosted",
+                    }
+                }
+            },
+            "job container": {
+                "jobs": {
+                    "ledger": {
+                        **base_job,
+                        "container": "attacker/example:latest",
+                    }
+                }
+            },
         }
         for label, broken in context_mutations.items():
             if not invokes_target(broken, ledger_gate["id"])[0] or invokes_target(
                 broken,
                 ledger_gate["id"],
-                required_step,
+                required_context,
             )[0]:
                 print(
                     "  SELF-TEST FAILED: "
@@ -579,8 +730,9 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        print(f"  self-test OK: allowlist gap caught ({len(fa)}), exact authoritative "
-              "ledger step/context suppression controls verified, "
+        print(f"  self-test OK: allowlist gap caught ({len(fa)}), duplicate YAML/JSON "
+              "keys rejected, exact authoritative ledger runner/step/context "
+              "suppression controls verified, "
               "paths-ignore denylist logic verified "
               f"(directly), kani-reverse gap caught ({len(rc)}), "
               f"kani-mutation-reverse gap caught ({len(rm)}), "

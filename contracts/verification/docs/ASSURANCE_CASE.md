@@ -73,10 +73,12 @@ Two further anti-vacuity gates were added 2026-06-29 (closing the recurring EF
   `scripts/run_authoritative_make.sh` under the same-UID setuid-sudo /
   empty-environment pre-exec boundary documented in `THREE_CLAIMS_PROOF.md`.
   CI invokes setuid sudo directly as the exact-pinned custom shell, before Bash,
-  then `exec`s pinned Bash on the launcher; the G1 self-test rejects conditional,
-  no-op-shell, and startup-environment suppression. The launcher requires the
-  target's exact completion receipt; direct `make` remains a diagnostic
-  implementation target.
+  then `exec`s pinned Bash on the launcher. The G1 contract also pins the
+  GitHub-hosted runner, forbids a job container/environment/skip controls, and
+  rejects duplicate workflow/manifest keys; its self-test covers runner,
+  container, conditional, no-op-shell, and startup-environment suppression.
+  The launcher requires the target's exact completion receipt; direct `make`
+  remains a diagnostic implementation target.
 
 The full method (the V1–V11 green-but-hollow catalog these gates close, and the
 V8/V9/V11 classes **no** gate can close) and the on-demand, framework-agnostic

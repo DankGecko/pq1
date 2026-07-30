@@ -404,10 +404,11 @@ outer Bash dependency: the `lean-fv.yml` step asks GitHub Runner to execute
 `/usr/bin/sudo -n -u runner -- /usr/bin/env -i /usr/bin/bash ... {0}` directly
 as its custom shell, and its body uses `exec /usr/bin/bash ...` on the launcher
 to preserve `sudo` as the launcher's parent. `scripts/gate_enforcement.json`
-pins that entire parsed step (name, custom shell, and run body), while the gate
-self-test proves that
-`if: false`, a no-op shell, hostile step startup state, or removal of the
-launcher is rejected.
+pins that parsed step plus `runs-on: ubuntu-latest` and the absence of a job
+container, ambient job environment, or skip controls. The checker rejects
+duplicate YAML/JSON keys instead of accepting last-value-wins ambiguity, while
+the gate self-test proves that an untrusted runner/container, `if: false`, a
+no-op shell, hostile startup state, or removal of the launcher is rejected.
 
 Sudo's secure-execution startup cannot be suppressed by caller loader
 variables; it immediately drops back to the same non-root user, then
