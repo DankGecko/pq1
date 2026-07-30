@@ -390,18 +390,23 @@ The ledger gate's authoritative local/CI invocation is the clean pre-exec
 receipt boundary below (run from the repository root):
 
 ```bash
-(
-  builtin exec -c /usr/bin/bash --noprofile --norc -p \
-    contracts/verification/scripts/run_authoritative_make.sh \
-    make -C contracts/verification verify-ledger-consistency
-)
+[[ ${UID} -ne 0 && -u /usr/bin/sudo && -x /usr/bin/sudo ]] &&
+  /usr/bin/sudo -n -u "#${UID}" -- \
+    /usr/bin/env -i \
+    /usr/bin/bash --noprofile --norc -p \
+      contracts/verification/scripts/run_authoritative_make.sh \
+      make -C contracts/verification verify-ledger-consistency
 ```
 
-The outer `builtin exec -c` is part of the security boundary: it clears the
-environment before a new dynamic loader starts. The launcher accepts only the
-exact ledger target, resolves its own physical single-link file identity before
-deriving the repository root, and requires its exact completion marker in a
-private receipt. A bare
+The shell-keyword preconditions and non-interactive setuid `sudo` call are part
+of the Linux security boundary. Sudo's secure-execution startup cannot be
+suppressed by caller loader variables; it immediately drops back to the
+caller's same non-root numeric UID, then `/usr/bin/env -i` clears the environment
+before Bash starts. The launcher rejects any leaked environment, accepts only
+the exact ledger target, resolves its own physical single-link file identity
+before deriving the repository root, and requires its exact completion marker
+in a private receipt. This requires passwordless same-UID sudo (`-n`) and fails
+closed when that platform prerequisite is unavailable. A bare
 `make -C contracts/verification verify-ledger-consistency` is useful
 diagnostically, but is not an authoritative hostile-environment receipt: loader
 controls can otherwise suppress Make before its in-file guards run.

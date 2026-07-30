@@ -1,11 +1,15 @@
 #!/usr/bin/bash
 # Authoritative caller boundary for the ledger-consistency Make target.
 #
-# Invoke only through the documented outer `builtin exec -c` command.  The
-# environment must be cleared by the already-running caller shell BEFORE a new
-# dynamically linked process starts: `/usr/bin/env -i ...` is too late when
-# `LD_TRACE_LOADED_OBJECTS=1` or `LD_DEBUG=help` can suppress `env`, Bash, or
-# Make itself while returning success.
+# Invoke only through the documented setuid-sudo -> `/usr/bin/env -i` command.
+# The environment must be cleared across a trusted pre-exec boundary BEFORE a
+# normal dynamically linked process starts: invoking `/usr/bin/env -i` directly
+# is too late when `LD_TRACE_LOADED_OBJECTS=1` or `LD_DEBUG=help` can suppress
+# `env`, Bash, or Make itself while returning success.  An in-shell
+# `builtin exec -c` is also insufficient when an exported function named
+# `builtin` can intercept that command.  Sudo immediately drops back to the
+# caller's same numeric UID; it supplies secure-execution startup, not elevated
+# gate authority.
 #
 # The make-shaped argument vector is intentional.  It keeps the target visible
 # to gate-enforcement lint while this script rejects every other target/option.
@@ -26,10 +30,10 @@ if (($# != 4)) \
 fi
 
 # Enforce the outer boundary instead of merely documenting it.  A Bash started
-# by `exec -c` exports only these bootstrap variables on this platform; any
-# caller-carried variable means the required environment-clearing exec was
-# omitted.  In particular, removing `exec -c` from CI cannot stay green under
-# an otherwise benign environment and silently re-open the loader surface.
+# by `env -i` exports only these bootstrap variables on this platform; any
+# caller-carried variable means the required environment-clearing boundary was
+# omitted.  In particular, removing `env -i` from CI cannot stay green under an
+# otherwise benign environment and silently re-open the loader surface.
 unexpected_env=()
 while IFS= read -r env_name; do
   case "${env_name}" in
@@ -40,6 +44,34 @@ done < <(builtin compgen -e)
 if ((${#unexpected_env[@]})); then
   fail_usage \
     "pre-exec environment was not empty (unexpected: ${unexpected_env[*]})"
+fi
+if ((UID == 0 || EUID != UID)); then
+  fail_usage \
+    "authoritative launcher requires one unchanged non-root numeric UID"
+fi
+parent_name=""
+parent_real_uid=""
+parent_effective_uid=""
+parent_saved_uid=""
+while IFS=$' \t' read -r field value1 value2 value3 _; do
+  case "${field}" in
+    Name:)
+      parent_name="${value1}"
+      ;;
+    Uid:)
+      parent_real_uid="${value1}"
+      parent_effective_uid="${value2}"
+      parent_saved_uid="${value3}"
+      ;;
+  esac
+done <"/proc/${PPID}/status"
+readonly parent_name parent_real_uid parent_effective_uid parent_saved_uid
+if [[ "${parent_name}" != "sudo" ]] \
+    || [[ "${parent_real_uid}" != "${UID}" ]] \
+    || [[ "${parent_effective_uid}" != "0" ]] \
+    || [[ "${parent_saved_uid}" != "0" ]]; then
+  fail_usage \
+    "authoritative launcher requires its same-UID setuid-sudo parent"
 fi
 
 # Rebuild the small environment needed by the fixed tools.  The Makefile

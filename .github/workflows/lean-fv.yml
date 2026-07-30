@@ -88,15 +88,17 @@ jobs:
         # coverage against the live Lean truth + the lint_fv pin. Ships its own
         # --self-test negative control (asserted first). The SLOW sibling
         # verify-proof-mutation runs in nightly.yml, not here.
-        # `exec -c` is a Bash builtin: it clears loader/startup variables before
-        # the next dynamic loader runs. The launcher then requires the target's
-        # exact completion receipt; a loader-suppressed `make` cannot exit green.
+        # The shell-keyword checks cannot be function-intercepted. Setuid sudo's
+        # secure-execution startup crosses the loader boundary, immediately drops
+        # back to this same non-root UID, and env -i clears all caller state.
+        # The launcher then requires the target's exact completion receipt.
         run: |
-          (
-            builtin exec -c /usr/bin/bash --noprofile --norc -p \
-              contracts/verification/scripts/run_authoritative_make.sh \
-              make -C contracts/verification verify-ledger-consistency
-          )
+          [[ ${UID} -ne 0 && -u /usr/bin/sudo && -x /usr/bin/sudo ]] &&
+            /usr/bin/sudo -n -u "#${UID}" -- \
+              /usr/bin/env -i \
+              /usr/bin/bash --noprofile --norc -p \
+                contracts/verification/scripts/run_authoritative_make.sh \
+                make -C contracts/verification verify-ledger-consistency
       - name: verify-storage-mutators (I-3 closed-world — no unverified cap-counter mutator)
         # Grep-based closed-world lint (no build) — was UNWIRED (FV review, 2026-07-01):
         # reachable_implies_combinedCap / no_reset_path are sound only if the
