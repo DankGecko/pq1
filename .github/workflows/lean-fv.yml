@@ -88,17 +88,16 @@ jobs:
         # coverage against the live Lean truth + the lint_fv pin. Ships its own
         # --self-test negative control (asserted first). The SLOW sibling
         # verify-proof-mutation runs in nightly.yml, not here.
-        # The shell-keyword checks cannot be function-intercepted. Setuid sudo's
-        # secure-execution startup crosses the loader boundary, immediately drops
-        # back to this same non-root UID, and env -i clears all caller state.
-        # The launcher then requires the target's exact completion receipt.
+        # GitHub Runner launches the setuid sudo binary directly as the custom
+        # shell, before any caller-influenced Bash or dynamic loader can suppress
+        # the body. sudo immediately drops back to the hosted runner account and
+        # env -i starts the only Bash. `exec` preserves sudo as the launcher's
+        # parent, which the launcher verifies before requiring the exact receipt.
+        shell: /usr/bin/sudo -n -u runner -- /usr/bin/env -i /usr/bin/bash --noprofile --norc -p -e -o pipefail {0}
         run: |
-          [[ ${UID} -ne 0 && -u /usr/bin/sudo && -x /usr/bin/sudo ]] &&
-            /usr/bin/sudo -n -u "#${UID}" -- \
-              /usr/bin/env -i \
-              /usr/bin/bash --noprofile --norc -p \
-                contracts/verification/scripts/run_authoritative_make.sh \
-                make -C contracts/verification verify-ledger-consistency
+          exec /usr/bin/bash --noprofile --norc -p \
+            contracts/verification/scripts/run_authoritative_make.sh \
+            make -C contracts/verification verify-ledger-consistency
       - name: verify-storage-mutators (I-3 closed-world — no unverified cap-counter mutator)
         # Grep-based closed-world lint (no build) — was UNWIRED (FV review, 2026-07-01):
         # reachable_implies_combinedCap / no_reset_path are sound only if the

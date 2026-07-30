@@ -18,9 +18,37 @@
 
 set -euo pipefail
 
-SCRIPT_SOURCE="${BASH_SOURCE[0]}"
-if [[ "${SCRIPT_SOURCE}" != /* ]]; then
-  SCRIPT_SOURCE="$(/usr/bin/pwd -P)/${SCRIPT_SOURCE}"
+SCRIPT_SOURCE_SPELLING="${BASH_SOURCE[0]}"
+if [[ "${SCRIPT_SOURCE_SPELLING}" != /* ]]; then
+  SCRIPT_SOURCE_SPELLING="$(/usr/bin/pwd -P)/${SCRIPT_SOURCE_SPELLING}"
+fi
+SCRIPT_SOURCE=$(
+  /usr/bin/readlink -f -- "${SCRIPT_SOURCE_SPELLING}"
+) || {
+  /usr/bin/printf \
+    'ERROR: cannot resolve the physical verification script file\n' >&2
+  exit 2
+}
+if [[ ! -f "${SCRIPT_SOURCE}" ]] ||
+   [[ "${SCRIPT_SOURCE##*/}" != "verify-three-claims.sh" ]]; then
+  /usr/bin/printf \
+    'ERROR: resolved an unexpected verification script file: %s\n' \
+    "${SCRIPT_SOURCE}" >&2
+  exit 2
+fi
+SCRIPT_SOURCE_LINKS=$(
+  /usr/bin/stat -c '%h' -- "${SCRIPT_SOURCE}"
+) || {
+  /usr/bin/printf \
+    'ERROR: cannot inspect the physical verification script file\n' >&2
+  exit 2
+}
+if [[ ! "${SCRIPT_SOURCE_LINKS}" =~ ^[0-9]+$ ]] ||
+   [[ "${SCRIPT_SOURCE_LINKS}" -ne 1 ]]; then
+  /usr/bin/printf \
+    'ERROR: refusing multiply-linked verification script: file=%s links=%s\n' \
+    "${SCRIPT_SOURCE}" "${SCRIPT_SOURCE_LINKS}" >&2
+  exit 2
 fi
 SCRIPT_PARENT=$(/usr/bin/dirname -- "${SCRIPT_SOURCE}")
 SCRIPT_DIR=$(
@@ -49,7 +77,8 @@ if [[ "${SCRIPT_DIR}" != "${VERIFICATION_DIR}/scripts" ]] ||
     "${SCRIPT_DIR}" "${REPO_ROOT}" >&2
   exit 2
 fi
-readonly SCRIPT_SOURCE SCRIPT_PARENT SCRIPT_DIR REPO_ROOT
+readonly SCRIPT_SOURCE_SPELLING SCRIPT_SOURCE SCRIPT_SOURCE_LINKS
+readonly SCRIPT_PARENT SCRIPT_DIR REPO_ROOT
 readonly VERIFICATION_DIR SMART_WALLET_DIR
 
 if [[ "${1:-}" == "--self-test-path-resolution" ]]; then
@@ -58,8 +87,8 @@ if [[ "${1:-}" == "--self-test-path-resolution" ]]; then
       'usage: %s --self-test-path-resolution\n' "${BASH_SOURCE[0]}" >&2
     exit 2
   fi
-  /usr/bin/printf 'script_dir=%s\nrepo_root=%s\n' \
-    "${SCRIPT_DIR}" "${REPO_ROOT}"
+  /usr/bin/printf 'script_file=%s\nscript_dir=%s\nrepo_root=%s\n' \
+    "${SCRIPT_SOURCE}" "${SCRIPT_DIR}" "${REPO_ROOT}"
   exit 0
 fi
 

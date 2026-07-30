@@ -386,7 +386,7 @@ local_documented`). Run the whole bundle locally with `make verify-three-claims`
 (fixed 2026-07-02: it deterministically exited 141 mid-run — a `head`-under-
 `pipefail` SIGPIPE).
 
-The ledger gate's authoritative local/CI invocation is the clean pre-exec
+The ledger gate's authoritative **local** invocation is the clean pre-exec
 receipt boundary below (run from the repository root):
 
 ```bash
@@ -398,15 +398,26 @@ receipt boundary below (run from the repository root):
       make -C contracts/verification verify-ledger-consistency
 ```
 
-The shell-keyword preconditions and non-interactive setuid `sudo` call are part
-of the Linux security boundary. Sudo's secure-execution startup cannot be
-suppressed by caller loader variables; it immediately drops back to the
-caller's same non-root numeric UID, then `/usr/bin/env -i` clears the environment
-before Bash starts. The launcher rejects any leaked environment, accepts only
-the exact ledger target, resolves its own physical single-link file identity
-before deriving the repository root, and requires its exact completion marker
-in a private receipt. This requires passwordless same-UID sudo (`-n`) and fails
-closed when that platform prerequisite is unavailable. A bare
+For the local command, the shell-keyword preconditions and non-interactive
+setuid `sudo` call are part of the Linux security boundary. CI removes even that
+outer Bash dependency: the `lean-fv.yml` step asks GitHub Runner to execute
+`/usr/bin/sudo -n -u runner -- /usr/bin/env -i /usr/bin/bash ... {0}` directly
+as its custom shell, and its body uses `exec /usr/bin/bash ...` on the launcher
+to preserve `sudo` as the launcher's parent. `scripts/gate_enforcement.json`
+pins that entire parsed step (name, custom shell, and run body), while the gate
+self-test proves that
+`if: false`, a no-op shell, hostile step startup state, or removal of the
+launcher is rejected.
+
+Sudo's secure-execution startup cannot be suppressed by caller loader
+variables; it immediately drops back to the same non-root user, then
+`/usr/bin/env -i` clears the environment before Bash starts. The launcher
+rejects any leaked environment, accepts only the exact ledger target, resolves
+its own physical single-link file identity before deriving the repository root,
+and requires its exact completion marker in a private receipt. This requires
+passwordless same-UID sudo (`-n`; the `runner` account on the declared
+GitHub-hosted Ubuntu job) and fails closed when that platform prerequisite is
+unavailable. A bare
 `make -C contracts/verification verify-ledger-consistency` is useful
 diagnostically, but is not an authoritative hostile-environment receipt: loader
 controls can otherwise suppress Make before its in-file guards run.

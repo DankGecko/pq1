@@ -1218,6 +1218,9 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	echo "  ok: exported Bash functions, Python startup hooks, and dynamic-loader preloads are CAUGHT"
 	+@out=$$(mktemp /tmp/pq-three-claims-path-selftest.XXXXXX); \
 	evilbin=$$(mktemp -d /tmp/pq-three-claims-path-planted.XXXXXX); \
+	real_script=$$(/usr/bin/readlink -f -- scripts/verify-three-claims.sh); \
+	expected_script_dir=$$(/usr/bin/pwd -P)/scripts; \
+	expected_repo_root=$$(builtin cd -P -- ../.. && /usr/bin/pwd -P); \
 	printf '#!/bin/sh\necho SPOOFED-DIRNAME >&2\nprintf "/tmp/pq-attacker-root/scripts\\n"\n' >$$evilbin/dirname; \
 	chmod +x $$evilbin/dirname; \
 	if ! PATH="$$evilbin:/usr/bin:/bin" CDPATH=/tmp/pq-attacker-cdpath \
@@ -1228,14 +1231,52 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	elif grep -Fq 'SPOOFED-DIRNAME' $$out; then \
 	  echo "CONTROL FAILURE: verify-three-claims resolved dirname through caller PATH" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbin; exit 1; \
-	elif [ "$$(sed -n 's/^script_dir=//p' $$out)" != "$$(/usr/bin/pwd -P)/scripts" ] \
-	    || [ "$$(sed -n 's/^repo_root=//p' $$out)" != \
-	         "$$(builtin cd -P -- ../.. && /usr/bin/pwd -P)" ]; then \
+	elif [ "$$(sed -n 's/^script_file=//p' $$out)" != "$$real_script" ] \
+	    || [ "$$(sed -n 's/^script_dir=//p' $$out)" != "$$expected_script_dir" ] \
+	    || [ "$$(sed -n 's/^repo_root=//p' $$out)" != "$$expected_repo_root" ]; then \
 	  echo "CONTROL FAILURE: verify-three-claims resolved an unexpected physical trust root" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbin; exit 1; \
 	fi; \
-	rm -rf $$out $$evilbin; \
-	echo "  ok: verify-three-claims ignores caller PATH/CDPATH during trust-root bootstrap"
+	linkroot=$$(mktemp -d /tmp/pq-three-claims-link-selftest.XXXXXX); \
+	mkdir -p \
+	  $$linkroot/symlink/contracts/verification/scripts \
+	  $$linkroot/symlink/contracts/smart-wallet \
+	  $$linkroot/hardlink/contracts/verification/scripts \
+	  $$linkroot/hardlink/contracts/smart-wallet; \
+	: >$$linkroot/symlink/contracts/verification/Makefile; \
+	: >$$linkroot/hardlink/contracts/verification/Makefile; \
+	ln -s "$$real_script" \
+	  $$linkroot/symlink/contracts/verification/scripts/verify-three-claims.sh; \
+	if ! /usr/bin/bash \
+	    $$linkroot/symlink/contracts/verification/scripts/verify-three-claims.sh \
+	    --self-test-path-resolution >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: symlinked verify-three-claims did not resolve safely" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbin $$linkroot; exit 1; \
+	elif [ "$$(sed -n 's/^script_file=//p' $$out)" != "$$real_script" ] \
+	    || [ "$$(sed -n 's/^script_dir=//p' $$out)" != "$$expected_script_dir" ] \
+	    || [ "$$(sed -n 's/^repo_root=//p' $$out)" != "$$expected_repo_root" ]; then \
+	  echo "CONTROL FAILURE: symlinked verify-three-claims rebound the trust root" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbin $$linkroot; exit 1; \
+	fi; \
+	if ! ln "$$real_script" \
+	    $$linkroot/hardlink/contracts/verification/scripts/verify-three-claims.sh; then \
+	  echo "CONTROL FAILURE: could not create verify-three-claims hard-link fixture" >&2; \
+	  rm -rf $$out $$evilbin $$linkroot; exit 1; \
+	elif /usr/bin/bash \
+	    $$linkroot/hardlink/contracts/verification/scripts/verify-three-claims.sh \
+	    --self-test-path-resolution >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: hard-linked verify-three-claims rebound the trust root" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbin $$linkroot; exit 1; \
+	elif ! grep -Fq 'refusing multiply-linked verification script' $$out; then \
+	  echo "CONTROL FAILURE: hard-linked verify-three-claims failed for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbin $$linkroot; exit 1; \
+	fi; \
+	rm -rf $$out $$evilbin $$linkroot; \
+	if [ "$$(/usr/bin/stat -c '%h' -- "$$real_script")" -ne 1 ]; then \
+	  echo "CONTROL FAILURE: verify-three-claims hard-link fixture was not removed" >&2; \
+	  exit 1; \
+	fi; \
+	echo "  ok: verify-three-claims ignores PATH/CDPATH, resolves symlinks physically, and rejects hard links"
 	+@out=$$(mktemp /tmp/pq-extraction-symlinked-makefile-selftest.XXXXXX); \
 	evildir=$$(mktemp -d /tmp/pq-extraction-symlinked-makefile.XXXXXX); \
 	mkdir -p $$evildir/scripts; \

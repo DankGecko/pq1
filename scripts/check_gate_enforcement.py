@@ -18,9 +18,9 @@ asserts the wiring matches the declared enforcement:
     trigger `paths:` COVER every `polices_paths` entry (or there is no paths filter).
     A polices path NOT covered by an allowlist `paths:` filter — OR one EXCLUDED by a
     `paths-ignore:` filter — = the F1 class = FAIL.
-    A gate with `required_run` must additionally match that complete step `run:` block
-    byte-for-byte; merely retaining the target text cannot downgrade a load-bearing
-    launcher to a diagnostic direct invocation.
+    A gate with `required_step` must additionally match that complete parsed step and
+    an unconditional job byte-for-byte; merely retaining the target text cannot
+    downgrade, condition away, or no-op a load-bearing launcher.
   * nightly — the `runs_in` workflow invokes it AND has a `schedule` trigger.
   * local_documented — deliberately not CI-gated; a NOTE, never a FAIL (must carry a
     `why`). Surfaced so the non-enforcement is VISIBLE, not silent.
@@ -113,13 +113,14 @@ def _dispatch_only(cond: str) -> bool:
 
 
 def invokes_target(
-    wf: dict, target: str, required_run: str | None = None
+    wf: dict, target: str, required_step: dict | None = None
 ) -> tuple[bool, bool, bool]:
     """Scan every job's steps for a `make [-C dir] <target>` invocation. If
-    `required_run` is supplied, only an exact complete run-block match counts. Returns
-    (invoked, non_blocking, dispatch_only) where the two flags OR together the JOB-
-    level and the matching STEP-level `continue-on-error` / `if:` (a non-blocking or
-    workflow_dispatch-gated STEP defeats a per-PR gate just as a job-level one does)."""
+    `required_step` is supplied, only an exact parsed step in a job with no `if`,
+    `strategy`, or `needs` skip controls counts. Returns (invoked, non_blocking,
+    dispatch_only) where the two flags OR together the JOB-level and the matching
+    STEP-level `continue-on-error` / `if:` (a non-blocking or workflow_dispatch-gated
+    STEP defeats a per-PR gate just as a job-level one does)."""
     pat = re.compile(r"\bmake\b[^\n]*\b" + re.escape(target) + r"\b")
     for job in (wf.get("jobs") or {}).values():
         if not isinstance(job, dict):
@@ -130,7 +131,11 @@ def invokes_target(
             if not isinstance(s, dict):
                 continue
             run = str(s.get("run", ""))
-            if pat.search(run) and (required_run is None or run == required_run):
+            exact_context = required_step is None or (
+                s == required_step
+                and not any(key in job for key in ("if", "strategy", "needs"))
+            )
+            if pat.search(run) and exact_context:
                 coe = job_coe or bool(s.get("continue-on-error"))
                 dispatch_only = job_dispatch_only or _dispatch_only(str(s.get("if", "")))
                 return True, coe, dispatch_only
@@ -177,20 +182,28 @@ def check_gate(g: dict) -> list[str]:
         fails.append(f"{target}: declared runs_in={runs_in} but that workflow file is absent.")
         return fails
 
-    required_run = g.get("required_run")
-    if required_run is not None and (
-        not isinstance(required_run, str) or not required_run
+    required_step = g.get("required_step")
+    if required_step is not None and (
+        not isinstance(required_step, dict)
+        or not isinstance(required_step.get("run"), str)
+        or not required_step["run"]
+        or not isinstance(required_step.get("shell"), str)
+        or not required_step["shell"]
     ):
-        fails.append(f"{target}: `required_run` must be a non-empty string.")
+        fails.append(
+            f"{target}: `required_step` must be an object with non-empty "
+            "`run` and `shell` strings."
+        )
         return fails
 
-    invoked, coe, dispatch_only = invokes_target(wf, target, required_run)
+    invoked, coe, dispatch_only = invokes_target(wf, target, required_step)
     if not invoked:
-        if required_run is not None and invokes_target(wf, target)[0]:
+        if required_step is not None and invokes_target(wf, target)[0]:
             fails.append(
-                f"{target}: {runs_in} retains the target text but its complete `run:` "
-                "block does not exactly match `required_run` — the authoritative "
-                "launcher boundary was changed or removed."
+                f"{target}: {runs_in} retains the target text but its complete step "
+                "or unconditional job context does not exactly match `required_step` "
+                "— the authoritative launcher boundary was changed, skipped, or "
+                "replaced with a no-op shell."
             )
             return fails
         # maybe another workflow invokes it — scan all, then report the mismatch
@@ -436,10 +449,12 @@ def main() -> int:
         ledger_gate = next(
             (g for g in gates if g["id"] == "verify-ledger-consistency"), None
         )
-        if ledger_gate is None or not isinstance(ledger_gate.get("required_run"), str):
+        if ledger_gate is None or not isinstance(
+            ledger_gate.get("required_step"), dict
+        ):
             print(
                 "  SELF-TEST FAILED: verify-ledger-consistency has no exact "
-                "`required_run` contract.",
+                "`required_step` contract.",
                 file=sys.stderr,
             )
             return 2
@@ -449,32 +464,76 @@ def main() -> int:
         if live_ledger_wf is None or not invokes_target(
             live_ledger_wf,
             ledger_gate["id"],
-            ledger_gate["required_run"],
+            ledger_gate["required_step"],
         )[0]:
             print(
-                "  SELF-TEST FAILED: the live authoritative ledger invocation does "
-                "not match its exact `required_run` contract.",
+                "  SELF-TEST FAILED: the live authoritative ledger step does not "
+                "match its exact `required_step` contract.",
                 file=sys.stderr,
             )
             return 2
-        prefix_deleted = {
-            "jobs": {
-                "ledger": {
-                    "steps": [{"run": ledger_gate["make"] + "\n"}],
+        required_step = ledger_gate["required_step"]
+        context_mutations = {
+            "launcher deletion": {
+                "jobs": {
+                    "ledger": {
+                        "steps": [
+                            {
+                                **required_step,
+                                "run": ledger_gate["make"] + "\n",
+                            }
+                        ]
+                    }
                 }
-            }
+            },
+            "step if:false": {
+                "jobs": {
+                    "ledger": {
+                        "steps": [{**required_step, "if": False}],
+                    }
+                }
+            },
+            "job if:false": {
+                "jobs": {
+                    "ledger": {
+                        "if": False,
+                        "steps": [required_step],
+                    }
+                }
+            },
+            "no-op shell": {
+                "jobs": {
+                    "ledger": {
+                        "steps": [{**required_step, "shell": "/bin/true {0}"}],
+                    }
+                }
+            },
+            "hostile shell startup env": {
+                "jobs": {
+                    "ledger": {
+                        "steps": [
+                            {
+                                **required_step,
+                                "env": {"BASH_ENV": "/dev/stdin"},
+                            }
+                        ],
+                    }
+                }
+            },
         }
-        if not invokes_target(prefix_deleted, ledger_gate["id"])[0] or invokes_target(
-            prefix_deleted,
-            ledger_gate["id"],
-            ledger_gate["required_run"],
-        )[0]:
-            print(
-                "  SELF-TEST FAILED: deleting the authoritative launcher prefix was "
-                "not distinguished from a valid ledger invocation.",
-                file=sys.stderr,
-            )
-            return 2
+        for label, broken in context_mutations.items():
+            if not invokes_target(broken, ledger_gate["id"])[0] or invokes_target(
+                broken,
+                ledger_gate["id"],
+                required_step,
+            )[0]:
+                print(
+                    "  SELF-TEST FAILED: "
+                    f"{label} was not distinguished from the authoritative "
+                    "ledger execution context.",
+                    file=sys.stderr,
+                )
+                return 2
         # The paths-ignore (denylist F1) branch is tested DIRECTLY against `_ignored`
         # rather than through a real workflow's `paths-ignore:` filter. CI trigger
         # configs are refactored over time — ci.yml intentionally DROPPED all
@@ -521,7 +580,7 @@ def main() -> int:
             )
             return 2
         print(f"  self-test OK: allowlist gap caught ({len(fa)}), exact authoritative "
-              "ledger invocation/prefix-deletion control verified, "
+              "ledger step/context suppression controls verified, "
               "paths-ignore denylist logic verified "
               f"(directly), kani-reverse gap caught ({len(rc)}), "
               f"kani-mutation-reverse gap caught ({len(rm)}), "
