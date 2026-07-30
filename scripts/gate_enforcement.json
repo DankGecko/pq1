@@ -22,8 +22,12 @@
       "id": "verify-ledger-consistency",
       "make": "make -C contracts/verification verify-ledger-consistency",
       "polices_paths": [
+        ".github/workflows/lean-fv.yml",
+        "contracts/verification/Makefile",
         "contracts/verification/docs/**",
-        "contracts/verification/lean/**"
+        "contracts/verification/lean/**",
+        "contracts/verification/scripts/check_ledger_consistency.py",
+        "contracts/verification/scripts/run_authoritative_make.sh"
       ],
       "runs_in": "lean-fv.yml",
       "enforcement": "per_pr_blocking",
@@ -44,7 +48,7 @@
           "strategy"
         ]
       },
-      "note": "F1 (2026-07-01): docs/** was ABSENT from lean-fv.yml paths, so ledger-only edits never triggered it. The exact required_context also pins the GitHub-hosted runner and forbids containers, removal, conditional suppression, hostile startup state, or a no-op shell from bypassing the load-bearing authoritative launcher."
+      "note": "F1 (2026-07-01): docs/** was ABSENT from lean-fv.yml paths, so ledger-only edits never triggered it. The declared surface now also includes the workflow, Make target, checker, and authoritative launcher themselves. The exact required_context pins the GitHub-hosted runner and forbids containers, removal, conditional suppression, hostile startup state, or a no-op shell from bypassing the load-bearing authoritative launcher."
     },
     {
       "id": "verify-fv-lints",

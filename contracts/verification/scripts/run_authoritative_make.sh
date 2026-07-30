@@ -161,7 +161,7 @@ if ((gate_status != 0)); then
   exit 1
 fi
 
-readonly expected_completion='OK: every advertised closure, exact row/artifact schema and value, count, status/method tally, and headline-statement pin matches the live Lean truth.'
+readonly expected_completion='OK: every advertised closure, exact full-ledger/row/artifact schema and value, count, status/method tally, and headline-statement pin matches the live Lean truth.'
 completion_count=$(
   /usr/bin/grep -Fxc -- "${expected_completion}" "${receipt}" || :
 )

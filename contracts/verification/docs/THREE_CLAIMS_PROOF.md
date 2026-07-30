@@ -117,7 +117,7 @@ re-runnable; their outputs are pinned in
 | **Lean 4** | `lake build` | Kernel-checked per-claim theorems against the Lean models of `validateUserOp` / `executeWithOffchainCount` / `initialize` / `addOwnerBytes` / etc. | `contracts/verification/lean/` |
 | **Halmos** | `halmos --bytecode <pinned-hash>` | Symbolic execution against the pinned PQSmartWallet runtime bytecode, discharging the `DeployedBytecode.PQSmartWallet_validateUserOp = validateSignature` axiom (A3.2) | `contracts/smart-wallet/test/halmos/` |
 | **Certora** | `certoraRun` | Inductive rules quantified over *all* methods, discharging A3.3 (Factory) + A3.4 (MultiOwnable) + the cross-method surface of A3.2 (Wallet) | `contracts/smart-wallet/certora/` |
-| **Foundry** | `make verify-three-claims` (clean-env Forge receipt: fuzz 256; invariants 256 × 500) | Stateful fuzzing + parity tests + codehash pinning, defense-in-depth and the empirical SHA-256 KAT for A1 | `contracts/smart-wallet/test/` |
+| **Foundry** | `make verify-three-claims` (dotenv-free, fixed-config/compiler Forge receipt: fuzz 256; invariants 256 × 500) | Stateful fuzzing + parity tests + codehash pinning, defense-in-depth and the empirical SHA-256 KAT for A1 | `contracts/smart-wallet/test/` |
 
 ### Why all four
 
@@ -351,11 +351,16 @@ This runs:
    per-claim corollary.
 3. `bash scripts/lint_axioms.sh` — fails on any new `True`-typed
    axiom outside the allowlist.
-4. A clean-environment `forge build && forge test --json` — runs the
-   Foundry unit / parity / codehash tests and rejects failures, empty result
-   sets, filters, any drift from the pinned label/status/kind manifest,
-   reduced fuzz counts, missing or failed corpus-replay fields, or any skip
-   outside the two pinned RPC-dependent receipt tests.
+4. A clean-environment `forge build && forge test --json` under the physical
+   project root and exact `foundry.toml` — rejects the Forge-loaded project
+   `.env`, pins the local Solc 0.8.28 binary path and digest, disables compiler
+   auto-detection and network resolution, then runs the Foundry unit / parity /
+   codehash tests and rejects failures, empty result sets, filters, any drift
+   from the pinned label/status/kind manifest, reduced fuzz counts, missing or
+   failed corpus-replay fields, or any skip outside the two pinned
+   RPC-dependent receipt tests. Run
+   `scripts/verify-three-claims.sh --self-test-forge-boundary` to inspect that
+   local tool/config boundary without starting the full campaign.
 5. A clean-environment `forge test --json --match-contract Invariants` —
    every invariant record must report exactly 256 runs × 500 calls
    (128,000 calls), explicit zero reverts, and an explicit zero
@@ -409,6 +414,11 @@ container, ambient job environment, or skip controls. The checker rejects
 duplicate YAML/JSON keys instead of accepting last-value-wins ambiguity, while
 the gate self-test proves that an untrusted runner/container, `if: false`, a
 no-op shell, hostile startup state, or removal of the launcher is rejected.
+The blocking-trigger contract also requires coverage of `master`, rejects
+ordered negative branch/path patterns rather than approximating their
+last-match semantics, and enrolls the workflow, Make target, checker, and
+launcher paths themselves so edits to the evidence boundary cannot suppress
+its own run.
 
 Sudo's secure-execution startup cannot be suppressed by caller loader
 variables; it immediately drops back to the same non-root user, then
@@ -506,7 +516,7 @@ pin in `test/PinnedCodehashes.t.sol`. The CI gate fails until:
 | File | Role |
 |------|------|
 | `contracts/verification/Makefile` | `make verify-three-claims` entry point |
-| `contracts/verification/scripts/verify-three-claims.sh` | Local end-to-end runner |
+| `contracts/verification/scripts/verify-three-claims.sh` | Local end-to-end runner; refuses project dotenv state and pins the Foundry root/config plus physical Solc 0.8.28 identity |
 | `contracts/verification/scripts/lint_axioms.sh` | Fails on new True-typed axioms |
 | `contracts/verification/scripts/dump_axioms.lean` | Prints axiom closure per top-level theorem |
 | `.github/workflows/{lean-fv,a31-transcription,ci}.yml` | The per-PR CI gates that enforce the bundle's constituent Lean/Foundry checks (the old nested `contracts/.github/workflows/verify-three-claims.yml` was dead — GitHub only runs root workflows — and was removed 2026-07-02) |

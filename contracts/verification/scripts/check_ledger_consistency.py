@@ -45,10 +45,12 @@ Independent checks (all run; every failure is reported), headed by:
   C9 (witness coverage), C10 (bridge-axiom RHS shape), C11 (exact closure key
   set), C13 (duplicate dump records), C14 (duplicate list identities), and the
   load itself rejects duplicate JSON object keys (C15). C16 pins the exact
+  top-level schema and full canonical ledger value in addition to the
   axiom/artifact row schemas, canonical row and artifact values, artifact field
-  types, artifact uniqueness, and status/method tallies — an ID/name swap,
-  duplicated receipt, extra field, fabricated method, or null codehash cannot
-  satisfy the discharge-artifact check by shape/presence alone. Plain
+  types, artifact uniqueness, and status/method tallies — assurance prose,
+  corollaries, witness descriptions, an ID/name swap, duplicated receipt, extra
+  field, fabricated method, or null codehash cannot drift by shape/presence
+  alone. Plain
   `json.loads` is silently last-wins, which would let a benign second record
   hide a rogue first one (the advertised-vs-checked divergence this gate exists
   to close).
@@ -128,6 +130,28 @@ EXPECTED_AXIOM_VALUE_SHA256 = (
 )
 EXPECTED_ARTIFACT_VALUE_SHA256 = (
     "addc699297832bf74f78d19b5114a979237d327b235b47514fe4421b002ad4e5"
+)
+EXPECTED_LEDGER_TOP_LEVEL_FIELDS = frozenset({
+    "axioms",
+    "claim_corollaries",
+    "closures",
+    "closures_doc",
+    "critical_alert",
+    "discharge_states",
+    "headline_one_line",
+    "headline_status",
+    "headline_status_explanation",
+    "headline_theorem",
+    "last_updated",
+    "schema_version",
+    "signature_pins",
+    "signature_pins_doc",
+    "summary",
+    "witness_coverage",
+    "witness_coverage_doc",
+})
+EXPECTED_LEDGER_VALUE_SHA256 = (
+    "d1dc37814c2f0a5ef7bf503cfb341b42b0a93720e2502f0e44eeb1609bfffe5d"
 )
 EXPECTED_ARTIFACT_METHOD_STATUS_COUNTS = {
     ("cited-tcb", "audit-citation"): 1,
@@ -522,8 +546,35 @@ def _canonical_rows_digest(rows: list[list[object]]) -> str:
 
 
 def check_ledger_schema(ledger: dict) -> list[str]:
-    """C16 — exact row schemas/values, unique artifacts, and method tallies."""
+    """C16 — exact document/row schemas and values plus artifact invariants."""
     fails: list[str] = []
+    if not isinstance(ledger, dict):
+        return ["C16 ledger root is not an object."]
+
+    top_level_fields = set(ledger)
+    if top_level_fields != EXPECTED_LEDGER_TOP_LEVEL_FIELDS:
+        missing = sorted(EXPECTED_LEDGER_TOP_LEVEL_FIELDS - top_level_fields)
+        extra = sorted(top_level_fields - EXPECTED_LEDGER_TOP_LEVEL_FIELDS)
+        fails.append(
+            "C16 exact top-level ledger schema drift: "
+            f"missing={missing}, extra={extra}"
+        )
+    ledger_value_digest = sha256_hex(
+        json.dumps(
+            ledger,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    if ledger_value_digest != EXPECTED_LEDGER_VALUE_SHA256:
+        fails.append(
+            "C16 exact full-ledger value drift: "
+            f"sha256={ledger_value_digest}, "
+            f"expected {EXPECTED_LEDGER_VALUE_SHA256}"
+        )
+
     axioms = ledger.get("axioms")
     if not isinstance(axioms, list):
         return ["C16 axioms is not an array."]
@@ -1294,6 +1345,36 @@ def self_test() -> int:
         "C16 duplicate artifact value",
         duplicated_artifact_fails,
     ))
+    added_corollary = json.loads(json.dumps(schema_clean))
+    added_corollary["claim_corollaries"].append(
+        "Fabricated.Assurance.Claim"
+    )
+    cases.append((
+        "C16 appended claim corollary",
+        check_ledger_schema(added_corollary),
+    ))
+    substituted_witness_construct = json.loads(json.dumps(schema_clean))
+    substituted_witness_construct["witness_coverage"][0][
+        "construct"
+    ] = "fabricated assurance construct"
+    cases.append((
+        "C16 substituted witness construct",
+        check_ledger_schema(substituted_witness_construct),
+    ))
+    substituted_headline = json.loads(json.dumps(schema_clean))
+    substituted_headline[
+        "headline_one_line"
+    ] = "Everything is unconditionally proven."
+    cases.append((
+        "C16 substituted assurance headline",
+        check_ledger_schema(substituted_headline),
+    ))
+    extra_top_level = json.loads(json.dumps(schema_clean))
+    extra_top_level["reviewer_only"] = True
+    cases.append((
+        "C16 extra top-level field",
+        check_ledger_schema(extra_top_level),
+    ))
 
     # control: a CLEAN input must NOT fire (guards against always-fire vacuity)
     clean = check_closures(ledger, live_ok) + check_counts(ledger) \
@@ -1422,9 +1503,9 @@ def main() -> int:
         print("\nThe human-facing ledger no longer matches the machine truth. "
               "Reconcile docs/AXIOM_STATUS.json with the Lean source/dump.", file=sys.stderr)
         return 1
-    print("\nOK: every advertised closure, exact row/artifact schema and value, "
-          "count, status/method tally, and headline-statement pin matches the "
-          "live Lean truth.")
+    print("\nOK: every advertised closure, exact full-ledger/row/artifact schema "
+          "and value, count, status/method tally, and headline-statement pin "
+          "matches the live Lean truth.")
     return 0
 
 

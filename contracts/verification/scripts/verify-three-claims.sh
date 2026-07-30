@@ -110,6 +110,44 @@ if [[ ! -x "${FORGE_BIN}" ]]; then
   fail "pinned Forge binary is missing or not executable: ${FORGE_BIN}"
   exit 2
 fi
+PINNED_FOUNDRY_CONFIG="${SMART_WALLET_DIR}/foundry.toml"
+FORGE_DOTENV="${SMART_WALLET_DIR}/.env"
+SOLC_BIN="${USER_HOME}/.local/share/svm/0.8.28/solc-0.8.28"
+SOLC_SHA256="9a0fb7e0db2c0641dbae1c5cc645dc686820c83af516226abb1c0a2f76636f25"
+if [[ ! -f "${PINNED_FOUNDRY_CONFIG}" ]]; then
+  fail "pinned Foundry config is missing or not a regular file: ${PINNED_FOUNDRY_CONFIG}"
+  exit 2
+fi
+if [[ ! -x "${SOLC_BIN}" ]]; then
+  fail "pinned Solidity compiler is missing or not executable: ${SOLC_BIN}"
+  exit 2
+fi
+SOLC_PHYSICAL=$(/usr/bin/readlink -f -- "${SOLC_BIN}") || {
+  fail "cannot resolve the pinned Solidity compiler: ${SOLC_BIN}"
+  exit 2
+}
+if [[ "${SOLC_PHYSICAL}" != "${SOLC_BIN}" ]]; then
+  fail "pinned Solidity compiler path is not physical: ${SOLC_BIN} -> ${SOLC_PHYSICAL}"
+  exit 2
+fi
+read -r SOLC_ACTUAL_SHA256 _ < <(/usr/bin/sha256sum -- "${SOLC_BIN}")
+if [[ "${SOLC_ACTUAL_SHA256}" != "${SOLC_SHA256}" ]]; then
+  fail "pinned Solidity compiler digest mismatch: got ${SOLC_ACTUAL_SHA256}, expected ${SOLC_SHA256}"
+  exit 2
+fi
+readonly PINNED_FOUNDRY_CONFIG FORGE_DOTENV SOLC_BIN SOLC_SHA256
+readonly SOLC_PHYSICAL SOLC_ACTUAL_SHA256
+
+assert_no_forge_dotenv() {
+  # Forge 1.7.1 loads <root>/.env after process startup, so `env -i` alone
+  # cannot keep DAPP_*/FOUNDRY_* controls out. The fixed cwd/root/config below
+  # reduce the dotenv search surface to this one path; reject even a dangling
+  # symlink before every Forge invocation.
+  if [[ -e "${FORGE_DOTENV}" || -L "${FORGE_DOTENV}" ]]; then
+    fail "refusing Forge-loaded dotenv file: ${FORGE_DOTENV}"
+    return 2
+  fi
+}
 
 # A caller-controlled Foundry environment can change result semantics
 # (`FORGE_ALLOW_FAILURE=true`), select a different profile, filter tests, or
@@ -143,6 +181,44 @@ readonly -a FORGE_ENV=(
   "FORGE_ALLOW_FAILURE=false"
   "NO_COLOR=1"
 )
+readonly -a FORGE_COMMON_ARGS=(
+  --root "${SMART_WALLET_DIR}"
+  --config-path "${PINNED_FOUNDRY_CONFIG}"
+  --use "${SOLC_BIN}"
+  --no-auto-detect
+  --offline
+)
+
+if [[ "${1:-}" == "--self-test-forge-boundary" ]]; then
+  if [[ "$#" -ne 1 ]]; then
+    /usr/bin/printf \
+      'usage: %s --self-test-forge-boundary\n' "${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+  assert_no_forge_dotenv
+  forge_config_json=$(
+    builtin cd -P -- "${SMART_WALLET_DIR}"
+    "${FORGE_ENV[@]}" "${FORGE_BIN}" config \
+      "${FORGE_COMMON_ARGS[@]}" --json
+  )
+  /usr/bin/python3 -I -S -c '
+import json, sys
+expected = sys.argv[1]
+cfg = json.load(sys.stdin)
+actual = cfg.get("solc")
+if actual != expected:
+    raise SystemExit("resolved solc drift: {!r} != {!r}".format(actual, expected))
+if cfg.get("auto_detect_solc") is not False:
+    raise SystemExit("automatic Solidity compiler detection remains enabled")
+if cfg.get("offline") is not True:
+    raise SystemExit("offline compiler resolution is not enabled")
+' "${SOLC_BIN}" <<<"${forge_config_json}"
+  /usr/bin/printf \
+    'forge=%s\nconfig=%s\nsolc=%s\nsolc_sha256=%s\ndotenv=absent\n' \
+    "${FORGE_BIN}" "${PINNED_FOUNDRY_CONFIG}" "${SOLC_BIN}" "${SOLC_ACTUAL_SHA256}"
+  exit 0
+fi
+
 forge_tmp_files=()
 cleanup_forge_receipts() {
   if ((${#forge_tmp_files[@]})); then
@@ -155,13 +231,15 @@ run_forge_evidence() {
   local mode="$1"
   shift
   local result_file error_file rc
+  assert_no_forge_dotenv
   result_file=$(/usr/bin/mktemp "/tmp/pq-forge-${mode}.XXXXXXXX.json")
   error_file=$(/usr/bin/mktemp "/tmp/pq-forge-${mode}.XXXXXXXX.err")
   forge_tmp_files+=("${result_file}" "${error_file}")
   rc=0
   (
-    cd "${SMART_WALLET_DIR}"
-    "${FORGE_ENV[@]}" "${FORGE_BIN}" test --json "$@" \
+    builtin cd -P -- "${SMART_WALLET_DIR}"
+    "${FORGE_ENV[@]}" "${FORGE_BIN}" test --json \
+      "${FORGE_COMMON_ARGS[@]}" "$@" \
       >"${result_file}" 2>"${error_file}"
   ) || rc=$?
   if ((rc != 0)); then
@@ -203,7 +281,10 @@ bold "[3b/8] I-3 closed-world gate (Storage mutator allow-list)"
 ok "check_storage_mutators passed"
 
 bold "[4/8] Foundry build + test (parity + unit)"
-(cd "${SMART_WALLET_DIR}" && "${FORGE_ENV[@]}" "${FORGE_BIN}" build 2>&1 | /usr/bin/tail -3)
+assert_no_forge_dotenv
+(builtin cd -P -- "${SMART_WALLET_DIR}" &&
+  "${FORGE_ENV[@]}" "${FORGE_BIN}" build \
+    "${FORGE_COMMON_ARGS[@]}" 2>&1 | /usr/bin/tail -3)
 /usr/bin/python3 -E -S "${SCRIPT_DIR}/check_forge_results.py" --self-test
 run_forge_evidence full
 ok "forge test passed with pinned identity/result/count receipt"

@@ -15,7 +15,8 @@ For each gate in scripts/gate_enforcement.json it parses the live CI workflows a
 asserts the wiring matches the declared enforcement:
   * per_pr_blocking — the declared `runs_in` workflow invokes `make <target>`, has a
     push/pull_request trigger, the invoking job/step is NOT `continue-on-error`, and the
-    trigger `paths:` COVER every `polices_paths` entry (or there is no paths filter).
+    trigger covers protected `master` plus every `polices_paths` entry (or has
+    no branch/path filter). Ordered negative branch/path patterns are rejected.
     A polices path NOT covered by an allowlist `paths:` filter — OR one EXCLUDED by a
     `paths-ignore:` filter — = the F1 class = FAIL.
     A gate with `required_context` must additionally match its complete parsed step,
@@ -44,6 +45,7 @@ path-uncovered / non-blocking); 2 = harness/manifest error (missing file, YAML p
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import sys
@@ -61,6 +63,7 @@ KANI_MUTATIONS = Path(__file__).resolve().parent / "kani_mutations.json"
 EXTRACTION_REGISTRY = (
     REPO_ROOT / "contracts" / "verification" / "extraction_registry.json"
 )
+REQUIRED_BLOCKING_BRANCH = "master"
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[object, object]]) -> dict:
@@ -206,24 +209,154 @@ def invokes_target(
 
 def triggers(wf: dict) -> dict:
     """Per-trigger shape. push/pull_request map to None (trigger absent) or a dict
-    {"paths": <allowlist|None>, "paths_ignore": <denylist|None>}; a present trigger
-    with neither filter has both None (= covers everything)."""
+    carrying raw path and branch filters; a present trigger with no filters covers
+    every path/branch. Ordered negative `!` patterns are retained for fail-closed
+    validation by `_per_pr_trigger_failures`."""
     on = _get_on(wf)
     out = {"push": None, "pull_request": None, "schedule": False, "workflow_dispatch": False}
     if isinstance(on, list):
         for k in on:
             if k in ("push", "pull_request"):
-                out[k] = {"paths": None, "paths_ignore": None}
+                out[k] = {
+                    "paths": None,
+                    "paths_ignore": None,
+                    "branches": None,
+                    "branches_ignore": None,
+                }
             elif k in ("schedule", "workflow_dispatch"):
                 out[k] = True
         return out
     for k in ("push", "pull_request"):
         if k in on:
             node = on[k] if isinstance(on[k], dict) else {}
-            out[k] = {"paths": node.get("paths"), "paths_ignore": node.get("paths-ignore")}
+            out[k] = {
+                "paths": node.get("paths"),
+                "paths_ignore": node.get("paths-ignore"),
+                "branches": node.get("branches"),
+                "branches_ignore": node.get("branches-ignore"),
+            }
     out["schedule"] = "schedule" in on
     out["workflow_dispatch"] = "workflow_dispatch" in on
     return out
+
+
+def _per_pr_trigger_failures(
+    target: str,
+    runs_in: str,
+    policed_paths: list[str],
+    tg: dict,
+) -> tuple[list[str], bool]:
+    """Fail closed on path/branch forms that can suppress a blocking gate.
+
+    GitHub evaluates negative `!` entries in positive `paths`/`branches` lists
+    in order. Proving whole-prefix coverage through arbitrary ordered
+    include/exclude/re-include programs is outside this small lint, so those
+    forms are rejected rather than silently approximated. A blocking gate must
+    also cover the repository's protected `master` branch.
+    """
+    fails: list[str] = []
+    has_ignore_filter = False
+    if tg["push"] is None and tg["pull_request"] is None:
+        fails.append(
+            f"{target}: per_pr_blocking but {runs_in} has no "
+            "push/pull_request trigger."
+        )
+    for trig in ("push", "pull_request"):
+        node = tg[trig]
+        if node is None:
+            continue
+
+        malformed = False
+        parsed: dict[str, list[str] | None] = {}
+        for key in ("paths", "paths_ignore", "branches", "branches_ignore"):
+            raw = node.get(key)
+            if raw is not None and (
+                not isinstance(raw, list)
+                or any(not isinstance(item, str) or not item for item in raw)
+            ):
+                fails.append(
+                    f"{target}: {runs_in} `{trig}.{key}` must be a list of "
+                    "non-empty strings."
+                )
+                malformed = True
+                parsed[key] = None
+            else:
+                parsed[key] = raw
+        if malformed:
+            continue
+
+        allow = parsed["paths"]
+        deny = parsed["paths_ignore"]
+        branches = parsed["branches"]
+        branches_ignore = parsed["branches_ignore"]
+
+        if branches is not None and branches_ignore is not None:
+            fails.append(
+                f"{target}: {runs_in} `{trig}` cannot combine `branches` and "
+                "`branches-ignore`."
+            )
+        for label, patterns in (
+            ("paths", allow),
+            ("paths-ignore", deny),
+            ("branches", branches),
+            ("branches-ignore", branches_ignore),
+        ):
+            negatives = [
+                pattern for pattern in (patterns or [])
+                if pattern.startswith("!")
+            ]
+            if negatives:
+                fails.append(
+                    f"{target}: {runs_in} `{trig}.{label}` uses ordered "
+                    f"negative pattern(s) {negatives}; blocking-gate coverage "
+                    "rejects this unmodelled suppression form."
+                )
+
+        positive_branches = [
+            pattern for pattern in (branches or [])
+            if not pattern.startswith("!")
+        ]
+        if branches is not None and not any(
+            fnmatch.fnmatchcase(REQUIRED_BLOCKING_BRANCH, pattern)
+            for pattern in positive_branches
+        ):
+            fails.append(
+                f"{target}: {runs_in} `{trig}.branches` does not cover "
+                f"protected branch `{REQUIRED_BLOCKING_BRANCH}`."
+            )
+        if branches_ignore is not None and any(
+            fnmatch.fnmatchcase(REQUIRED_BLOCKING_BRANCH, pattern)
+            for pattern in branches_ignore
+            if not pattern.startswith("!")
+        ):
+            fails.append(
+                f"{target}: {runs_in} `{trig}.branches-ignore` excludes "
+                f"protected branch `{REQUIRED_BLOCKING_BRANCH}`."
+            )
+
+        for policed in policed_paths:
+            if allow is not None and not _covers(
+                [p for p in allow if not p.startswith("!")],
+                policed,
+            ):
+                fails.append(
+                    f"{target}: {runs_in} `{trig}.paths` does NOT cover "
+                    f"policed `{policed}` (the F1 class — gate can't fire on "
+                    "edits to that surface)."
+                )
+            if deny and _ignored(
+                [p for p in deny if not p.startswith("!")],
+                policed,
+            ):
+                has_ignore_filter = True
+                fails.append(
+                    f"{target}: {runs_in} `{trig}.paths-ignore` EXCLUDES "
+                    f"policed `{policed}` (the F1 class — a push touching only "
+                    "that surface is skipped)."
+                )
+        if deny:
+            has_ignore_filter = True
+    return fails, has_ignore_filter
 
 
 def check_gate(g: dict) -> list[str]:
@@ -304,29 +437,17 @@ def check_gate(g: dict) -> list[str]:
     tg = triggers(wf)
     has_ignore_filter = False
     if enforcement == "per_pr_blocking":
-        if tg["push"] is None and tg["pull_request"] is None:
-            fails.append(f"{target}: per_pr_blocking but {runs_in} has no push/pull_request trigger.")
+        trigger_fails, has_ignore_filter = _per_pr_trigger_failures(
+            target,
+            runs_in,
+            g.get("polices_paths", []),
+            tg,
+        )
+        fails += trigger_fails
         if coe:
             fails.append(f"{target}: per_pr_blocking but its job/step is `continue-on-error: true` (non-blocking).")
         if dispatch_only:
             fails.append(f"{target}: per_pr_blocking but its job/step is workflow_dispatch-gated (never fires on PRs).")
-        # F1 check: an allowlist `paths:` must COVER every policed path, and a
-        # `paths-ignore:` denylist must NOT EXCLUDE any policed path.
-        for trig in ("push", "pull_request"):
-            node = tg[trig]
-            if node is None:
-                continue  # this trigger absent
-            allow, deny = node["paths"], node["paths_ignore"]
-            for policed in g.get("polices_paths", []):
-                if allow is not None and not _covers(allow, policed):
-                    fails.append(f"{target}: {runs_in} `{trig}.paths` does NOT cover policed `{policed}` "
-                                 f"(the F1 class — gate can't fire on edits to that surface).")
-                if deny and _ignored(deny, policed):
-                    has_ignore_filter = True
-                    fails.append(f"{target}: {runs_in} `{trig}.paths-ignore` EXCLUDES policed `{policed}` "
-                                 f"(the F1 class — a push touching only that surface is skipped).")
-            if deny:
-                has_ignore_filter = True
     elif enforcement == "nightly":
         if not tg["schedule"]:
             fails.append(f"{target}: enforcement=nightly but {runs_in} has no `schedule` trigger.")
@@ -685,6 +806,67 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 2
+        live_tg = triggers(live_ledger_wf)
+        live_trigger_fails, _ = _per_pr_trigger_failures(
+            ledger_gate["id"],
+            ledger_gate["runs_in"],
+            ledger_gate["polices_paths"],
+            live_tg,
+        )
+        if live_trigger_fails:
+            print(
+                "  SELF-TEST FAILED: live authoritative trigger contract is "
+                f"invalid: {live_trigger_fails}",
+                file=sys.stderr,
+            )
+            return 2
+        trigger_mutations = {}
+        nonmatching_branch = json.loads(json.dumps(live_tg))
+        for trig in ("push", "pull_request"):
+            nonmatching_branch[trig]["branches"] = [
+                "definitely-not-master"
+            ]
+        trigger_mutations["nonmatching branch filter"] = nonmatching_branch
+        ordered_branch_exclusion = json.loads(json.dumps(live_tg))
+        for trig in ("push", "pull_request"):
+            ordered_branch_exclusion[trig]["branches"] = [
+                "**",
+                "!master",
+            ]
+        trigger_mutations[
+            "ordered negative branch exclusion"
+        ] = ordered_branch_exclusion
+        ordered_path_exclusion = json.loads(json.dumps(live_tg))
+        for trig in ("push", "pull_request"):
+            ordered_path_exclusion[trig]["paths"].append(
+                "!contracts/verification/docs/**"
+            )
+        trigger_mutations[
+            "ordered negative path exclusion"
+        ] = ordered_path_exclusion
+        missing_workflow_self_path = json.loads(json.dumps(live_tg))
+        for trig in ("push", "pull_request"):
+            missing_workflow_self_path[trig]["paths"] = [
+                path for path in missing_workflow_self_path[trig]["paths"]
+                if path != ".github/workflows/lean-fv.yml"
+            ]
+        trigger_mutations[
+            "missing workflow self-path"
+        ] = missing_workflow_self_path
+        for label, broken_tg in trigger_mutations.items():
+            trigger_fails, _ = _per_pr_trigger_failures(
+                ledger_gate["id"],
+                ledger_gate["runs_in"],
+                ledger_gate["polices_paths"],
+                broken_tg,
+            )
+            if not trigger_fails:
+                print(
+                    "  SELF-TEST FAILED: "
+                    f"{label} did not invalidate the blocking trigger contract.",
+                    file=sys.stderr,
+                )
+                return 2
         # The paths-ignore (denylist F1) branch is tested DIRECTLY against `_ignored`
         # rather than through a real workflow's `paths-ignore:` filter. CI trigger
         # configs are refactored over time — ci.yml intentionally DROPPED all
@@ -732,7 +914,8 @@ def main() -> int:
             return 2
         print(f"  self-test OK: allowlist gap caught ({len(fa)}), duplicate YAML/JSON "
               "keys rejected, exact authoritative ledger runner/step/context "
-              "suppression controls verified, "
+              "suppression controls verified, branch/ordered-path/workflow-self "
+              "trigger suppressions rejected, "
               "paths-ignore denylist logic verified "
               f"(directly), kani-reverse gap caught ({len(rc)}), "
               f"kani-mutation-reverse gap caught ({len(rm)}), "
