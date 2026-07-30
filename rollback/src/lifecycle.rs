@@ -15,7 +15,8 @@ use fw_manifest::v6::QW_PENDING;
 use crate::arm_token::{ArmState, ArmToken};
 use crate::evidence::{AcceptedArtifact, VerifiedArtifact};
 use crate::journal::{
-    decode_terminal_set, observe_marker, InstallGenerationEvidence, MarkerObservation,
+    decode_terminal_set, full_install_generation, install_half_evidence, observe_marker,
+    surviving_install_generation, InstallGenerationEvidence, MarkerObservation,
     SurvivingTerminalSet, TerminalRejection, TerminalSetOutcome,
 };
 use crate::qw_read::{Durability, FreshQwRead, LaunchAttribution};
@@ -88,6 +89,46 @@ pub enum LifecycleState {
     /// Every other combination (§6.2 L2191–2193). Ineligible; has no
     /// marker-only outgoing transition.
     Malformed(MalformedReason),
+}
+
+/// The canonical install-generation orchestrator (R4-1): the public
+/// path for constructing install-generation evidence. The presented
+/// install-identity reads must sit at the identity's canonical install
+/// QW addresses and share one common probe epoch; the raw codec
+/// constructors stay crate-private. With `later_evidence == None` only
+/// a `FullInstallGeneration` can result (before-activation rule); with
+/// `Some(..)` the qualified-survivor rule applies.
+pub fn decode_install_generation(
+    identity: &crate::evidence::ArtifactIdentity,
+    id: AttributedRead<'_>,
+    inv: AttributedRead<'_>,
+    later_evidence: Option<fw_manifest::v6::LaterLifecycleEvidence>,
+) -> Option<InstallGenerationEvidence> {
+    for (read, expected_addr) in [
+        (id.read, identity.install_id_qw_address()),
+        (inv.read, identity.install_id_inv_qw_address()),
+    ] {
+        if let crate::qw_read::FreshQwRead::Clean(qw) = read {
+            if qw.addr() != expected_addr {
+                return None;
+            }
+        }
+    }
+    if let (crate::qw_read::FreshQwRead::Clean(a), crate::qw_read::FreshQwRead::Clean(b)) =
+        (id.read, inv.read)
+    {
+        if a.probe_epoch() != b.probe_epoch() {
+            return None;
+        }
+    }
+    let id_ev = install_half_evidence(id.read, id.durability, id.launch);
+    let inv_ev = install_half_evidence(inv.read, inv.durability, inv.launch);
+    match later_evidence {
+        None => full_install_generation(id_ev, inv_ev).map(InstallGenerationEvidence::Full),
+        Some(ev) => {
+            surviving_install_generation(id_ev, inv_ev, ev).map(InstallGenerationEvidence::Surviving)
+        }
+    }
 }
 
 /// Decode one slot's lifecycle row. Consumes the terminal-set outcome and

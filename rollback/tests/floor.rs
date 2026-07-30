@@ -254,12 +254,72 @@ fn t_classification_and_preflight() {
     let FloorView::Steady(proof) = bank.decode(FENCE_OK, None) else {
         panic!("steady")
     };
-    let receipt = preflight(&proof, 6, 4).expect("receipt");
+    let receipt = preflight(&proof, 6).expect("receipt");
     assert_eq!((receipt.floor(), receipt.target(), receipt.group()), (5, 6, 2));
-    assert_eq!(receipt.margin(), 4);
-    assert!(preflight(&proof, 5, 4).is_none());
-    assert!(preflight(&proof, 4, 4).is_none());
-    assert!(preflight(&proof, 6, INITIAL_THRESHOLD - 1).is_none());
+    // Proof-bound margin: 28 canonical virgins remain after the
+    // committed group's four role cells.
+    assert_eq!(receipt.margin(), 28);
+    assert_eq!(proof.virgin_cells(), 28);
+    assert!(preflight(&proof, 5).is_none());
+    assert!(preflight(&proof, 4).is_none());
+}
+
+#[test]
+fn preflight_margin_is_proof_bound_not_caller_asserted() {
+    // A receipt preflighted from a bank with 27 virgins (five role
+    // cells) must not validate against a proof with 28 — the margin is
+    // bound to the decoding, not to any caller-supplied number.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_floor_record(5, 1));
+    let FloorView::Steady(proof_27) = bank.decode(FENCE_OK, None) else {
+        panic!("steady")
+    };
+    assert_eq!(proof_27.virgin_cells(), 27);
+    let receipt = preflight(&proof_27, 6).expect("receipt");
+    assert_eq!(receipt.margin(), 27);
+    let mut bank = steady_bank(5, 1);
+    let FloorView::Steady(proof_28) = bank.decode(FENCE_OK, None) else {
+        panic!("steady")
+    };
+    assert_eq!(proof_28.virgin_cells(), 28);
+    assert_ne!(
+        receipt.snapshot_digest(),
+        proof_28.snapshot_digest(),
+        "different virgin counts change the snapshot"
+    );
+    assert!(!receipt_matches_for_test(&proof_28, &receipt));
+
+    // Capacity is proof-bound: a full bank of role cells (zero virgins)
+    // yields no receipt at all.
+    let mut full = Bank::new();
+    for _ in 0..(RESERVED_ROLLBACK_QWS - 1) {
+        full.clean(encode_floor_record(5, 1));
+    }
+    full.clean(encode_complete_record(1));
+    full.route1(false);
+    let FloorView::Steady(full_proof) = full.decode(FENCE_OK, None) else {
+        panic!("steady")
+    };
+    assert_eq!(full_proof.virgin_cells(), 0);
+    assert!(preflight(&full_proof, 6).is_none());
+}
+
+/// Mirror of the crate-private revalidation rule (floor/target/digest/
+/// group/proof-bound margin) for direct margin testing.
+fn receipt_matches_for_test(
+    steady: &pqsigner_rollback::floor::SteadyProof,
+    receipt: &pqsigner_rollback::floor::EpochBumpReceipt,
+) -> bool {
+    let expected_group = match steady.group() {
+        GroupIdentity::Base0 => Some(1),
+        GroupIdentity::Group(g) => g.checked_add(1),
+    };
+    receipt.floor() == steady.floor()
+        && receipt.target() == steady.floor() + 1
+        && receipt.snapshot_digest() == steady.snapshot_digest()
+        && Some(receipt.group()) == expected_group
+        && receipt.margin() == steady.virgin_cells()
+        && receipt.margin() >= INITIAL_THRESHOLD
 }
 
 // ---------------------------------------------------------------------------
@@ -528,7 +588,7 @@ fn preflight_group_overflow_fail_closed() {
     };
     // g == u32::MAX: the allocation sequence cannot advance — fail
     // closed, no panic, no wrap.
-    assert!(preflight(&proof, 6, 4).is_none());
+    assert!(preflight(&proof, 6).is_none());
 }
 
 fn view_name(v: &FloorView) -> &'static str {

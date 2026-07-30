@@ -49,6 +49,16 @@ impl ArtifactIdentity {
         pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, page)
     }
 
+    /// Canonical address of the install-id QW for this artifact.
+    pub fn install_id_qw_address(&self) -> u32 {
+        self.manifest_page_start + v6::OFF_QW_INSTALL_ID as u32
+    }
+
+    /// Canonical address of the install-id complement QW.
+    pub fn install_id_inv_qw_address(&self) -> u32 {
+        self.manifest_page_start + v6::OFF_QW_INSTALL_ID_INV as u32
+    }
+
     /// Derive the identity for a verified manifest + install identity.
     /// Returns `None` when `R`/`E` are outside `1..=0xFFFF_FFFE` (a
     /// struct-literal or mutated `ManifestV6` can carry out-of-range
@@ -226,7 +236,9 @@ impl AcceptedArtifact {
     /// Join artifact proof + robust terminal evidence. Returns `None`
     /// when the two do not carry the exact same `ArtifactEvidenceKey`
     /// digest (a cross-pass, cross-slot, or cross-generation join).
-    pub fn new(
+    /// Crate-private (R4-1): the public authority path is
+    /// `lifecycle::decode_lifecycle`.
+    pub(crate) fn new(
         artifact: VerifiedArtifact,
         evidence: RobustConfirmedEvidence,
     ) -> Option<AcceptedArtifact> {

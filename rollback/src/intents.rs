@@ -266,6 +266,9 @@ fn receipt_matches(steady: &SteadyProof, receipt: &EpochBumpReceipt, t: u32) -> 
         && receipt.target() == t
         && receipt.snapshot_digest() == steady.snapshot_digest()
         && Some(receipt.group()) == expected_group
+        // The margin is proof-bound: it must equal THIS proof's decoded
+        // virgin-cell count (and fund the initial threshold).
+        && receipt.margin() == steady.virgin_cells()
         && receipt.margin() >= crate::floor::INITIAL_THRESHOLD
 }
 
@@ -673,7 +676,7 @@ pub fn arm_peer_repair<B: RollbackBackend>(
 /// slot (§10 item 10: "full erase/restage evidence"). The physical
 /// writer is out of scope; this HOST-MODEL constructor stands in for
 /// the writer's receipt.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct EraseRestageReceipt {
     slot: PhysicalSlot,
     prior_manifest_digest: [u8; 32],
@@ -702,7 +705,7 @@ impl EraseRestageReceipt {
 /// prior [`ArtifactIdentity`]) plus a full erase/restage receipt binding
 /// that same slot and manifest digest. Consumed linearly by
 /// [`CheckedDegradedRepairIntent::new`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct DegradedHistoryEvidence {
     prior_identity: crate::evidence::ArtifactIdentity,
     restage: EraseRestageReceipt,

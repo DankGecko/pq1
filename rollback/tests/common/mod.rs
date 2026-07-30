@@ -11,9 +11,7 @@ use pqsigner_rollback::backend::{ProbeScript, ScriptedBackend};
 /// infer at bare call sites).
 pub type TestBackend = ScriptedBackend<64>;
 use pqsigner_rollback::evidence::{ArtifactIdentity, VerificationPass, VerifiedArtifact};
-use pqsigner_rollback::journal::{
-    full_install_generation, install_half_evidence, InstallGenerationEvidence,
-};
+use pqsigner_rollback::journal::InstallGenerationEvidence;
 use pqsigner_rollback::qw_read::{Durability, FreshArrayProbe, FreshQwRead, LaunchAttribution};
 
 /// The §6.1 golden install identity.
@@ -106,19 +104,25 @@ pub fn probe_route1(b: &mut ScriptedBackend, which: u16, bytes: [u8; 16]) -> Fre
 
 pub const ERASED: [u8; 16] = [0xFF; 16];
 
-/// Full install-generation evidence for [`INSTALL_ID`].
+/// Full install-generation evidence for [`INSTALL_ID`], constructed via
+/// the canonical orchestrator at the artifact's identity addresses
+/// (R4-1).
 pub fn full_generation(
-    b: &mut ScriptedBackend,
+    b: &mut TestBackend,
+    art: &VerifiedArtifact,
     id_idx: u16,
     inv_idx: u16,
 ) -> InstallGenerationEvidence {
-    let id = probe_clean(b, id_idx, INSTALL_ID);
-    let inv = probe_clean(b, inv_idx, INSTALL_ID_INV);
-    let id_ev = install_half_evidence(&id, CLEAN, MAY_LAUNCH);
-    let inv_ev = install_half_evidence(&inv, CLEAN, MAY_LAUNCH);
-    InstallGenerationEvidence::Full(
-        full_install_generation(id_ev, inv_ev).expect("full generation"),
-    )
+    let identity = art.identity();
+    let id = probe_at(b, id_idx, identity.install_id_qw_address(), ProbeScript::Clean(INSTALL_ID));
+    let inv = probe_at(
+        b,
+        inv_idx,
+        identity.install_id_inv_qw_address(),
+        ProbeScript::Clean(INSTALL_ID_INV),
+    );
+    pqsigner_rollback::lifecycle::decode_install_generation(identity, atr(&id), atr(&inv), None)
+        .expect("full generation")
 }
 
 /// The artifact identity fields for binding an arm token to `artifact`.
@@ -335,7 +339,7 @@ pub fn accepted_artifact(
         ProbeScript::Clean(QW_CONFIRMED_1),
         ProbeScript::Clean(ERASED),
     );
-    let gen = Some(full_generation(b, 13, 14));
+    let gen = Some(full_generation(b, &art, 13, 14));
     let t = m.security_epoch - 1;
     match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, t) {
         LifecycleState::ConfirmedRobust(a) => a,

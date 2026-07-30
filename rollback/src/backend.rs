@@ -90,7 +90,6 @@ mod scripted {
     }
 
     /// A complete scripted floor/stage state for `redecode_floor`.
-    #[derive(Clone, Copy)]
     pub struct FloorScript {
         pub cells: [Option<FloorCellScript>; 32],
         pub cells_len: usize,
@@ -294,25 +293,43 @@ mod scripted {
         }
 
         fn redecode_floor(&mut self) -> FloorView {
-            let Some(script) = self.floor_script else {
-                // No scripted floor state: fail CLOSED.
-                return FloorView::Unknown(floor::FloorFault::AmbiguousStage);
+            // Extract the script into locals first (StageBinding is
+            // linear; it is reconstructed through the range-checked
+            // constructor), then mutate the probe table.
+            let (cells, cells_len, route1, fence, binding) = {
+                let Some(script) = self.floor_script.as_ref() else {
+                    // No scripted floor state: fail CLOSED.
+                    return FloorView::Unknown(floor::FloorFault::AmbiguousStage);
+                };
+                let mut cells: [Option<FloorCellScript>; 32] = [None; 32];
+                cells[..script.cells_len].copy_from_slice(&script.cells[..script.cells_len]);
+                let binding = script.stage_binding.as_ref().map(|b| {
+                    floor::StageBinding::new(b.slot(), b.r(), b.e(), *b.manifest_digest())
+                        .expect("script binding was range-checked")
+                });
+                (
+                    cells,
+                    script.cells_len,
+                    script.route1,
+                    script.completion_fence,
+                    binding,
+                )
             };
             // Load the scripted outcomes for EVERY canonical index
             // (unscripted tail = canonical virgin), then run the REAL
             // decoder over a freshly probed full scan.
             self.clear_probe_scripts();
-            for (i, cell) in script.cells[..script.cells_len].iter().enumerate() {
+            for (i, cell) in cells[..cells_len].iter().enumerate() {
                 if let Some(scripted) = cell {
                     let addr = floor::canonical_cell_addr(i as u16);
                     self.script(i as u16, addr, scripted.outcome);
                 }
             }
-            for i in script.cells_len..floor::RESERVED_ROLLBACK_QWS {
+            for i in cells_len..floor::RESERVED_ROLLBACK_QWS {
                 let addr = floor::canonical_cell_addr(i as u16);
                 self.script(i as u16, addr, ProbeScript::Clean([0xFF; 16]));
             }
-            for (j, cell) in script.route1.iter().enumerate() {
+            for (j, cell) in route1.iter().enumerate() {
                 let addr = floor::canonical_route1_addr(j);
                 self.script(60 + j as u16, addr, cell.outcome);
             }
@@ -320,19 +337,19 @@ mod scripted {
                 Durability::DurableClean,
                 LaunchAttribution::ProvenNoLaunch,
             ); floor::RESERVED_ROLLBACK_QWS];
-            for (i, cell) in script.cells[..script.cells_len].iter().enumerate() {
+            for (i, cell) in cells[..cells_len].iter().enumerate() {
                 if let Some(c) = cell {
                     attrs[i] = (c.durability, c.launch);
                 }
             }
             let snapshot = floor::FloorSnapshot::probe(
                 self,
-                script.completion_fence,
-                script.stage_binding,
+                fence,
+                binding,
                 &attrs,
                 [
-                    (script.route1[0].durability, script.route1[0].launch),
-                    (script.route1[1].durability, script.route1[1].launch),
+                    (route1[0].durability, route1[0].launch),
+                    (route1[1].durability, route1[1].launch),
                 ],
             );
             floor::decode_floor(&snapshot)

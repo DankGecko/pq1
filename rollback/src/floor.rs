@@ -125,7 +125,7 @@ pub struct FloorCell {
 /// and active group, candidate/manifest identity). Required whenever a
 /// stage record exists. Private fields: constructible only through the
 /// range-checked constructor.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct StageBinding {
     slot: fw_manifest::v6::PhysicalSlot,
     r: u32,
@@ -244,6 +244,7 @@ pub enum GroupIdentity {
 pub struct SteadyProof {
     floor: u32,
     group: GroupIdentity,
+    virgin_cells: u32,
     snapshot_digest: [u8; 32],
 }
 
@@ -256,6 +257,12 @@ impl SteadyProof {
     /// The committed group identity or canonical `BASE0`.
     pub fn group(&self) -> GroupIdentity {
         self.group
+    }
+
+    /// Canonically-virgin cells counted by THIS decode (proof-bound
+    /// capacity input for [`preflight`] — never caller-asserted).
+    pub fn virgin_cells(&self) -> u32 {
+        self.virgin_cells
     }
 
     /// Digest of the complete physical snapshot this proof decodes from.
@@ -867,6 +874,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                 Some((g, t)) => FloorView::Steady(SteadyProof {
                     floor: t,
                     group: GroupIdentity::Group(g),
+                    virgin_cells: n_virgin,
                     snapshot_digest: digest,
                 }),
                 None => {
@@ -878,6 +886,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                         FloorView::Steady(SteadyProof {
                             floor: 0,
                             group: GroupIdentity::Base0,
+                            virgin_cells: n_virgin,
                             snapshot_digest: digest,
                         })
                     } else if n_floor == 0 && n_virgin as usize == RESERVED_ROLLBACK_QWS {
@@ -891,7 +900,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
         }
         Some(g) => {
             // The stage must carry its bound candidate identity.
-            let binding = match snapshot.stage_binding {
+            let binding = match &snapshot.stage_binding {
                 Some(b) => b,
                 None => return FloorView::Unknown(FloorFault::AmbiguousStage),
             };
@@ -1013,7 +1022,7 @@ pub fn classify_t(floor: u32, t: u32) -> TClassification {
 /// method that performs or authorizes a write. Private fields: only
 /// [`preflight`] can construct one (never struct-literal-forgeable, not
 /// `Copy`-replayable).
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct EpochBumpReceipt {
     floor: u32,
     target: u32,
@@ -1049,19 +1058,16 @@ impl EpochBumpReceipt {
 
 /// Snapshot-bound read-only preflight. Returns `None` unless `T > F`,
 /// the allocation sequence can advance (fail-closed at
-/// `u32::MAX`), and the bank can still fund one full initial threshold.
-/// The receipt binds the proof's own snapshot digest (currency proof
-/// for the recheck).
-pub fn preflight(
-    steady: &SteadyProof,
-    target: u32,
-    virgin_cells: u32,
-) -> Option<EpochBumpReceipt> {
+/// `u32::MAX`), and the proof's own virgin-cell count still funds one
+/// full initial threshold. The margin is PROOF-BOUND (counted by the
+/// decode, never caller-asserted), and the receipt binds the proof's
+/// snapshot digest (currency proof for the recheck).
+pub fn preflight(steady: &SteadyProof, target: u32) -> Option<EpochBumpReceipt> {
     let floor = steady.floor();
     if target <= floor || target > crate::arm_token::T_MAX {
         return None;
     }
-    if virgin_cells < INITIAL_THRESHOLD {
+    if steady.virgin_cells() < INITIAL_THRESHOLD {
         return None;
     }
     let group = match steady.group() {
@@ -1072,7 +1078,7 @@ pub fn preflight(
         floor,
         target,
         group,
-        margin: virgin_cells,
+        margin: steady.virgin_cells(),
         snapshot_digest: *steady.snapshot_digest(),
     })
 }

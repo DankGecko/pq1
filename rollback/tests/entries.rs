@@ -105,7 +105,7 @@ fn pending_row(
         ProbeScript::Clean(ERASED),
         ProbeScript::Clean(fw_manifest::v6::QW_PENDING),
     );
-    let gen = Some(full_generation(backend, 23, 24));
+    let gen = Some(full_generation(backend, &art, 23, 24));
     let row = decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), m.security_epoch - 1);
     row
 }
@@ -135,7 +135,7 @@ fn start_epoch_bump_invokes_begin_exactly_once() {
     let mut b = TestBackend::new(7);
     let steady = steady_proof_at(GOLDEN_T);
     let artifact = accepted_artifact(&p, &mut b, PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1);
-    let receipt: EpochBumpReceipt = floor::preflight(&steady, GOLDEN_T + 1, 4).unwrap();
+    let receipt: EpochBumpReceipt = floor::preflight(&steady, GOLDEN_T + 1).unwrap();
     let intent = CheckedSteadyIntent::new(steady, artifact, Some(receipt)).expect("intent");
     let mut backend = TestBackend::new(7);
     backend.set_floor_script(steady_floor_script(GOLDEN_T));
@@ -284,7 +284,7 @@ fn probation_epoch_bump_receipt_rules() {
     ));
 
     // T > F with a mismatched receipt → MissingPreflight.
-    let receipt = floor::preflight(&steady, GOLDEN_T + 5, 4).unwrap();
+    let receipt = floor::preflight(&steady, GOLDEN_T + 5).unwrap();
     assert!(matches!(
         CheckedSteadyProbationIntent::new(
             steady_proof_at(floor_val),
@@ -296,7 +296,7 @@ fn probation_epoch_bump_receipt_rules() {
     ));
 
     // T > F with the correct receipt → intent builds and arms.
-    let good = floor::preflight(&steady, GOLDEN_T, 4).unwrap();
+    let good = floor::preflight(&steady, GOLDEN_T).unwrap();
     let intent = CheckedSteadyProbationIntent::new(
         steady,
         fallback,
@@ -310,7 +310,7 @@ fn probation_epoch_bump_receipt_rules() {
     // Same-epoch with a receipt → UnexpectedPreflight.
     let steady_se = steady_proof_at(GOLDEN_T);
     let fb_se = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
-    let stray = floor::preflight(&steady_proof_at(GOLDEN_T - 1), GOLDEN_T, 4).unwrap();
+    let stray = floor::preflight(&steady_proof_at(GOLDEN_T - 1), GOLDEN_T).unwrap();
     assert!(matches!(
         CheckedSteadyProbationIntent::new(
             steady_se,
@@ -335,7 +335,10 @@ fn resume_from_recovery_resumes_bound_plan_only() {
     let candidate = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
     let intent = CheckedRecoveryIntent::new(proof, candidate).expect("join");
     let mut backend = TestBackend::new(7);
-    backend.set_floor_script(recovering_floor_script(GOLDEN_T - 1, binding));
+    backend.set_floor_script(recovering_floor_script(
+        GOLDEN_T - 1,
+        binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E),
+    ));
     let receipt = resume_from_recovery(&mut backend, intent).expect("resume");
     assert_eq!(receipt.target, GOLDEN_T);
     assert_eq!(receipt.group, 2);
@@ -543,7 +546,7 @@ fn start_epoch_bump_floor_drift_rejects_begin() {
     let mut b = TestBackend::new(7);
     let steady = steady_proof_at(GOLDEN_T);
     let artifact = accepted_artifact(&p, &mut b, PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1);
-    let receipt = floor::preflight(&steady, GOLDEN_T + 1, 4).unwrap();
+    let receipt = floor::preflight(&steady, GOLDEN_T + 1).unwrap();
     let intent = CheckedSteadyIntent::new(steady, artifact, Some(receipt)).expect("intent");
     let mut backend = TestBackend::new(7);
     // Drift: the backend's floor moved since intent construction.
@@ -736,7 +739,7 @@ fn receipt_allocation_group_mismatch_rejected() {
     let FloorView::Steady(proof_g2) = bank2.decode(FENCE, None) else {
         panic!("steady")
     };
-    let receipt = floor::preflight(&proof_g2, GOLDEN_T + 1, 4).unwrap();
+    let receipt = floor::preflight(&proof_g2, GOLDEN_T + 1).unwrap();
     assert_eq!(receipt.group(), 3);
     // …but presented with a group-1 proof (next allocation group 2).
     let steady_g1 = steady_proof_at(GOLDEN_T);

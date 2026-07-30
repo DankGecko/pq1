@@ -1,13 +1,16 @@
-//! Journal-codec tests: codeword Hamming properties, install-generation
-//! semantics (incl. the required-evidence parameter and the impossible
-//! writer-order rule), terminal-set decoding.
+//! Journal-codec tests: codeword Hamming properties and the probe
+//! boundary. The raw codec constructor suites (install-generation,
+//! terminal sets) moved to crate-internal unit tests in
+//! `rollback/src/journal.rs` when the constructors went `pub(crate)`
+//! (R4-1); the canonical orchestrator paths are covered in
+//! `acceptance.rs`.
 
 mod common;
 
 use common::*;
-use fw_manifest::v6::{LaterLifecycleEvidence, PhysicalSlot, QW_CONFIRMED_0, QW_CONFIRMED_1, QW_PENDING};
+use fw_manifest::v6::{QW_CONFIRMED_0, QW_CONFIRMED_1, QW_PENDING};
 use pqsigner_rollback::backend::ProbeScript;
-use pqsigner_rollback::journal::*;
+use pqsigner_rollback::journal::{exact_marker, PENDING_CODEWORD};
 use pqsigner_rollback::qw_read::{Durability, FreshQwRead, LaunchAttribution};
 
 fn hamming(a: &[u8; 16], b: &[u8; 16]) -> u32 {
@@ -33,108 +36,6 @@ fn codeword_hamming_properties() {
 }
 
 #[test]
-fn install_generation_full_and_forbidden() {
-    let full = full_install_generation(
-        InstallHalfEvidence::Exact(INSTALL_ID),
-        InstallHalfEvidence::Exact(INSTALL_ID_INV),
-    );
-    assert_eq!(full.map(|g| g.install_id()), Some(INSTALL_ID));
-
-    // Forbidden values: all-zero / all-one (erased).
-    assert!(full_install_generation(
-        InstallHalfEvidence::Exact([0x00; 16]),
-        InstallHalfEvidence::Exact([0xFF; 16]),
-    )
-    .is_none());
-    assert!(full_install_generation(
-        InstallHalfEvidence::Exact([0xFF; 16]),
-        InstallHalfEvidence::Exact([0x00; 16]),
-    )
-    .is_none());
-
-    // Conflicting exact halves reject.
-    let mut bad = INSTALL_ID_INV;
-    bad[0] ^= 1;
-    assert!(full_install_generation(
-        InstallHalfEvidence::Exact(INSTALL_ID),
-        InstallHalfEvidence::Exact(bad),
-    )
-    .is_none());
-
-    // A missing half is never a FULL generation.
-    assert!(full_install_generation(
-        InstallHalfEvidence::Exact(INSTALL_ID),
-        InstallHalfEvidence::Indeterminate,
-    )
-    .is_none());
-}
-
-#[test]
-fn surviving_install_generation_requires_evidence_and_rejects_impossible() {
-    let ev = LaterLifecycleEvidence::Pending;
-
-    // Exactly one durable clean nontrivial half + evidence → reconstruct.
-    let s = surviving_install_generation(
-        InstallHalfEvidence::Exact(INSTALL_ID),
-        InstallHalfEvidence::Indeterminate,
-        ev,
-    );
-    assert_eq!(s.map(|g| g.install_id()), Some(INSTALL_ID));
-    let s = surviving_install_generation(
-        InstallHalfEvidence::Indeterminate,
-        InstallHalfEvidence::Exact(INSTALL_ID_INV),
-        ev,
-    );
-    assert_eq!(s.map(|g| g.install_id()), Some(INSTALL_ID));
-
-    // IMPOSSIBLE WRITER-ORDER: a survivor half proven BlankVirgin after
-    // later lifecycle evidence rejects (hard design rule 3).
-    assert!(surviving_install_generation(
-        InstallHalfEvidence::Exact(INSTALL_ID),
-        InstallHalfEvidence::ProvenBlankVirgin,
-        ev,
-    )
-    .is_none());
-    assert!(surviving_install_generation(
-        InstallHalfEvidence::ProvenBlankVirgin,
-        InstallHalfEvidence::Exact(INSTALL_ID_INV),
-        ev,
-    )
-    .is_none());
-
-    // Conflicting exact halves reject even with evidence.
-    let mut bad = INSTALL_ID_INV;
-    bad[3] ^= 0x40;
-    assert!(surviving_install_generation(
-        InstallHalfEvidence::Exact(INSTALL_ID),
-        InstallHalfEvidence::Exact(bad),
-        ev,
-    )
-    .is_none());
-
-    // No exact half → nothing to reconstruct.
-    assert!(surviving_install_generation(
-        InstallHalfEvidence::Indeterminate,
-        InstallHalfEvidence::Indeterminate,
-        ev,
-    )
-    .is_none());
-
-    // Nontrivial-half rule: all-zero/all-one surviving halves reject.
-    assert!(surviving_install_generation(
-        InstallHalfEvidence::Exact([0x00; 16]),
-        InstallHalfEvidence::Indeterminate,
-        ev,
-    )
-    .is_none());
-
-    // NOTE (API shape): the `evidence` parameter is REQUIRED — a lone
-    // half before activation cannot even be expressed as a call. This is
-    // the type-level encoding of "a lone half before activation is
-    // incomplete".
-}
-
-#[test]
 fn blank_virgin_requires_clean_erased_and_no_launch() {
     let mut b = TestBackend::new(7);
     let erased = probe_clean(&mut b, 0, ERASED);
@@ -145,84 +46,6 @@ fn blank_virgin_requires_clean_erased_and_no_launch() {
     // Corrected all-FF is neither blank nor virgin even with no launch.
     let corrected = probe(&mut b, 1, ProbeScript::Corrected(ERASED));
     assert!(pqsigner_rollback::qw_read::BlankVirgin::prove(&corrected, NO_LAUNCH).is_none());
-}
-
-#[test]
-fn terminal_set_full_surviving_and_rejections() {
-    let mut b = TestBackend::new(7);
-    let p = pass();
-    let art = artifact(&p, PhysicalSlot::A);
-    let key = art.key();
-
-    // Full: both exact.
-    let c0 = probe_clean(&mut b, 0, QW_CONFIRMED_0);
-    let c1 = probe_clean(&mut b, 1, QW_CONFIRMED_1);
-    match decode_terminal_set(&c0, CLEAN, MAY_LAUNCH, &c1, CLEAN, MAY_LAUNCH, key) {
-        TerminalSetOutcome::Full(set) => assert_eq!(set.evidence_key(), &key.digest()),
-        _ => panic!("expected Full"),
-    }
-
-    // Surviving: C0 exact, C1 indeterminate (may-have-launched erased).
-    let c1_erased = probe_clean(&mut b, 1, ERASED);
-    match decode_terminal_set(&c0, CLEAN, MAY_LAUNCH, &c1_erased, CLEAN, MAY_LAUNCH, key) {
-        TerminalSetOutcome::Surviving(set) => {
-            assert_eq!(set.replica(), TerminalReplica::Replica0)
-        }
-        _ => panic!("expected Surviving(Replica0)"),
-    }
-
-    // IMPOSSIBLE WRITER-ORDER: C1 exact with C0 proven BlankVirgin.
-    let c0_erased = probe_clean(&mut b, 0, ERASED);
-    match decode_terminal_set(&c0_erased, CLEAN, NO_LAUNCH, &c1, CLEAN, MAY_LAUNCH, key) {
-        TerminalSetOutcome::Rejected(TerminalRejection::ImpossibleWriterOrder) => {}
-        other => panic!("expected ImpossibleWriterOrder, got {}", name_of(&other)),
-    }
-
-    // Conflicting exact value: clean durably-clean read of garbage.
-    let c0_garbage = probe_clean(&mut b, 0, [0x42; 16]);
-    match decode_terminal_set(&c0_garbage, CLEAN, MAY_LAUNCH, &c1, CLEAN, MAY_LAUNCH, key) {
-        TerminalSetOutcome::Rejected(TerminalRejection::ConflictingExactValue) => {}
-        other => panic!("expected ConflictingExactValue, got {}", name_of(&other)),
-    }
-
-    // Corrected codeword bytes have ZERO weight (not an exact marker).
-    let c0_corrected = probe(&mut b, 0, ProbeScript::Corrected(QW_CONFIRMED_0));
-    match decode_terminal_set(&c0_corrected, CLEAN, NO_LAUNCH, &c1, CLEAN, MAY_LAUNCH, key) {
-        TerminalSetOutcome::Surviving(set) => {
-            assert_eq!(set.replica(), TerminalReplica::Replica1)
-        }
-        other => panic!("expected Surviving(Replica1), got {}", name_of(&other)),
-    }
-
-    // Neither exact → NoTerminalAuthority.
-    let e0 = probe_clean(&mut b, 2, ERASED);
-    let e1 = probe_clean(&mut b, 3, ERASED);
-    match decode_terminal_set(&e0, CLEAN, NO_LAUNCH, &e1, CLEAN, NO_LAUNCH, key) {
-        TerminalSetOutcome::Rejected(TerminalRejection::NoTerminalAuthority) => {}
-        other => panic!("expected NoTerminalAuthority, got {}", name_of(&other)),
-    }
-
-    // Durability-ambiguous exact-looking read is NOT exact.
-    let c0_amb = probe_clean(&mut b, 0, QW_CONFIRMED_0);
-    match decode_terminal_set(&c0_amb, Durability::Ambiguous, MAY_LAUNCH, &c1, CLEAN, MAY_LAUNCH, key)
-    {
-        TerminalSetOutcome::Surviving(set) => {
-            assert_eq!(set.replica(), TerminalReplica::Replica1)
-        }
-        other => panic!("expected Surviving(Replica1), got {}", name_of(&other)),
-    }
-}
-
-fn name_of(o: &TerminalSetOutcome) -> &'static str {
-    match o {
-        TerminalSetOutcome::Full(_) => "Full",
-        TerminalSetOutcome::Surviving(_) => "Surviving",
-        TerminalSetOutcome::Rejected(TerminalRejection::ConflictingExactValue) => "Conflicting",
-        TerminalSetOutcome::Rejected(TerminalRejection::ImpossibleWriterOrder) => {
-            "ImpossibleWriterOrder"
-        }
-        TerminalSetOutcome::Rejected(TerminalRejection::NoTerminalAuthority) => "NoTerminal",
-    }
 }
 
 #[test]

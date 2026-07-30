@@ -132,7 +132,7 @@ pub enum InstallHalfEvidence {
 
 /// Build the evidence view of one install-identity half from its fresh
 /// read and explicit attributions.
-pub fn install_half_evidence(
+pub(crate) fn install_half_evidence(
     read: &FreshQwRead,
     durability: Durability,
     launch: LaunchAttribution,
@@ -170,8 +170,10 @@ fn complement(raw: &[u8; 16]) -> [u8; 16] {
 /// `FullInstallGeneration` (§6.2 L2011): two durably-clean exact reads,
 /// exact complementarity, neither forbidden value. Both halves must be
 /// `Exact`; anything less is `None` — use [`surviving_install_generation`]
-/// for the one-half rule.
-pub fn full_install_generation(
+/// for the one-half rule. Crate-private (R4-1): the public path is
+/// `lifecycle::decode_install_generation`, which enforces canonical
+/// install-QW addresses and one common probe epoch.
+pub(crate) fn full_install_generation(
     id: InstallHalfEvidence,
     inv: InstallHalfEvidence,
 ) -> Option<FullInstallGeneration> {
@@ -202,7 +204,7 @@ pub fn full_install_generation(
 ///   degenerates to the full-generation rule (complementarity +
 ///   nontriviality); callers with two exact halves should prefer
 ///   [`full_install_generation`].
-pub fn surviving_install_generation(
+pub(crate) fn surviving_install_generation(
     id: InstallHalfEvidence,
     inv: InstallHalfEvidence,
     evidence: LaterLifecycleEvidence,
@@ -320,11 +322,10 @@ pub enum TerminalSetOutcome {
 ///
 /// The evidence key is DERIVED from the artifact's sealed
 /// [`ArtifactEvidenceKey`] for the current verification pass — never
-/// accepted as a raw parameter (R3-2). The CALLER must additionally
-/// have established that the presented reads are the artifact's
-/// canonical terminal QWs (see `lifecycle::decode_lifecycle`, which
-/// enforces canonical addresses and one common probe epoch).
-pub fn decode_terminal_set(
+/// accepted as a raw parameter (R3-2). Crate-private (R4-1): the only
+/// caller is `lifecycle::decode_lifecycle`, which enforces canonical
+/// terminal addresses and one common probe epoch before delegating.
+pub(crate) fn decode_terminal_set(
     c0: &FreshQwRead,
     c0_durability: Durability,
     c0_launch: LaunchAttribution,
@@ -361,3 +362,235 @@ pub fn decode_terminal_set(
 /// Re-export of the PENDING codeword for lifecycle decoders (owned by
 /// `fw_manifest::v6`).
 pub const PENDING_CODEWORD: [u8; 16] = QW_PENDING;
+
+// ---------------------------------------------------------------------------
+// Crate-internal constructor tests (R4-1: the raw codec constructors are
+// pub(crate); these exercise them directly. The public orchestrator
+// paths are covered by the integration suite.)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::evidence::VerificationPass;
+    use crate::qw_read::CleanQw;
+    use fw_manifest::v6::{self, PhysicalSlot, ReleasePackageFields};
+
+    const ID: [u8; 16] = [
+        0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e,
+        0x8f,
+    ];
+    const ID_INV: [u8; 16] = [
+        0x7f, 0x7e, 0x7d, 0x7c, 0x7b, 0x7a, 0x79, 0x78, 0x77, 0x76, 0x75, 0x74, 0x73, 0x72, 0x71,
+        0x70,
+    ];
+    const ERASED: [u8; 16] = [0xFF; 16];
+    const CLEAN: Durability = Durability::DurableClean;
+    const MAY_LAUNCH: LaunchAttribution = LaunchAttribution::MayHaveLaunched;
+    const NO_LAUNCH: LaunchAttribution = LaunchAttribution::ProvenNoLaunch;
+
+    fn read(index: u16, bytes: [u8; 16]) -> FreshQwRead {
+        FreshQwRead::Clean(CleanQw::new(index, 0x1000 + 0x20 * index as u32, bytes, 7))
+    }
+
+    fn test_key() -> crate::evidence::ArtifactEvidenceKey {
+        let seq = |start: u8| -> [u8; 32] {
+            let mut o = [0u8; 32];
+            for (i, b) in o.iter_mut().enumerate() {
+                *b = start.wrapping_add(i as u8);
+            }
+            o
+        };
+        let fields = ReleasePackageFields {
+            slot: PhysicalSlot::A,
+            release_version: 0x0102_0304,
+            security_epoch: 0x0506_0708,
+            secure_len: 0x1000,
+            nonsecure_len: 0x2000,
+            secure_hash: &seq(0x00),
+            nonsecure_hash: &seq(0x20),
+            vendor_fpr: &seq(0x40),
+            build_id: &seq(0x60),
+            signature: &[0xAA; fw_manifest::SIGNATURE_LEN],
+        };
+        let page = v6::build_release_package(&fields).unwrap();
+        let m = v6::parse_and_validate(&page, PhysicalSlot::A).unwrap();
+        let pass = VerificationPass::begin(1, 1, [0x42; 32]);
+        *pass.verify_artifact(&m, ID).unwrap().key()
+    }
+
+    #[test]
+    fn install_generation_full_and_forbidden() {
+        let full = full_install_generation(
+            InstallHalfEvidence::Exact(ID),
+            InstallHalfEvidence::Exact(ID_INV),
+        );
+        assert_eq!(full.map(|g| g.install_id()), Some(ID));
+
+        // Forbidden values: all-zero / all-one (erased).
+        assert!(full_install_generation(
+            InstallHalfEvidence::Exact([0x00; 16]),
+            InstallHalfEvidence::Exact([0xFF; 16]),
+        )
+        .is_none());
+        assert!(full_install_generation(
+            InstallHalfEvidence::Exact([0xFF; 16]),
+            InstallHalfEvidence::Exact([0x00; 16]),
+        )
+        .is_none());
+
+        // Conflicting exact halves reject.
+        let mut bad = ID_INV;
+        bad[0] ^= 1;
+        assert!(full_install_generation(
+            InstallHalfEvidence::Exact(ID),
+            InstallHalfEvidence::Exact(bad),
+        )
+        .is_none());
+
+        // A missing half is never a FULL generation.
+        assert!(full_install_generation(
+            InstallHalfEvidence::Exact(ID),
+            InstallHalfEvidence::Indeterminate,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn surviving_install_generation_requires_evidence_and_rejects_impossible() {
+        let ev = LaterLifecycleEvidence::Pending;
+
+        // Exactly one durable clean nontrivial half + evidence → reconstruct.
+        let s = surviving_install_generation(
+            InstallHalfEvidence::Exact(ID),
+            InstallHalfEvidence::Indeterminate,
+            ev,
+        );
+        assert_eq!(s.map(|g| g.install_id()), Some(ID));
+        let s = surviving_install_generation(
+            InstallHalfEvidence::Indeterminate,
+            InstallHalfEvidence::Exact(ID_INV),
+            ev,
+        );
+        assert_eq!(s.map(|g| g.install_id()), Some(ID));
+
+        // IMPOSSIBLE WRITER-ORDER: a survivor half proven BlankVirgin
+        // after later lifecycle evidence rejects (hard design rule 3).
+        assert!(surviving_install_generation(
+            InstallHalfEvidence::Exact(ID),
+            InstallHalfEvidence::ProvenBlankVirgin,
+            ev,
+        )
+        .is_none());
+        assert!(surviving_install_generation(
+            InstallHalfEvidence::ProvenBlankVirgin,
+            InstallHalfEvidence::Exact(ID_INV),
+            ev,
+        )
+        .is_none());
+
+        // Conflicting exact halves reject even with evidence.
+        let mut bad = ID_INV;
+        bad[3] ^= 0x40;
+        assert!(surviving_install_generation(
+            InstallHalfEvidence::Exact(ID),
+            InstallHalfEvidence::Exact(bad),
+            ev,
+        )
+        .is_none());
+
+        // No exact half → nothing to reconstruct.
+        assert!(surviving_install_generation(
+            InstallHalfEvidence::Indeterminate,
+            InstallHalfEvidence::Indeterminate,
+            ev,
+        )
+        .is_none());
+
+        // Nontrivial-half rule: all-zero/all-one surviving halves reject.
+        assert!(surviving_install_generation(
+            InstallHalfEvidence::Exact([0x00; 16]),
+            InstallHalfEvidence::Indeterminate,
+            ev,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn terminal_set_full_surviving_and_rejections() {
+        let key = test_key();
+        let c0 = read(0, QW_CONFIRMED_0);
+        let c1 = read(1, QW_CONFIRMED_1);
+
+        // Full: both exact.
+        match decode_terminal_set(&c0, CLEAN, MAY_LAUNCH, &c1, CLEAN, MAY_LAUNCH, &key) {
+            TerminalSetOutcome::Full(set) => assert_eq!(set.evidence_key(), &key.digest()),
+            _ => panic!("expected Full"),
+        }
+
+        // Surviving: C0 exact, C1 indeterminate (may-have-launched erased).
+        let c1_erased = read(1, ERASED);
+        match decode_terminal_set(&c0, CLEAN, MAY_LAUNCH, &c1_erased, CLEAN, MAY_LAUNCH, &key) {
+            TerminalSetOutcome::Surviving(set) => {
+                assert_eq!(set.replica(), TerminalReplica::Replica0)
+            }
+            _ => panic!("expected Surviving(Replica0)"),
+        }
+
+        // IMPOSSIBLE WRITER-ORDER: C1 exact with C0 proven BlankVirgin.
+        let c0_erased = read(0, ERASED);
+        match decode_terminal_set(&c0_erased, CLEAN, NO_LAUNCH, &c1, CLEAN, MAY_LAUNCH, &key) {
+            TerminalSetOutcome::Rejected(TerminalRejection::ImpossibleWriterOrder) => {}
+            other => panic!("expected ImpossibleWriterOrder, got {}", name_of(&other)),
+        }
+
+        // Conflicting exact value: clean durably-clean read of garbage.
+        let c0_garbage = read(0, [0x42; 16]);
+        match decode_terminal_set(&c0_garbage, CLEAN, MAY_LAUNCH, &c1, CLEAN, MAY_LAUNCH, &key) {
+            TerminalSetOutcome::Rejected(TerminalRejection::ConflictingExactValue) => {}
+            other => panic!("expected ConflictingExactValue, got {}", name_of(&other)),
+        }
+
+        // Corrected codeword bytes have ZERO weight (not an exact marker).
+        let c0_corrected = FreshQwRead::Corrected {
+            bytes: QW_CONFIRMED_0,
+            index: 0,
+        };
+        match decode_terminal_set(&c0_corrected, CLEAN, NO_LAUNCH, &c1, CLEAN, MAY_LAUNCH, &key) {
+            TerminalSetOutcome::Surviving(set) => {
+                assert_eq!(set.replica(), TerminalReplica::Replica1)
+            }
+            other => panic!("expected Surviving(Replica1), got {}", name_of(&other)),
+        }
+
+        // Neither exact → NoTerminalAuthority.
+        let e0 = read(2, ERASED);
+        let e1 = read(3, ERASED);
+        match decode_terminal_set(&e0, CLEAN, NO_LAUNCH, &e1, CLEAN, NO_LAUNCH, &key) {
+            TerminalSetOutcome::Rejected(TerminalRejection::NoTerminalAuthority) => {}
+            other => panic!("expected NoTerminalAuthority, got {}", name_of(&other)),
+        }
+
+        // Durability-ambiguous exact-looking read is NOT exact.
+        let c0_amb = read(0, QW_CONFIRMED_0);
+        match decode_terminal_set(&c0_amb, Durability::Ambiguous, MAY_LAUNCH, &c1, CLEAN, MAY_LAUNCH, &key)
+        {
+            TerminalSetOutcome::Surviving(set) => {
+                assert_eq!(set.replica(), TerminalReplica::Replica1)
+            }
+            other => panic!("expected Surviving(Replica1), got {}", name_of(&other)),
+        }
+    }
+
+    fn name_of(o: &TerminalSetOutcome) -> &'static str {
+        match o {
+            TerminalSetOutcome::Full(_) => "Full",
+            TerminalSetOutcome::Surviving(_) => "Surviving",
+            TerminalSetOutcome::Rejected(TerminalRejection::ConflictingExactValue) => "Conflicting",
+            TerminalSetOutcome::Rejected(TerminalRejection::ImpossibleWriterOrder) => {
+                "ImpossibleWriterOrder"
+            }
+            TerminalSetOutcome::Rejected(TerminalRejection::NoTerminalAuthority) => "NoTerminal",
+        }
+    }
+}
