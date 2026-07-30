@@ -386,6 +386,24 @@ local_documented`). Run the whole bundle locally with `make verify-three-claims`
 (fixed 2026-07-02: it deterministically exited 141 mid-run — a `head`-under-
 `pipefail` SIGPIPE).
 
+The ledger gate's authoritative local/CI invocation is the clean pre-exec
+receipt boundary below (run from the repository root):
+
+```bash
+(
+  builtin exec -c /usr/bin/bash --noprofile --norc -p \
+    contracts/verification/scripts/run_authoritative_make.sh \
+    make -C contracts/verification verify-ledger-consistency
+)
+```
+
+The outer `builtin exec -c` is part of the security boundary: it clears the
+environment before a new dynamic loader starts. The launcher accepts only the
+exact ledger target and requires its exact completion marker in a private
+receipt. A bare `make -C contracts/verification verify-ledger-consistency` is
+useful diagnostically, but is not an authoritative hostile-environment receipt:
+loader controls can otherwise suppress Make before its in-file guards run.
+
 ### Just the Lean kernel check (fastest, no Foundry/Halmos/Certora)
 
 ```bash

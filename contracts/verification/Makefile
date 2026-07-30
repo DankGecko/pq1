@@ -391,6 +391,10 @@ verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closure
 # CAVEAT: the live source is `#print axioms`, which under-reports in lean v4.22.0;
 # verify-lean4checker is the completeness backstop. See the script header and
 # docs/verification/fv-adversarial-review-playbook.md §B.
+# This is the implementation target.  An authoritative local/CI receipt MUST
+# enter through scripts/run_authoritative_make.sh using the documented outer
+# Bash `builtin exec -c` boundary.  A direct hostile environment can make the
+# dynamic loader suppress /usr/bin/make before any in-Make guard executes.
 verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live dump (closures/pins/witnesses)
 	@$(_FV_PYTHON3) scripts/check_ledger_consistency.py --self-test
 	@evilbin=$$(mktemp -d /tmp/pq-ledger-planted-lake.XXXXXX); \

@@ -64,12 +64,15 @@ Two further anti-vacuity gates were added 2026-06-29 (closing the recurring EF
   the closure drops *exactly* the named axiom; A3.4 zero-consumer ⇒ stays green;
   `reachable_implies_combinedCap` is confirmed load-bearing for the G4 reachable
   headline). Materiality-guarded (no-op = hard fail) + permanent canary.
-- **`make verify-ledger-consistency`** (`scripts/check_ledger_consistency.py`) —
+- **`verify-ledger-consistency`** (`scripts/check_ledger_consistency.py`) —
   makes `AXIOM_STATUS.json` falsifiable against the live dump: exact-set `closures`
   per theorem + headline `signature_pins` (catches a re-introduced raw `hInv` —
   the G4/P1 surface — which axiom-closure checks cannot see) + count/status/no-
   undocumented-axiom checks, cross-checked against the `lint_fv` pin. Wired-in
-  `--self-test` negative control.
+  `--self-test` negative control. Authoritative local/CI evidence enters through
+  `scripts/run_authoritative_make.sh` under the empty-environment pre-exec
+  command documented in `THREE_CLAIMS_PROOF.md`, and requires the target's exact
+  completion receipt; direct `make` remains a diagnostic implementation target.
 
 The full method (the V1–V11 green-but-hollow catalog these gates close, and the
 V8/V9/V11 classes **no** gate can close) and the on-demand, framework-agnostic
