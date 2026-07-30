@@ -90,6 +90,9 @@
 use sha2::{Digest, Sha256};
 pub use sphincs_c10::params::{SIGNATURE_LEN, VERIFYING_KEY_LEN};
 
+/// Manifest-v6 pure format core (Draft 1.1 §6.1/§6.2, flag day).
+pub mod v6;
+
 // ---------------------------------------------------------------------------
 // Layout constants
 // ---------------------------------------------------------------------------
@@ -663,12 +666,23 @@ fn read_array<const N: usize>(bytes: &[u8], off: usize) -> &[u8; N] {
 /// SPHINCS+C10 signature).
 #[must_use]
 pub fn crc32_ieee(data: &[u8]) -> u32 {
+    crc32_ieee_multi(&[data])
+}
+
+/// Multi-part form of [`crc32_ieee`] — one continuous CRC over the
+/// concatenation of `parts`, without copying them into a single buffer.
+/// This is the single shared CRC implementation; the manifest-v6 normalized
+/// CRC (`v6::normalized_crc32`) routes through it (no raw-CRC call sites).
+#[must_use]
+pub fn crc32_ieee_multi(parts: &[&[u8]]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
-    for &b in data {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+    for part in parts {
+        for &b in *part {
+            crc ^= b as u32;
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+            }
         }
     }
     !crc
