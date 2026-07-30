@@ -27,10 +27,11 @@ Independent checks (all run; every failure is reported), headed by:
   C4  NO PHANTOM LEDGER AXIOM — every non-kernel `axioms[].name` resolves to a
       real `axiom <ident>` declaration in the Lean source (can't pad the ledger
       with credibility-only entries).
-  C5  COUNT CONSISTENCY — the `summary` per-status counts equal the actual tally
-      of the `axioms` array by status (format_axiom_status.py READS these counts,
-      it does not regenerate them, so drift is real).
-  C6  STATUS HYGIENE — no `placeholder`/`misleading` status remains; every
+  C5  COUNT CONSISTENCY — the status vocabulary is closed, every required
+      `summary` count exists, and those counts equal the complete `axioms` tally
+      (format_axiom_status.py READS these counts, so drift is real).
+  C6  STATUS HYGIENE — unknown/bald statuses are rejected; no
+      `placeholder`/`misleading` status remains; every
       `discharged-bytecode` axiom carries a real discharge artifact (pinned
       codehash / halmos / kontrol / certora session); every `cited-tcb` axiom
       carries a citation or artifact. No bald "discharged"/"cited" claim.
@@ -93,6 +94,17 @@ import sys
 from pathlib import Path
 
 KERNEL = {"propext", "Classical.choice", "Quot.sound"}
+STATUS_TO_SUMMARY_KEY = {
+    "cited-tcb": "cited_tcb",
+    "discharged-bytecode": "discharged_bytecode",
+    "kernel-tcb": "kernel_tcb",
+    "placeholder": "placeholder_true_typed",
+    "misleading": "misleading",
+}
+ALLOWED_AXIOM_STATUSES = frozenset(STATUS_TO_SUMMARY_KEY)
+REQUIRED_SUMMARY_KEYS = frozenset(
+    (*STATUS_TO_SUMMARY_KEY.values(), "total_axioms_in_closure")
+)
 
 # --------------------------------------------------------------------------- #
 # MANDATORY REGISTRY (F8, 2026-07-16, closes the deletion-tolerance vacuity).
@@ -439,23 +451,46 @@ def check_counts(ledger: dict) -> list[str]:
     fails = []
     axioms = ledger.get("axioms", [])
     summary = ledger.get("summary", {})
+    if not isinstance(summary, dict):
+        return ["C5 summary is not an object."]
     tally: dict[str, int] = {}
     for a in axioms:
         tally[a.get("status", "?")] = tally.get(a.get("status", "?"), 0) + 1
+    unknown = sorted(set(tally) - ALLOWED_AXIOM_STATUSES)
+    if unknown:
+        fails.append(
+            "C5 unknown axioms[].status value(s): "
+            f"{unknown}; allowed={sorted(ALLOWED_AXIOM_STATUSES)}"
+        )
+    missing = sorted(REQUIRED_SUMMARY_KEYS - set(summary))
+    if missing:
+        fails.append(f"C5 summary is missing required count field(s): {missing}")
     checks = [
-        ("cited_tcb", tally.get("cited-tcb", 0)),
-        ("discharged_bytecode", tally.get("discharged-bytecode", 0)),
-        ("kernel_tcb", tally.get("kernel-tcb", 0)),
-        ("placeholder_true_typed", tally.get("placeholder", 0)),
-        ("misleading", tally.get("misleading", 0)),
-        ("total_axioms_in_closure", len(axioms)),
-    ]
+        (summary_key, tally.get(status, 0))
+        for status, summary_key in STATUS_TO_SUMMARY_KEY.items()
+    ] + [("total_axioms_in_closure", len(axioms))]
     for key, actual in checks:
         if key not in summary:
+            continue
+        if (
+            not isinstance(summary[key], int)
+            or isinstance(summary[key], bool)
+            or summary[key] < 0
+        ):
+            fails.append(
+                f"C5 summary.{key} must be a non-negative integer, "
+                f"got {summary[key]!r}"
+            )
             continue
         if summary[key] != actual:
             fails.append(f"C5 summary.{key} = {summary[key]} but actual tally = {actual} "
                          f"(the hand-maintained count drifted from the axioms array)")
+    known_total = sum(tally.get(status, 0) for status in ALLOWED_AXIOM_STATUSES)
+    if known_total != len(axioms):
+        fails.append(
+            f"C5 known status tally = {known_total} but axioms length = "
+            f"{len(axioms)} (an entry escaped the closed vocabulary)"
+        )
     return fails
 
 
@@ -463,6 +498,12 @@ def check_status_hygiene(ledger: dict) -> list[str]:
     fails = []
     for a in ledger.get("axioms", []):
         st = a.get("status")
+        if st not in ALLOWED_AXIOM_STATUSES:
+            fails.append(
+                f"C6 axiom {a.get('id', '?')} (`{a.get('name', '?')}`) has "
+                f"unknown status {st!r}; allowed={sorted(ALLOWED_AXIOM_STATUSES)}"
+            )
+            continue
         if st in ("placeholder", "misleading"):
             fails.append(f"C6 axiom {a['id']} (`{a['name']}`) has status `{st}` — the ledger "
                          f"advertises 0 placeholder/misleading; reintroducing one must be conscious.")
@@ -707,10 +748,21 @@ def self_test() -> int:
     # C5: count drift -> must fire
     bad_counts = dict(ledger); bad_counts["summary"] = dict(ledger["summary"]); bad_counts["summary"]["discharged_bytecode"] = 99
     cases.append(("C5", check_counts(bad_counts)))
+    # C5: unknown status with a co-adjusted known count -> must still fire
+    unknown_status = json.loads(json.dumps(ledger))
+    unknown_status["axioms"][0]["status"] = "discharged"
+    unknown_status["summary"]["discharged_bytecode"] = 0
+    cases.append(("C5 unknown status", check_counts(unknown_status)))
+    # C5: deleting a required summary field must not silently skip the check
+    missing_summary = json.loads(json.dumps(ledger))
+    del missing_summary["summary"]["discharged_bytecode"]
+    cases.append(("C5 missing summary field", check_counts(missing_summary)))
     # C6: discharged-bytecode with no artifact -> must fire
     bad_hygiene = {"axioms": [{"id": "X", "name": "SphincsCVerify.Bridge.x", "status": "discharged-bytecode",
                                "discharge_artifacts": []}]}
     cases.append(("C6 no-artifact", check_status_hygiene(bad_hygiene)))
+    cases.append(("C6 unknown status", check_status_hygiene(
+        {"axioms": [{"id": "U", "name": "n", "status": "discharged"}]})))
     # C6: a placeholder reappears -> must fire
     cases.append(("C6 placeholder", check_status_hygiene({"axioms": [{"id": "P", "name": "n", "status": "placeholder"}]})))
     # C7: signature drift -> must fire
@@ -808,7 +860,8 @@ def self_test() -> int:
     cases.append(("C15 duplicate ledger object key", dup_key_fails))
 
     # control: a CLEAN input must NOT fire (guards against always-fire vacuity)
-    clean = check_closures(ledger, live_ok) + check_mandatory_registry(mand) \
+    clean = check_closures(ledger, live_ok) + check_counts(ledger) \
+        + check_status_hygiene(ledger) + check_mandatory_registry(mand) \
         + check_closures_identity_pin({"closures": full_closures}) \
         + check_unique_list_identities(ledger) + check_unique_list_identities(mand)
 

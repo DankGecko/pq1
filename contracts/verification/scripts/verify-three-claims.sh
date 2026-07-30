@@ -8,7 +8,7 @@
 #   2. make verify-audit (axiom dependency print)
 #   3. lint_axioms.sh (no new True-typed axioms outside allowlist)
 #   4. forge build + forge test (Foundry unit + parity + invariants)
-#   5. forge invariant fuzz (1000 runs)
+#   5. forge invariant fuzz (256 runs * 500 calls)
 #   6. Halmos symbolic execution (if installed)
 #   7. Certora rule sets (if CERTORAKEY set + tool installed)
 #   8. Per-claim summary
@@ -22,13 +22,96 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 VERIFICATION_DIR="${REPO_ROOT}/contracts/verification"
 SMART_WALLET_DIR="${REPO_ROOT}/contracts/smart-wallet"
+USER_HOME=$(
+  /usr/bin/python3 -I -S -c \
+    'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)'
+)
+readonly USER_HOME
 
-export PATH="${HOME}/.elan/bin:${HOME}/.foundry/bin:${PATH}"
+export PATH="${USER_HOME}/.elan/bin:${USER_HOME}/.foundry/bin:${USER_HOME}/.local/bin:/usr/bin:/bin"
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()    { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 warn()  { printf '  \033[33m!\033[0m %s\n' "$*"; }
 fail()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; }
+
+FORGE_BIN="${USER_HOME}/.foundry/bin/forge"
+if [[ ! -x "${FORGE_BIN}" ]]; then
+  fail "pinned Forge binary is missing or not executable: ${FORGE_BIN}"
+  exit 2
+fi
+
+# A caller-controlled Foundry environment can change result semantics
+# (`FORGE_ALLOW_FAILURE=true`), select a different profile, filter tests, or
+# collapse fuzz/invariant counts while Forge still exits 0. Refuse such input
+# loudly, then run Forge under a minimal environment with explicit parameters.
+caller_forge_controls=()
+for name in "${!FOUNDRY_@}" "${!DAPP_@}"; do
+  if [[ -n "${name}" ]]; then
+    caller_forge_controls+=("${name}")
+  fi
+done
+if [[ -v FORGE_ALLOW_FAILURE ]]; then
+  caller_forge_controls+=("FORGE_ALLOW_FAILURE")
+fi
+if ((${#caller_forge_controls[@]})); then
+  fail "refusing caller-controlled Forge environment: ${caller_forge_controls[*]}"
+  exit 2
+fi
+
+readonly FORGE_FUZZ_RUNS=256
+readonly FORGE_INVARIANT_RUNS=256
+readonly FORGE_INVARIANT_DEPTH=500
+readonly -a FORGE_ENV=(
+  /usr/bin/env -i
+  "HOME=${USER_HOME}"
+  "PATH=${USER_HOME}/.foundry/bin:/usr/bin:/bin"
+  "FOUNDRY_PROFILE=default"
+  "FOUNDRY_FUZZ_RUNS=${FORGE_FUZZ_RUNS}"
+  "FOUNDRY_INVARIANT_RUNS=${FORGE_INVARIANT_RUNS}"
+  "FOUNDRY_INVARIANT_DEPTH=${FORGE_INVARIANT_DEPTH}"
+  "FORGE_ALLOW_FAILURE=false"
+  "NO_COLOR=1"
+)
+forge_tmp_files=()
+cleanup_forge_receipts() {
+  if ((${#forge_tmp_files[@]})); then
+    /usr/bin/rm -f -- "${forge_tmp_files[@]}"
+  fi
+}
+trap cleanup_forge_receipts EXIT
+
+run_forge_evidence() {
+  local mode="$1"
+  shift
+  local result_file error_file rc
+  result_file=$(/usr/bin/mktemp "/tmp/pq-forge-${mode}.XXXXXXXX.json")
+  error_file=$(/usr/bin/mktemp "/tmp/pq-forge-${mode}.XXXXXXXX.err")
+  forge_tmp_files+=("${result_file}" "${error_file}")
+  rc=0
+  (
+    cd "${SMART_WALLET_DIR}"
+    "${FORGE_ENV[@]}" "${FORGE_BIN}" test --json "$@" \
+      >"${result_file}" 2>"${error_file}"
+  ) || rc=$?
+  if ((rc != 0)); then
+    fail "Forge ${mode} run exited ${rc}"
+    /usr/bin/cat "${error_file}" >&2
+    /usr/bin/python3 -E -S "${SCRIPT_DIR}/check_forge_results.py" \
+      --mode "${mode}" \
+      --expected-fuzz-runs "${FORGE_FUZZ_RUNS}" \
+      --expected-invariant-runs "${FORGE_INVARIANT_RUNS}" \
+      --expected-invariant-depth "${FORGE_INVARIANT_DEPTH}" \
+      "${result_file}" >&2 || true
+    return 1
+  fi
+  /usr/bin/python3 -E -S "${SCRIPT_DIR}/check_forge_results.py" \
+    --mode "${mode}" \
+    --expected-fuzz-runs "${FORGE_FUZZ_RUNS}" \
+    --expected-invariant-runs "${FORGE_INVARIANT_RUNS}" \
+    --expected-invariant-depth "${FORGE_INVARIANT_DEPTH}" \
+    "${result_file}"
+}
 
 bold "[1/8] Lean kernel type-check (lake build)"
 (cd "${VERIFICATION_DIR}" && /usr/bin/make verify-build) >/dev/null
@@ -50,13 +133,14 @@ bold "[3b/8] I-3 closed-world gate (Storage mutator allow-list)"
 ok "check_storage_mutators passed"
 
 bold "[4/8] Foundry build + test (parity + unit)"
-(cd "${SMART_WALLET_DIR}" && forge build 2>&1 | tail -3)
-(cd "${SMART_WALLET_DIR}" && forge test 2>&1 | grep -E "Suite result|passed|FAIL" | tail -15)
-ok "forge test passed"
+(cd "${SMART_WALLET_DIR}" && "${FORGE_ENV[@]}" "${FORGE_BIN}" build 2>&1 | /usr/bin/tail -3)
+/usr/bin/python3 -E -S "${SCRIPT_DIR}/check_forge_results.py" --self-test
+run_forge_evidence full
+ok "forge test passed with pinned result/count receipt"
 
 bold "[5/8] Forge invariant fuzz (256 runs * 500 calls)"
-(cd "${SMART_WALLET_DIR}" && forge test --match-contract Invariants 2>&1 | grep -E "invariant_|Suite result" | tail -15)
-ok "forge invariants passed"
+run_forge_evidence invariants --match-contract Invariants
+ok "forge invariants passed at 256 runs * 500 calls"
 
 bold "[6/8] Halmos symbolic execution"
 if command -v halmos >/dev/null 2>&1; then
@@ -83,7 +167,7 @@ echo ""
 ok "Claim 1 (Signature-to-execution binding):"
 echo "    - Lean: theft_free + theft_free_with_calldata_binding kernel-checked"
 echo "    - Halmos: HalmosValidateUserOp.t.sol → solidityWallet_compiles_correctly (A3.2)"
-echo "    - Foundry: LeanSelectorParity + PQSmartWalletInvariants (1000 runs)"
+echo "    - Foundry: LeanSelectorParity + PQSmartWalletInvariants (256 runs * 500 calls)"
 echo ""
 ok "Claim 2 (Owner-set integrity + initialization atomicity):"
 echo "    - Lean: cannot_remove_bootstrap, initialize_called_exactly_once,"

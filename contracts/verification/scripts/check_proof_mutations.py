@@ -33,7 +33,9 @@ V11 (wrong spec). See docs/verification/fv-adversarial-review-playbook.md §A.
 
 Usage:
     check_proof_mutations.py [--tier quick|default|full] [--list]
-Environment: MUTATIONS=quick|default|full overrides the tier (default: default).
+Environment: MUTATIONS=quick|default|full overrides the tier for direct checker
+runs (default: default). The authoritative Make target passes `--tier default`
+and rejects a caller-set MUTATIONS variable.
 
 Exit: 0 = every mutation behaved as expected; 1 = a vacuity/broken-claim found;
       2 = harness/manifest error (mutation didn't apply, canary didn't trip,

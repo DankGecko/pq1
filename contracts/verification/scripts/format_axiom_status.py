@@ -6,13 +6,13 @@ Print a human-readable axiom-status table sourced from
 Used by the `verify-theft-free` make target to produce HONEST output —
 each axiom in the dependency closure of `theft_free` is listed with
 its current discharge state (placeholder | misleading | cited-tcb |
-discharged | kernel-tcb).
+discharged-bytecode | kernel-tcb).
 
 Output format is plain text, ~80 columns wide.
 
 Exit code:
-  0  always (this is informational; the surrounding make target
-     decides whether to fail via lint_axioms.sh).
+  0  the ledger uses the closed status vocabulary and was formatted.
+  2  malformed or unknown status data (never render an overclaim).
 """
 from __future__ import annotations
 
@@ -41,20 +41,25 @@ STATUS_LABEL_PLAIN = {
     "placeholder": "PLACEHOLDER",
     "misleading":  "MISLEADING",
     "cited-tcb":   "CITED-TCB",
-    "discharged":  "DISCHARGED",
+    "discharged-bytecode": "DISCHARGED",
     "kernel-tcb":  "KERNEL-TCB",
 }
 STATUS_COLOR = {
     "placeholder": RED,
     "misleading":  YELLOW,
     "cited-tcb":   BLUE,
-    "discharged":  GREEN,
+    "discharged-bytecode": GREEN,
     "kernel-tcb":  GRAY,
 }
 
 
 def status_label(status: str, width: int) -> str:
-    plain = STATUS_LABEL_PLAIN.get(status, status)
+    if status not in STATUS_LABEL_PLAIN:
+        raise ValueError(
+            f"unknown axiom status {status!r}; "
+            f"allowed={sorted(STATUS_LABEL_PLAIN)}"
+        )
+    plain = STATUS_LABEL_PLAIN[status]
     pad = max(width - len(plain), 0)
     return f"{STATUS_COLOR.get(status, '')}{plain}{RESET}" + " " * pad
 
@@ -86,6 +91,17 @@ def _reject_duplicate_keys(pairs: list) -> dict:
 def main() -> int:
     data = json.loads(find_status_file().read_text(encoding="utf-8"),
                       object_pairs_hook=_reject_duplicate_keys)
+    unknown = sorted({
+        ax.get("status")
+        for ax in data.get("axioms", [])
+        if ax.get("status") not in STATUS_LABEL_PLAIN
+    }, key=repr)
+    if unknown:
+        sys.stderr.write(
+            f"ERROR: unknown axioms[].status value(s) {unknown}; refusing to "
+            "format an unvalidated assurance label\n"
+        )
+        return 2
 
     bar = "=" * 76
     print(bar)
@@ -153,10 +169,7 @@ def main() -> int:
     placeholder = summary["placeholder_true_typed"]
     misleading = summary["misleading"]
     cited = summary["cited_tcb"]
-    # schema v2 renamed `discharged` -> `discharged_bytecode`; accept both
-    discharged = summary.get("discharged", summary.get("discharged_bytecode"))
-    if discharged is None:
-        raise KeyError("summary lacks discharged/discharged_bytecode")
+    discharged = summary["discharged_bytecode"]
     kernel = summary["kernel_tcb"]
     print(f"  Summary: {total} axiom(s) in closure;",
           f"{RED}{placeholder} placeholder{RESET},",

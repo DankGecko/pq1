@@ -117,7 +117,7 @@ re-runnable; their outputs are pinned in
 | **Lean 4** | `lake build` | Kernel-checked per-claim theorems against the Lean models of `validateUserOp` / `executeWithOffchainCount` / `initialize` / `addOwnerBytes` / etc. | `contracts/verification/lean/` |
 | **Halmos** | `halmos --bytecode <pinned-hash>` | Symbolic execution against the pinned PQSmartWallet runtime bytecode, discharging the `DeployedBytecode.PQSmartWallet_validateUserOp = validateSignature` axiom (A3.2) | `contracts/smart-wallet/test/halmos/` |
 | **Certora** | `certoraRun` | Inductive rules quantified over *all* methods, discharging A3.3 (Factory) + A3.4 (MultiOwnable) + the cross-method surface of A3.2 (Wallet) | `contracts/smart-wallet/certora/` |
-| **Foundry** | `forge test --invariant-runs 1000` | Stateful fuzzing + parity tests + codehash pinning, defense-in-depth and the empirical SHA-256 KAT for A1 | `contracts/smart-wallet/test/` |
+| **Foundry** | `make verify-three-claims` (clean-env Forge receipt: fuzz 256; invariants 256 × 500) | Stateful fuzzing + parity tests + codehash pinning, defense-in-depth and the empirical SHA-256 KAT for A1 | `contracts/smart-wallet/test/` |
 
 ### Why all four
 
@@ -351,10 +351,13 @@ This runs:
    per-claim corollary.
 3. `bash scripts/lint_axioms.sh` — fails on any new `True`-typed
    axiom outside the allowlist.
-4. `forge build && forge test -vv` — runs the 92 Foundry unit /
-   parity / codehash tests.
-5. `forge test --match-contract Invariants` — 7 invariants × 128,000
-   fuzz calls.
+4. A clean-environment `forge build && forge test --json` — runs the
+   Foundry unit / parity / codehash tests and rejects failures, empty result
+   sets, filters, reduced fuzz counts, failed corpus replays, or any skip
+   outside the two pinned RPC-dependent receipt tests.
+5. A clean-environment `forge test --json --match-contract Invariants` —
+   every invariant record must report exactly 256 runs × 500 calls
+   (128,000 calls), with no failure or corpus-replay error.
 6. `halmos --contract HalmosValidateUserOp` and `halmos --contract HalmosExecute`
    — symbolic execution against pinned bytecode (skips if `halmos`
    not installed).
@@ -445,7 +448,7 @@ pin in `test/PinnedCodehashes.t.sol`. The CI gate fails until:
 | `LeanSelectorParity.t.sol` | 4 selectors must match `forge inspect` |
 | `StorageSlotParity.t.sol` | ERC-7201 namespace + ERC-1967 reserved slot literals |
 | `PinnedCodehashes.t.sol` | 3 runtime codehashes pinned + SHA-256 NIST CAVS KAT |
-| `PQSmartWalletInvariants.t.sol` | 7 invariants × 128,000 fuzz calls |
+| `PQSmartWalletInvariants.t.sol` | 6 invariants × 128,000 calls |
 | `halmos/HalmosValidateUserOp.t.sol` | 6 Halmos rules for Claim 1 |
 | `halmos/HalmosExecute.t.sol` | 7 Halmos rules for Claim 3 |
 
@@ -481,18 +484,18 @@ pin in `test/PinnedCodehashes.t.sol`. The CI gate fails until:
 [1/8] Lean kernel type-check (lake build)        ✓ zero sorries
 [2/8] Axiom dependency audit                     ✓ closures printed
 [3/8] Lint axioms (no new True-typed)            ✓
-[4/8] Foundry build + test                       ✓ 92 tests passed
-[5/8] Forge invariant fuzz                       ✓ 7/7 invariants, 128k calls each
+[4/8] Foundry build + test                       ✓ 120 results (118 success, 2 pinned RPC skips)
+[5/8] Forge invariant fuzz                       ✓ 6/6 invariants, 256 × 500 calls each
 [6/8] Halmos symbolic execution                  ✓ (or skip if not installed)
 [7/8] Certora rule sets                          ✓ (or skip if not licensed)
 [8/8] ALL THREE CLAIMS VERIFIED end-to-end.
 ```
 
 The Lean kernel has type-checked every theorem with the documented
-axiom closure. The Foundry layer has fuzzed every invariant
-exhaustively. The Halmos and Certora layers, when their tools are
-available, discharge the bytecode-level axioms against the pinned
-runtime codehashes.
+axiom closure. The Foundry layer has exercised every pinned invariant
+at the documented campaign bounds. The Halmos and Certora layers, when
+their tools are available, discharge the bytecode-level axioms against
+the pinned runtime codehashes.
 
 This is what "mathematically proven" looks like in practice — every
 artifact is independently re-runnable, every trust assumption is
@@ -513,7 +516,7 @@ if a wallet is later drained.
 | Layer | Status |
 |-------|--------|
 | Lean 4 kernel-checked theorems | ✅ **Verified.** `lake build` exits 0, zero sorries, axiom closures match what's documented. |
-| Foundry parity + invariant tests | ✅ **Verified.** 92 unit tests + 7 invariants × 128,000 fuzz calls pass on every CI run. |
+| Foundry parity + invariant tests | ✅ **Verified by the local/manual gate.** The clean-environment receipt contains 120 results: 118 successes, the exact 2 pinned RPC-dependent skips, 2 fuzz tests × 256 runs, and 6 invariants × 256 runs × 500 calls. CI separately runs the default Foundry suite; it does not produce this count-bound receipt. |
 | Halmos symbolic execution against pinned bytecode | ⚠️ **Spec committed, tool not yet run in CI.** The rules are written and `halmos.toml` pins versions, but no one has executed `halmos --bytecode <pin>` against the runtime codehash. The A3.1 / A3.2 bridge axioms are therefore *defined* but *not mechanically discharged*. |
 | Certora inductive rules | ⚠️ **Spec committed, license not provisioned.** Same situation for A3.3 / A3.4. |
 | A2 (EntryPoint v0.6) | 📚 **Cited-TCB.** Per project decision, kept as cited (OZ / ChainSecurity / Spearbit audits + 18 mo mainnet operation). Not in-Lean discharged. |
@@ -540,8 +543,9 @@ These are exactly accurate descriptions of what is true today:
   is a theorem (`Wallet.Invariants.cannot_remove_bootstrap` +
   `addOwner_preserves_index0` + the Certora `onlySelfCanChange*`
   rules), not a promise."
-- "92 unit and parity tests + 7 stateful invariants (128,000 fuzz
-  calls each) pass on every CI run."
+- "The local/manual verification gate records 118 successful Foundry
+  results, the exact two pinned RPC-dependent skips, two fuzz tests at
+  256 runs each, and six stateful invariants at 128,000 calls each."
 
 ### ⚠️ Defensible only with qualifiers
 

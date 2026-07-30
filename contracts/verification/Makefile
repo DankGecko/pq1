@@ -609,14 +609,19 @@ verify-forsc-margin: ## FORS+C never weaker than plain FORS at C10 params (guard
 # be-red is a vacuity, caught. Each mutation asserts it MATERIALLY changed the
 # file (no-op = HARD FAIL, never a skip), fully rebuilds (no stale-cache false
 # pass), and ALWAYS reverts; a permanent CANARY must trip or the harness is void.
-# SLOW (each mutation = a full `lake build SphincsCVerify`). Tiers:
-#   MUTATIONS=quick   make verify-proof-mutation   # canary + A3.1 (smoke)
-#   (default)         make verify-proof-mutation   # curated 8
-#   MUTATIONS=full    make verify-proof-mutation   # + corollary bridge axioms (13)
+# SLOW (each mutation = a full `lake build SphincsCVerify`). The authoritative
+# Make target is ALWAYS the curated default tier (8); a caller environment must
+# not silently shrink its evidence. For non-authoritative local exploration,
+# invoke the checker directly with `--tier quick` (2) or `--tier full` (13).
 # Does NOT catch V7 (latent-FALSE axiom — still type-checks) or V11 (wrong spec).
 # See scripts/check_proof_mutations.py + docs/verification/fv-adversarial-review-playbook.md §B.
+ifneq ($(strip $(filter verify-proof-mutation,$(MAKECMDGOALS))),)
+ifneq ($(origin MUTATIONS),undefined)
+$(error refusing caller-set MUTATIONS for authoritative verify-proof-mutation; use the direct checker with an explicit --tier for exploratory runs)
+endif
+endif
 verify-proof-mutation: verify-build ## Proof-side cargo-mutants: delete axiom/weaken lemma, expect break (SLOW)
-	@$(_FV_PYTHON3) scripts/check_proof_mutations.py
+	@$(_FV_PYTHON3) scripts/check_proof_mutations.py --tier default
 
 # EXTERNAL kernel re-check gate (deep-research rec #1). lean/ is Lean v4.22.0,
 # inside the pre-#8842 collectAxioms under-report window, so `#print axioms`
