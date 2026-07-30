@@ -559,6 +559,12 @@ Start with this README → `docs/STATUS.md` (the security/verification frontier 
 - **USB / dev:** `docs/companion/usb-protocol-v2.md`, `docs/hardware/usb-hid-setup.md`, `docs/hardware/dev-board-setup.md`, `docs/hardware/hardware_requirements.md`
 - **Formal verification:** `contracts/verification/` (Lean proofs + axiom status), `docs/verification/lean-verification-research-2026-06.md` (tooling research), work-todo §33 (firmware track)
 
+## Acknowledgements
+
+- **On-chain SPHINCS+ verifier and the C10 parameter set — [Nicolas Consigny](https://github.com/nconsigny) (`nconsigny`, <nicolas@ethereum.org>).** The Yul verifier this wallet deploys, `contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol`, is derived from `SPHINCs-C10Sha256Asm.sol` in [nconsigny/SPHINCs-](https://github.com/nconsigny/SPHINCs-) (MIT), and the C10 parameter set itself originated in that repository (commit `0516a11`, 2026-04-09, from its Fluhrer–Dang security sweep — see `docs/verification/c10-fips205-delta-audit.md` §Addendum). The Python reference signer that `sphincs-c10/` was written against comes from the same work. PQSigner's changes on top are the SHA-256 firmware-parity constraints, N-mask key-shape enforcement in the verifier, FORS-forest binding to the hypertree leaf position, and the 65,536-per-chain use caps.
+- **Trezor** — the TAMP tamper-detection driver is a GPLv3 port from `trezor-firmware`.
+- **Solady / Coinbase Smart Wallet** — nested EIP-712 (`replaySafeHash`), ERC-6492 signature checking, and the multi-owner account shape the ERC-4337 v0.6 account is compatible with.
+
 ## License
 
 Copyright (c) 2026 Freedom Factory Inc.

@@ -75,9 +75,10 @@ use crate::hw::saes::{self, KeySel, SaesError};
 // ---------------------------------------------------------------------------
 
 /// Base address of the wrapped-BHK page.
-const BHK_PAGE_ADDR: u32 = 0x0C0F_C000;
+pub(crate) const BHK_PAGE_ADDR: u32 =
+    pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, BHK_PAGE_NUM as u8);
 /// Bank-1 page number, for `flash::erase_secure_page`.
-const BHK_PAGE_NUM: u32 = 126;
+pub(crate) const BHK_PAGE_NUM: u32 = 126;
 /// Size of the (un)wrapped BHK in bytes.
 const BHK_LEN: usize = 32;
 

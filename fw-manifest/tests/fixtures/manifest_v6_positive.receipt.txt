@@ -1,0 +1,33 @@
+# Manifest-v6 key-matched POSITIVE fixture receipt (FA-1.2b; Draft 1.1 §6.1 L1924–1933)
+#
+# This receipt binds the fixture-FILE hashes of
+#   fw-manifest/tests/fixtures/manifest_v6_positive.bin
+# (8,192 bytes, exact signed manifest-v6 page). It is the shared reference for
+# firmware, fwsign, inspector, factory/updater, extraction, formal models, and
+# host tests (§6.1 flag-day paragraph).
+#
+# KEY MATERIAL WARNING: the fixture keypair is a DEDICATED NONPRODUCTION C10
+# fixture key (TEST ONLY). It is NOT the firmware-vendor key, NOT a wallet
+# bootstrap/slot key, NOT a health-only key, and MUST NEVER be compiled into or
+# referenced by any production image, signer, or provisioning path.
+#
+# Generation: deterministic — SigningKey::keygen(V6_FIXTURE_SK_SEED,
+# V6_FIXTURE_PK_SEED) then sign(manifest_digest, opt_rand=None) (byte-stable
+# deterministic path). Regenerate:
+#   cargo test -p fw-manifest --test gen_v6_signature_fixture -- --ignored --nocapture
+schema: 0x06
+domain: PQFW_V6
+physical_slot: 0x01
+release_version: 0x01020304
+security_epoch: 0x05060708
+secure_len: 0x00001000
+nonsecure_len: 0x00002000
+secure_hash: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+nonsecure_hash: 202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
+build_id: 606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f
+pk_seed: 56362d464958545552452d504b2d3031  # NONPRODUCTION FIXTURE — TEST ONLY (see warning above)
+pk_root: 9eb0ff9813adf4c71b21d6bed0d2d383
+vendor_fpr: 4005485c1354e4953b02b28a786ea6683d81f95784f579459d42f1644e00a61c
+manifest_digest: 2f427a53b2b97ef7e5060e6580087fe41f126b097547a42a37b7ce5adedf538b
+signature_sha256: 7bf48b0c8e908a76a96828ce01345f05206024051c97bf363f01f8d9daadb13d
+page_sha256: d3a95154fd02fdcc4a8cafe379b568846fef218fbb91874aff2f69d7ff653851

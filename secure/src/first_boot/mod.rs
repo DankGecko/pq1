@@ -279,10 +279,9 @@ impl FirstBootHw for FirstBootHwImpl<'_> {
         // a known BHK planted at RDP-0 (which survives RDP 0→2, no mass-erase)
         // is destroyed before we provision a fresh TRNG BHK. `bhk::provision`
         // refuses a non-blank page, so the erase must precede it.
-        const BHK_PAGE: u32 = 126; // = bhk::BHK_PAGE_NUM (wrapped BHK store)
         // SAFETY: single-threaded secure world; page 126 is the BHK store.
         unsafe {
-            crate::hw::flash::erase_secure_page(BHK_PAGE)
+            crate::hw::flash::erase_secure_page(crate::hw::bhk::BHK_PAGE_NUM)
                 .map_err(|_| FirstBootError::BhkPageHostile)?;
             crate::hw::bhk::provision().map_err(|_| FirstBootError::BhkProvisionFailed)?;
             crate::hw::bhk::load_and_lock().map_err(|_| FirstBootError::BhkProvisionFailed)?;

@@ -7,19 +7,22 @@
 //! the hardware driver consumes the validated address/page capabilities.
 
 /// Secure alias of STM32U585 flash bank 1.
-pub(crate) const BANK1_BASE: u32 = 0x0C00_0000;
+pub(crate) const BANK1_BASE: u32 = pqsigner_geometry::BANK1_BASE;
 /// Bank-1 page size.
-pub(crate) const PAGE_BYTES: u32 = 0x2000;
+pub(crate) const PAGE_BYTES: u32 = pqsigner_geometry::PAGE_SIZE;
 /// Number of pages in bank 1.
-const PAGE_COUNT: u32 = 128;
+const PAGE_COUNT: u32 = pqsigner_geometry::PAGES_PER_BANK as u32;
 /// First byte after secure flash bank 1.
 const BANK1_END: u32 = BANK1_BASE + PAGE_COUNT * PAGE_BYTES;
 /// Page reserved exclusively for the first-boot provisioning journal.
-pub(crate) const FIRST_BOOT_JOURNAL_PAGE: u32 = 127;
+pub(crate) const FIRST_BOOT_JOURNAL_PAGE: u32 =
+    pqsigner_geometry::FIRST_BOOT_JOURNAL_PAGE as u32;
 /// First byte of the first-boot provisioning journal.
-pub(crate) const FIRST_BOOT_JOURNAL_ADDR: u32 = BANK1_BASE + FIRST_BOOT_JOURNAL_PAGE * PAGE_BYTES;
+pub(crate) const FIRST_BOOT_JOURNAL_ADDR: u32 =
+    pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, pqsigner_geometry::FIRST_BOOT_JOURNAL_PAGE);
 /// First byte after the first-boot provisioning journal.
-const FIRST_BOOT_JOURNAL_END: u32 = FIRST_BOOT_JOURNAL_ADDR + PAGE_BYTES;
+const FIRST_BOOT_JOURNAL_END: u32 =
+    pqsigner_geometry::page_end(pqsigner_geometry::Bank::One, pqsigner_geometry::FIRST_BOOT_JOURNAL_PAGE);
 const QUADWORD_BYTES: u32 = 16;
 
 /// A quad-word address proven to be aligned, in bank 1, and disjoint from
