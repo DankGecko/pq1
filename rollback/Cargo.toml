@@ -1,0 +1,35 @@
+# pqsigner-rollback — pure no_std journal/floor core for the Draft 1.1
+# A/B rollback architecture (Foundation A slice FA-1.3, issue #540).
+#
+# Implements the FROZEN software semantics only: FROZEN-JRN-IFACE-3
+# (PENDING/ATTEMPTED representation + TAMP arm token),
+# FROZEN-OTP-API-3 (FloorView 4-class decoder, FreshQwRead typed boundary,
+# QW accountancy, classification priority, the six frozen entries, Aborted
+# semantics), §6.2 (journal codewords, install identity, BKP8..31 arm
+# token, PQFW_A3 binding, acceptance table, legal transition chain), and
+# the §7/§10 decoder/classification semantics. No physical writers.
+#
+# Dependency policy (four crates, each load-bearing):
+#   * pqsigner-geometry — frozen §5 registry addresses for artifact
+#     identity (manifest page / journal QW addresses per slot).
+#   * fw-manifest       — the manifest-v6 core (journal codewords,
+#     ManifestV6, LaterLifecycleEvidence) is reused, never duplicated.
+#   * sha2              — PQFW_A3 arm-token binding digest + snapshot
+#     digests (same algorithm choice as fw-manifest).
+#   * subtle            — constant-time equality for binding/digest
+#     comparisons on security-relevant paths (crate style).
+
+[package]
+name = "pqsigner-rollback"
+version = "0.1.0"
+edition.workspace = true
+description = "Pure no_std journal/floor core for the Draft 1.1 A/B rollback architecture (FA-1.3)."
+
+[dependencies]
+pqsigner-geometry = { path = "../geometry" }
+fw-manifest       = { path = "../fw-manifest" }
+sha2              = { version = "0.10", default-features = false }
+subtle            = { version = "2", default-features = false }
+
+[lints]
+workspace = true
