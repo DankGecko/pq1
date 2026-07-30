@@ -12,16 +12,15 @@
 //! consumer (FSBL, fwsign, inspector, factory/updater, extraction, formal
 //! models, host tests) MUST share these exact bytes.
 //!
-//! ## Explicitly out of scope for v0 — deferred to FA-1.2b
+//! ## Status
 //!
-//! * C10 signature verification (`sphincs-c10` verify over the recomputed
-//!   manifest digest against the immutable embedded firmware-vendor key).
-//! * The key-matched signed positive/negative fixture set (dedicated
-//!   nonproduction C10 key, exact fingerprint, signed images, expected
-//!   shared-verifier result; §6.1 L1924–1933). The `i mod 256` patterned
-//!   signature in the golden page fixture is a serialization/normalization
-//!   fixture only — it is NOT a valid C10 signature KAT and must never be
-//!   reported as one.
+//! FA-1.2 (v0) landed the pure format core. FA-1.2b (this revision) adds
+//! C10 signature verification ([`ManifestV6::verify_signature`],
+//! [`ManifestV6::verify_with_embedded_key`]) and the key-matched signed
+//! fixture set (`fw-manifest/tests/v6_signature_fixtures.rs`, §6.1
+//! L1924–1933). The `i mod 256` patterned signature in the golden page
+//! fixture remains a serialization/normalization fixture only — it is NOT a
+//! valid C10 signature KAT and must never be reported as one.
 //!
 //! ## Durability/ECC attribution (owner-adopted review amendment)
 //!
@@ -462,6 +461,36 @@ impl ManifestV6 {
             self.vendor_fpr
                 .ct_eq(&vendor_fingerprint(pk_seed, pk_root)),
         )
+    }
+
+    /// C10 signature verification over the FRESHLY RECOMPUTED manifest
+    /// digest (§6.1 L1867–1868: "FSBL MUST verify C10 over a freshly
+    /// recomputed digest"). The stored digest field is never an input to
+    /// this path — it is a redundant comparison value only (see
+    /// [`ManifestV6::stored_digest_matches`]).
+    ///
+    /// This checks the signature math against the caller-supplied key; it
+    /// does NOT establish that the key is the immutable embedded vendor key
+    /// — that is [`ManifestV6::verify_with_embedded_key`].
+    pub fn verify_signature(&self, pk_seed: &[u8; 16], pk_root: &[u8; 16]) -> bool {
+        let digest = self.manifest_digest();
+        sphincs_c10::verify(pk_seed, pk_root, &digest, &self.signature)
+    }
+
+    /// The FSBL authority path (§6.1 L1873–1879): BOTH legs must hold.
+    ///
+    /// 1. The vendor-key fingerprint signed into the manifest must equal a
+    ///    fresh recomputation from the immutable embedded key's bytes —
+    ///    an equality check, never a key selector, key locator, rollover
+    ///    instruction, or authority to load key bytes from the manifest.
+    /// 2. The C10 signature must verify over the freshly recomputed
+    ///    manifest digest with that same embedded key.
+    ///
+    /// No wallet bootstrap, wallet slot, or health-only C10 key can
+    /// authorize a firmware manifest: callers must pass only the immutable
+    /// embedded firmware-vendor key bytes.
+    pub fn verify_with_embedded_key(&self, pk_seed: &[u8; 16], pk_root: &[u8; 16]) -> bool {
+        self.vendor_fpr_matches(pk_seed, pk_root) && self.verify_signature(pk_seed, pk_root)
     }
 }
 
