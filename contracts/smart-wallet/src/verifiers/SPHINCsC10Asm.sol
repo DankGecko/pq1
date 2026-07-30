@@ -3,12 +3,6 @@ pragma solidity 0.8.28;
 
 /// @title SPHINCsC10Asm — Stateless SPHINCS+ C10 verifier (Yul-optimised, SHA-256)
 /// @notice C10: W+C_F+C h=18 d=2 a=11 k=13 w=8 l=43 target_sum=205 sig=4008
-/// @author Nicolas Consigny (`nconsigny`, <nicolas@ethereum.org>) — original
-///         Yul SPHINCS+C on-chain verifier and the C10 parameter set, from
-///         <https://github.com/nconsigny/SPHINCs-> (`SPHINCs-C10Sha256Asm.sol`,
-///         MIT). This contract is a derivative of that work, adapted for
-///         PQSigner OS (N-mask key-shape enforcement, FORS-forest binding to
-///         the hypertree leaf position, `memory-safe` annotation dropped).
 /// @dev C10 is used both for the **bootstrap** (master) identity of the
 ///      PQSigner OS wallet and for every per-slot signing key. The hypertree
 ///      holds 2^18 signing positions, and `PQSmartWallet.bootstrapUses` /
