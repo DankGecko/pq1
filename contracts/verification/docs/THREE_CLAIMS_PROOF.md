@@ -353,11 +353,13 @@ This runs:
    axiom outside the allowlist.
 4. A clean-environment `forge build && forge test --json` — runs the
    Foundry unit / parity / codehash tests and rejects failures, empty result
-   sets, filters, reduced fuzz counts, failed corpus replays, or any skip
+   sets, filters, any drift from the pinned label/status/kind manifest,
+   reduced fuzz counts, missing or failed corpus-replay fields, or any skip
    outside the two pinned RPC-dependent receipt tests.
 5. A clean-environment `forge test --json --match-contract Invariants` —
    every invariant record must report exactly 256 runs × 500 calls
-   (128,000 calls), with no failure or corpus-replay error.
+   (128,000 calls), explicit zero reverts, and an explicit zero
+   corpus-replay-failure count.
 6. `halmos --contract HalmosValidateUserOp` and `halmos --contract HalmosExecute`
    — symbolic execution against pinned bytecode (skips if `halmos`
    not installed).

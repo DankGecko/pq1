@@ -44,9 +44,12 @@ Independent checks (all run; every failure is reported), headed by:
   Further registry checks documented at their functions: C0 (mandatory floors),
   C9 (witness coverage), C10 (bridge-axiom RHS shape), C11 (exact closure key
   set), C13 (duplicate dump records), C14 (duplicate list identities), and the
-  load itself rejects duplicate JSON object keys (C15) — plain `json.loads` is
-  silently last-wins, which would let a benign second record hide a rogue
-  first one (the advertised-vs-checked divergence this gate exists to close).
+  load itself rejects duplicate JSON object keys (C15). C16 pins the exact
+  axiom/artifact row schemas, artifact field types, and status/method tallies —
+  an extra field, fabricated method, or null codehash cannot satisfy the
+  discharge-artifact check by presence alone. Plain `json.loads` is silently
+  last-wins, which would let a benign second record hide a rogue first one
+  (the advertised-vs-checked divergence this gate exists to close).
 
 ================================  SCOPE / CAVEAT  =============================
 The LIVE-closure source is `#print axioms` (dump_axioms.lean). In Lean v4.22.0
@@ -105,6 +108,59 @@ ALLOWED_AXIOM_STATUSES = frozenset(STATUS_TO_SUMMARY_KEY)
 REQUIRED_SUMMARY_KEYS = frozenset(
     (*STATUS_TO_SUMMARY_KEY.values(), "total_axioms_in_closure")
 )
+# Checker-owned schema pins. Each row is compact JSON, bytewise sorted, with
+# one trailing "\n", then SHA-256:
+#   axiom:    [axiom id, sorted row keys]
+#   artifact: [axiom id, axiom status, artifact type, sorted artifact keys]
+# Update only alongside an inspected, intentional AXIOM_STATUS schema change.
+EXPECTED_AXIOM_SCHEMA_SHA256 = (
+    "13f1c6284e8f7a8cbd4293ec74013481a63b40df309ac81e2c353ed6d6453204"
+)
+EXPECTED_ARTIFACT_SCHEMA_SHA256 = (
+    "150f3fb7c7fddea81bd78930806845da826440b3e0e5607c65294bdf3d07a4c7"
+)
+EXPECTED_ARTIFACT_METHOD_STATUS_COUNTS = {
+    ("cited-tcb", "audit-citation"): 1,
+    ("cited-tcb", "citation"): 2,
+    ("cited-tcb", "computed-margin"): 1,
+    ("cited-tcb", "foundry-parity"): 2,
+    ("cited-tcb", "mechanized-assumption"): 1,
+    ("cited-tcb", "negative-result"): 1,
+    ("cited-tcb", "partial-mechanization"): 1,
+    ("discharged-bytecode", "adversarial-screen"): 1,
+    ("discharged-bytecode", "certora-rule-set"): 3,
+    ("discharged-bytecode", "cross-validation"): 1,
+    ("discharged-bytecode", "executable-lean-differential"): 1,
+    ("discharged-bytecode", "foundry-invariant"): 1,
+    ("discharged-bytecode", "foundry-parity"): 1,
+    ("discharged-bytecode", "halmos-session"): 8,
+    ("discharged-bytecode", "kontrol-kevm-session"): 4,
+    ("discharged-bytecode", "lean-refinement"): 1,
+}
+AXIOM_REQUIRED_FIELDS = frozenset({
+    "citation",
+    "description",
+    "discharge_artifacts",
+    "id",
+    "lean_type",
+    "name",
+    "status",
+    "status_detail",
+})
+AXIOM_OPTIONAL_FIELDS = frozenset({
+    "covers",
+    "discharge_tier",
+    "lean_type_note",
+})
+ARTIFACT_STRING_FIELDS = frozenset({
+    "conf",
+    "date",
+    "evidence",
+    "model_contract",
+    "path",
+    "tool",
+    "type",
+})
 
 # --------------------------------------------------------------------------- #
 # MANDATORY REGISTRY (F8, 2026-07-16, closes the deletion-tolerance vacuity).
@@ -447,6 +503,190 @@ def check_no_phantom_axiom(ledger: dict, source_idents: set[str]) -> list[str]:
     return fails
 
 
+def _canonical_rows_digest(rows: list[list[object]]) -> str:
+    encoded = sorted(
+        json.dumps(row, ensure_ascii=True, separators=(",", ":"))
+        for row in rows
+    )
+    return sha256_hex("".join(f"{row}\n" for row in encoded))
+
+
+def check_ledger_schema(ledger: dict) -> list[str]:
+    """C16 — exact row schemas, artifact value types, and method tallies."""
+    fails: list[str] = []
+    axioms = ledger.get("axioms")
+    if not isinstance(axioms, list):
+        return ["C16 axioms is not an array."]
+
+    axiom_schema_rows: list[list[object]] = []
+    artifact_schema_rows: list[list[object]] = []
+    method_status_counts: dict[tuple[str, str], int] = {}
+    allowed_axiom_fields = AXIOM_REQUIRED_FIELDS | AXIOM_OPTIONAL_FIELDS
+    allowed_artifact_fields = ARTIFACT_STRING_FIELDS | {
+        "pinned_codehash",
+        "runs",
+    }
+
+    def method_component(value: object) -> str:
+        if isinstance(value, str):
+            return value
+        return f"<{type(value).__name__}:{value!r}>"
+
+    for index, axiom in enumerate(axioms):
+        if not isinstance(axiom, dict):
+            fails.append(f"C16 axioms[{index}] is not an object.")
+            continue
+        axiom_id = axiom.get("id")
+        status = axiom.get("status")
+        axiom_schema_rows.append([axiom_id, sorted(axiom)])
+
+        missing = sorted(AXIOM_REQUIRED_FIELDS - set(axiom))
+        extra = sorted(set(axiom) - allowed_axiom_fields)
+        if missing:
+            fails.append(
+                f"C16 axiom {axiom_id!r} is missing required field(s) {missing}"
+            )
+        if extra:
+            fails.append(
+                f"C16 axiom {axiom_id!r} has unpinned field(s) {extra}"
+            )
+
+        for field in (
+            "description",
+            "id",
+            "lean_type",
+            "name",
+            "status",
+            "status_detail",
+        ):
+            value = axiom.get(field)
+            if not isinstance(value, str) or not value:
+                fails.append(
+                    f"C16 axiom {axiom_id!r}.{field} must be a non-empty string, "
+                    f"got {value!r}"
+                )
+        citation = axiom.get("citation")
+        if citation is not None and (
+            not isinstance(citation, str) or not citation
+        ):
+            fails.append(
+                f"C16 axiom {axiom_id!r}.citation must be null or a non-empty "
+                f"string, got {citation!r}"
+            )
+        for field in ("discharge_tier", "lean_type_note"):
+            if field in axiom and (
+                not isinstance(axiom[field], str) or not axiom[field]
+            ):
+                fails.append(
+                    f"C16 axiom {axiom_id!r}.{field} must be a non-empty string"
+                )
+        if "covers" in axiom and (
+            not isinstance(axiom["covers"], list)
+            or not axiom["covers"]
+            or any(
+                not isinstance(item, str) or not item
+                for item in axiom["covers"]
+            )
+        ):
+            fails.append(
+                f"C16 axiom {axiom_id!r}.covers must be a non-empty string array"
+            )
+
+        artifacts = axiom.get("discharge_artifacts")
+        if not isinstance(artifacts, list):
+            fails.append(
+                f"C16 axiom {axiom_id!r}.discharge_artifacts is not an array"
+            )
+            continue
+        for artifact_index, artifact in enumerate(artifacts):
+            if not isinstance(artifact, dict):
+                fails.append(
+                    f"C16 axiom {axiom_id!r} artifact[{artifact_index}] is not "
+                    "an object"
+                )
+                continue
+            method = artifact.get("type")
+            artifact_schema_rows.append([
+                axiom_id,
+                status,
+                method,
+                sorted(artifact),
+            ])
+            count_key = (
+                method_component(status),
+                method_component(method),
+            )
+            method_status_counts[count_key] = (
+                method_status_counts.get(count_key, 0) + 1
+            )
+
+            artifact_extra = sorted(
+                set(artifact) - allowed_artifact_fields
+            )
+            if artifact_extra:
+                fails.append(
+                    f"C16 axiom {axiom_id!r} artifact {method!r} has unpinned "
+                    f"field(s) {artifact_extra}"
+                )
+            for field in ARTIFACT_STRING_FIELDS:
+                if field in artifact and (
+                    not isinstance(artifact[field], str)
+                    or not artifact[field]
+                ):
+                    fails.append(
+                        f"C16 axiom {axiom_id!r} artifact {method!r}.{field} "
+                        "must be a non-empty string"
+                    )
+            if "pinned_codehash" in artifact:
+                codehash = artifact["pinned_codehash"]
+                if not isinstance(codehash, str) or re.fullmatch(
+                    r"0x[0-9a-fA-F]{64}", codehash
+                ) is None:
+                    fails.append(
+                        f"C16 axiom {axiom_id!r} artifact {method!r} has "
+                        f"invalid pinned_codehash {codehash!r}"
+                    )
+            if "runs" in artifact and (
+                type(artifact["runs"]) is not int
+                or artifact["runs"] <= 0
+            ):
+                fails.append(
+                    f"C16 axiom {axiom_id!r} artifact {method!r}.runs must be "
+                    f"a positive integer, got {artifact['runs']!r}"
+                )
+
+    axiom_schema_digest = _canonical_rows_digest(axiom_schema_rows)
+    if axiom_schema_digest != EXPECTED_AXIOM_SCHEMA_SHA256:
+        fails.append(
+            "C16 exact axiom-row schema drift: "
+            f"sha256={axiom_schema_digest}, "
+            f"expected {EXPECTED_AXIOM_SCHEMA_SHA256}"
+        )
+    artifact_schema_digest = _canonical_rows_digest(artifact_schema_rows)
+    if artifact_schema_digest != EXPECTED_ARTIFACT_SCHEMA_SHA256:
+        fails.append(
+            "C16 exact discharge-artifact schema drift: "
+            f"sha256={artifact_schema_digest}, "
+            f"expected {EXPECTED_ARTIFACT_SCHEMA_SHA256}"
+        )
+    if method_status_counts != EXPECTED_ARTIFACT_METHOD_STATUS_COUNTS:
+        actual = sorted(
+            (status_name, method_name, count)
+            for (status_name, method_name), count
+            in method_status_counts.items()
+        )
+        expected = sorted(
+            (status_name, method_name, count)
+            for (status_name, method_name), count
+            in EXPECTED_ARTIFACT_METHOD_STATUS_COUNTS.items()
+        )
+        fails.append(
+            "C16 artifact status/method tally drift: "
+            f"actual={actual}, expected={expected}"
+        )
+    return fails
+
+
 def check_counts(ledger: dict) -> list[str]:
     fails = []
     axioms = ledger.get("axioms", [])
@@ -454,8 +694,14 @@ def check_counts(ledger: dict) -> list[str]:
     if not isinstance(summary, dict):
         return ["C5 summary is not an object."]
     tally: dict[str, int] = {}
-    for a in axioms:
-        tally[a.get("status", "?")] = tally.get(a.get("status", "?"), 0) + 1
+    for index, a in enumerate(axioms):
+        if not isinstance(a, dict):
+            fails.append(f"C5 axioms[{index}] is not an object.")
+            continue
+        status = a.get("status", "?")
+        if not isinstance(status, str):
+            status = f"<{type(status).__name__}:{status!r}>"
+        tally[status] = tally.get(status, 0) + 1
     unknown = sorted(set(tally) - ALLOWED_AXIOM_STATUSES)
     if unknown:
         fails.append(
@@ -496,7 +742,13 @@ def check_counts(ledger: dict) -> list[str]:
 
 def check_status_hygiene(ledger: dict) -> list[str]:
     fails = []
-    for a in ledger.get("axioms", []):
+    axioms = ledger.get("axioms", [])
+    if not isinstance(axioms, list):
+        return ["C6 axioms is not an array."]
+    for a in axioms:
+        if not isinstance(a, dict):
+            fails.append("C6 axiom row is not an object.")
+            continue
         st = a.get("status")
         if st not in ALLOWED_AXIOM_STATUSES:
             fails.append(
@@ -509,15 +761,37 @@ def check_status_hygiene(ledger: dict) -> list[str]:
                          f"advertises 0 placeholder/misleading; reintroducing one must be conscious.")
         if st == "discharged-bytecode":
             arts = a.get("discharge_artifacts", [])
-            ok = any(("pinned_codehash" in art) or
-                     (art.get("type") in ("halmos-session", "kontrol-kevm-session", "certora-rule-set",
-                                           "lean-refinement", "executable-lean-differential"))
-                     for art in arts)
+            ok = isinstance(arts, list) and any(
+                isinstance(art, dict) and (
+                    (
+                        isinstance(art.get("pinned_codehash"), str)
+                        and re.fullmatch(
+                            r"0x[0-9a-fA-F]{64}",
+                            art["pinned_codehash"],
+                        )
+                        is not None
+                    )
+                    or (
+                        art.get("type")
+                        in (
+                            "halmos-session",
+                            "kontrol-kevm-session",
+                            "certora-rule-set",
+                            "lean-refinement",
+                            "executable-lean-differential",
+                        )
+                    )
+                )
+                for art in arts
+            )
             if not ok:
                 fails.append(f"C6 axiom {a['id']} marked `discharged-bytecode` but carries no "
                              f"discharge artifact (pinned codehash / halmos / kontrol / certora / lean).")
         if st == "cited-tcb":
-            if not a.get("citation") and not a.get("discharge_artifacts"):
+            artifacts = a.get("discharge_artifacts")
+            if not a.get("citation") and not (
+                isinstance(artifacts, list) and artifacts
+            ):
                 fails.append(f"C6 axiom {a['id']} marked `cited-tcb` but carries neither a citation "
                              f"nor a discharge artifact.")
     return fails
@@ -859,11 +1133,50 @@ def self_test() -> int:
         dup_key_fails = ["duplicate ledger object key rejected"]
     cases.append(("C15 duplicate ledger object key", dup_key_fails))
 
+    # C16 EXACT ROW/ARTIFACT SCHEMA NEGATIVES — exercise the live schema pins,
+    # not a hand-built miniature that could drift away from AXIOM_STATUS.json.
+    schema_clean = load_ledger()
+    extra_axiom_field = json.loads(json.dumps(schema_clean))
+    extra_axiom_field["axioms"][0]["reviewer_only"] = True
+    cases.append((
+        "C16 extra axiom field",
+        check_ledger_schema(extra_axiom_field),
+    ))
+    missing_axiom_field = json.loads(json.dumps(schema_clean))
+    del missing_axiom_field["axioms"][0]["description"]
+    cases.append((
+        "C16 missing axiom field",
+        check_ledger_schema(missing_axiom_field),
+    ))
+    fabricated_method = json.loads(json.dumps(schema_clean))
+    fabricated_method["axioms"][0]["discharge_artifacts"][0][
+        "type"
+    ] = "fabricated-method"
+    cases.append((
+        "C16 fabricated artifact method",
+        check_ledger_schema(fabricated_method),
+    ))
+    null_codehash = json.loads(json.dumps(schema_clean))
+    codehash_replaced = False
+    for axiom in null_codehash["axioms"]:
+        for artifact in axiom["discharge_artifacts"]:
+            if "pinned_codehash" in artifact:
+                artifact["pinned_codehash"] = None
+                codehash_replaced = True
+                break
+        if codehash_replaced:
+            break
+    cases.append((
+        "C16 null pinned codehash",
+        check_ledger_schema(null_codehash) if codehash_replaced else [],
+    ))
+
     # control: a CLEAN input must NOT fire (guards against always-fire vacuity)
     clean = check_closures(ledger, live_ok) + check_counts(ledger) \
         + check_status_hygiene(ledger) + check_mandatory_registry(mand) \
         + check_closures_identity_pin({"closures": full_closures}) \
-        + check_unique_list_identities(ledger) + check_unique_list_identities(mand)
+        + check_unique_list_identities(ledger) + check_unique_list_identities(mand) \
+        + check_ledger_schema(schema_clean)
 
     ok = True
     for label, result in cases:
@@ -963,6 +1276,7 @@ def main() -> int:
         ["C2 lint_fv_invariants.sh not found — cannot cross-check the closure pin."]
     fails += check_no_undocumented_axiom(ledger, live)
     fails += check_no_phantom_axiom(ledger, source_idents)
+    fails += check_ledger_schema(ledger)
     fails += check_counts(ledger)
     fails += check_status_hygiene(ledger)
     fails += check_signature_pins(ledger, reader)
@@ -984,8 +1298,9 @@ def main() -> int:
         print("\nThe human-facing ledger no longer matches the machine truth. "
               "Reconcile docs/AXIOM_STATUS.json with the Lean source/dump.", file=sys.stderr)
         return 1
-    print("\nOK: every advertised closure, count, status, and headline-statement pin "
-          "matches the live Lean truth.")
+    print("\nOK: every advertised closure, exact row/artifact schema, count, "
+          "status/method tally, and headline-statement pin matches the live "
+          "Lean truth.")
     return 0
 
 

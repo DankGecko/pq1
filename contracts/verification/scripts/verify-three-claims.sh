@@ -18,10 +18,51 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+if [[ "${SCRIPT_SOURCE}" != /* ]]; then
+  SCRIPT_SOURCE="$(/usr/bin/pwd -P)/${SCRIPT_SOURCE}"
+fi
+SCRIPT_PARENT=$(/usr/bin/dirname -- "${SCRIPT_SOURCE}")
+SCRIPT_DIR=$(
+  builtin unset CDPATH
+  builtin cd -P -- "${SCRIPT_PARENT}" &&
+    /usr/bin/pwd -P
+) || {
+  /usr/bin/printf 'ERROR: cannot resolve the verification script directory\n' >&2
+  exit 2
+}
+REPO_ROOT=$(
+  builtin unset CDPATH
+  builtin cd -P -- "${SCRIPT_DIR}/../../.." &&
+    /usr/bin/pwd -P
+) || {
+  /usr/bin/printf 'ERROR: cannot resolve the repository root\n' >&2
+  exit 2
+}
 VERIFICATION_DIR="${REPO_ROOT}/contracts/verification"
 SMART_WALLET_DIR="${REPO_ROOT}/contracts/smart-wallet"
+if [[ "${SCRIPT_DIR}" != "${VERIFICATION_DIR}/scripts" ]] ||
+   [[ ! -f "${VERIFICATION_DIR}/Makefile" ]] ||
+   [[ ! -d "${SMART_WALLET_DIR}" ]]; then
+  /usr/bin/printf \
+    'ERROR: resolved verification trust root is inconsistent: script=%s root=%s\n' \
+    "${SCRIPT_DIR}" "${REPO_ROOT}" >&2
+  exit 2
+fi
+readonly SCRIPT_SOURCE SCRIPT_PARENT SCRIPT_DIR REPO_ROOT
+readonly VERIFICATION_DIR SMART_WALLET_DIR
+
+if [[ "${1:-}" == "--self-test-path-resolution" ]]; then
+  if [[ "$#" -ne 1 ]]; then
+    /usr/bin/printf \
+      'usage: %s --self-test-path-resolution\n' "${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+  /usr/bin/printf 'script_dir=%s\nrepo_root=%s\n' \
+    "${SCRIPT_DIR}" "${REPO_ROOT}"
+  exit 0
+fi
+
 USER_HOME=$(
   /usr/bin/python3 -I -S -c \
     'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)'
@@ -136,7 +177,7 @@ bold "[4/8] Foundry build + test (parity + unit)"
 (cd "${SMART_WALLET_DIR}" && "${FORGE_ENV[@]}" "${FORGE_BIN}" build 2>&1 | /usr/bin/tail -3)
 /usr/bin/python3 -E -S "${SCRIPT_DIR}/check_forge_results.py" --self-test
 run_forge_evidence full
-ok "forge test passed with pinned result/count receipt"
+ok "forge test passed with pinned identity/result/count receipt"
 
 bold "[5/8] Forge invariant fuzz (256 runs * 500 calls)"
 run_forge_evidence invariants --match-contract Invariants

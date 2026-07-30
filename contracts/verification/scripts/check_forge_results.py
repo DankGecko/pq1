@@ -10,6 +10,7 @@ exact advertised execution counts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -68,6 +69,13 @@ EXPECTED_MODE_COUNTS = {
     "full": {"tests": 120, "fuzz": 2, "invariants": 6, "skips": 2},
     "invariants": {"tests": 6, "fuzz": 0, "invariants": 6, "skips": 0},
 }
+# Checker-owned pin over every emitted [suite::test, status, kind] row:
+# compact JSON per row, bytewise sorted, each terminated by "\n", then SHA-256.
+# Update only after inspecting an intentional test identity/status/kind change.
+EXPECTED_RESULT_MANIFEST_SHA256 = {
+    "full": "d84c2cd6193b5b5f516443d15bb3b9ee413357c0549895da25aeb6b497d63777",
+    "invariants": "95b2bbf81ca8103337859b3ccf590672ea3d10bc7b41c5fedafd2024921baf14",
+}
 
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -79,6 +87,32 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def result_manifest_digest(rows: list[list[object]]) -> str:
+    """Hash the exact label/status/kind rows without delimiter ambiguity."""
+    encoded = sorted(
+        json.dumps(row, ensure_ascii=True, separators=(",", ":"))
+        for row in rows
+    )
+    payload = "".join(f"{row}\n" for row in encoded).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def require_typed_zero(
+    details: dict[str, Any],
+    field: str,
+    label: str,
+    failures: list[str],
+) -> None:
+    if field not in details:
+        failures.append(f"{label}: missing required {field} field")
+        return
+    value = details[field]
+    if type(value) is not int or value != 0:
+        failures.append(
+            f"{label}: {field}={value!r}, expected explicit integer 0"
+        )
+
+
 def validate_results(
     payload: object,
     *,
@@ -86,12 +120,14 @@ def validate_results(
     expected_fuzz_runs: int,
     expected_invariant_runs: int,
     expected_invariant_depth: int,
+    expected_manifest_sha256: str | None = None,
 ) -> tuple[list[str], dict[str, int]]:
     failures: list[str] = []
     counts = {"tests": 0, "fuzz": 0, "invariants": 0, "skips": 0}
     seen_fuzz: set[str] = set()
     seen_invariants: set[str] = set()
     seen_skips: set[str] = set()
+    manifest_rows: list[list[object]] = []
 
     if not isinstance(payload, dict) or not payload:
         return ["Forge JSON contains no test suites"], counts
@@ -110,8 +146,21 @@ def validate_results(
             counts["tests"] += 1
             if not isinstance(result, dict):
                 failures.append(f"{label}: result is not an object")
+                manifest_rows.append([label, "<malformed>", "<malformed>"])
                 continue
             status = result.get("status")
+            kind = result.get("kind")
+            if not isinstance(kind, dict) or len(kind) != 1:
+                failures.append(f"{label}: malformed result kind {kind!r}")
+                manifest_rows.append([label, status, "<malformed>"])
+                continue
+
+            kind_name, details = next(iter(kind.items()))
+            manifest_rows.append([label, status, kind_name])
+            if not isinstance(details, dict):
+                failures.append(f"{label}: {kind_name} details are not an object")
+                continue
+
             if status == "Skipped":
                 counts["skips"] += 1
                 seen_skips.add(label)
@@ -122,16 +171,6 @@ def validate_results(
                 reason = result.get("reason")
                 failures.append(f"{label}: status={status!r}, reason={reason!r}")
 
-            kind = result.get("kind")
-            if not isinstance(kind, dict) or len(kind) != 1:
-                failures.append(f"{label}: malformed result kind {kind!r}")
-                continue
-
-            kind_name, details = next(iter(kind.items()))
-            if not isinstance(details, dict):
-                failures.append(f"{label}: {kind_name} details are not an object")
-                continue
-
             if kind_name == "Fuzz":
                 counts["fuzz"] += 1
                 seen_fuzz.add(label)
@@ -141,8 +180,9 @@ def validate_results(
                         f"{label}: fuzz runs={runs!r}, expected "
                         f"{expected_fuzz_runs}"
                     )
-                if details.get("failed_corpus_replays", 0) != 0:
-                    failures.append(f"{label}: failed fuzz corpus replay")
+                require_typed_zero(
+                    details, "failed_corpus_replays", label, failures
+                )
             elif kind_name == "Invariant":
                 counts["invariants"] += 1
                 seen_invariants.add(label)
@@ -160,8 +200,10 @@ def validate_results(
                         f"{expected_calls} "
                         f"({expected_invariant_runs}x{expected_invariant_depth})"
                     )
-                if details.get("failed_corpus_replays", 0) != 0:
-                    failures.append(f"{label}: failed invariant corpus replay")
+                require_typed_zero(
+                    details, "failed_corpus_replays", label, failures
+                )
+                require_typed_zero(details, "reverts", label, failures)
 
     expected_counts = EXPECTED_MODE_COUNTS[mode]
     for count_name, expected in expected_counts.items():
@@ -190,6 +232,17 @@ def validate_results(
             f"{mode} Forge skip identity drift: "
             f"missing={sorted(expected_skips - seen_skips)}, "
             f"extra={sorted(seen_skips - expected_skips)}"
+        )
+    manifest_digest = result_manifest_digest(manifest_rows)
+    expected_manifest = (
+        expected_manifest_sha256
+        if expected_manifest_sha256 is not None
+        else EXPECTED_RESULT_MANIFEST_SHA256[mode]
+    )
+    if manifest_digest != expected_manifest:
+        failures.append(
+            f"{mode} Forge exact label/status/kind manifest drift: "
+            f"sha256={manifest_digest}, expected {expected_manifest}"
         )
     return failures, counts
 
@@ -228,6 +281,7 @@ def self_test() -> int:
                 "Invariant": {
                     "runs": 256,
                     "calls": 128000,
+                    "reverts": 0,
                     "failed_corpus_replays": 0,
                 }
             },
@@ -241,13 +295,32 @@ def self_test() -> int:
             "reason": None,
             "kind": {"Unit": {"gas": 1}},
         }
-    failures, _ = validate_results(
-        clean,
-        mode="full",
-        expected_fuzz_runs=256,
-        expected_invariant_runs=256,
-        expected_invariant_depth=500,
-    )
+
+    def fixture_manifest(payload: dict[str, Any]) -> str:
+        rows: list[list[object]] = []
+        for suite_name, suite in payload.items():
+            for test_name, result in suite["test_results"].items():
+                kind_name = next(iter(result["kind"]))
+                rows.append([
+                    f"{suite_name}::{test_name}",
+                    result["status"],
+                    kind_name,
+                ])
+        return result_manifest_digest(rows)
+
+    full_manifest = fixture_manifest(clean)
+
+    def validate_full(payload: object) -> tuple[list[str], dict[str, int]]:
+        return validate_results(
+            payload,
+            mode="full",
+            expected_fuzz_runs=256,
+            expected_invariant_runs=256,
+            expected_invariant_depth=500,
+            expected_manifest_sha256=full_manifest,
+        )
+
+    failures, _ = validate_full(clean)
     if failures:
         print(f"FAIL: clean Forge fixture rejected: {failures}", file=sys.stderr)
         return 1
@@ -297,14 +370,16 @@ def self_test() -> int:
         "kind": {"Unit": {"gas": 1}},
     }
     corruptions.append(("coverage identity drift", identity_drift))
+    unit_identity_drift = json.loads(json.dumps(clean))
+    unit_tests = unit_identity_drift[
+        "test/Example.t.sol:ExampleTest"
+    ]["test_results"]
+    unit_tests["replacement_weaker_unit()"] = unit_tests.pop("test_unit_0()")
+    corruptions.append(
+        ("one-for-one unit identity substitution", unit_identity_drift)
+    )
     for label, payload in corruptions:
-        detected, _ = validate_results(
-            payload,
-            mode="full",
-            expected_fuzz_runs=256,
-            expected_invariant_runs=256,
-            expected_invariant_depth=500,
-        )
+        detected, _ = validate_full(payload)
         if not detected:
             print(f"FAIL: {label} was accepted", file=sys.stderr)
             return 1
@@ -319,13 +394,24 @@ def self_test() -> int:
         mutated[suite_name]["test_results"][test_name]["kind"]["Fuzz"][
             field
         ] = value
-        detected, _ = validate_results(
-            mutated,
-            mode="full",
-            expected_fuzz_runs=256,
-            expected_invariant_runs=256,
-            expected_invariant_depth=500,
-        )
+        detected, _ = validate_full(mutated)
+        if not detected:
+            print(f"FAIL: {label} was accepted", file=sys.stderr)
+            return 1
+
+    for label, field, value in (
+        ("missing fuzz corpus replay field", "failed_corpus_replays", None),
+        ("non-integer fuzz corpus replay zero", "failed_corpus_replays", False),
+    ):
+        mutated = json.loads(json.dumps(clean))
+        fuzz_label = sorted(EXPECTED_FUZZ_TESTS)[0]
+        suite_name, test_name = fuzz_label.split("::", 1)
+        details = mutated[suite_name]["test_results"][test_name]["kind"]["Fuzz"]
+        if value is None:
+            del details[field]
+        else:
+            details[field] = value
+        detected, _ = validate_full(mutated)
         if not detected:
             print(f"FAIL: {label} was accepted", file=sys.stderr)
             return 1
@@ -334,6 +420,7 @@ def self_test() -> int:
         ("reduced invariant runs", "runs", 1),
         ("reduced invariant calls", "calls", 256),
         ("failed invariant corpus replay", "failed_corpus_replays", 1),
+        ("invariant call reverted", "reverts", 1),
     ):
         mutated = json.loads(json.dumps(clean))
         invariant_label = sorted(EXPECTED_INVARIANT_TESTS)[0]
@@ -341,21 +428,75 @@ def self_test() -> int:
         mutated[suite_name]["test_results"][test_name]["kind"]["Invariant"][
             field
         ] = value
-        detected, _ = validate_results(
-            mutated,
-            mode="full",
-            expected_fuzz_runs=256,
-            expected_invariant_runs=256,
-            expected_invariant_depth=500,
-        )
+        detected, _ = validate_full(mutated)
         if not detected:
             print(f"FAIL: {label} was accepted", file=sys.stderr)
             return 1
 
+    for label, field in (
+        ("missing invariant corpus replay field", "failed_corpus_replays"),
+        ("missing invariant reverts field", "reverts"),
+    ):
+        mutated = json.loads(json.dumps(clean))
+        invariant_label = sorted(EXPECTED_INVARIANT_TESTS)[0]
+        suite_name, test_name = invariant_label.split("::", 1)
+        del mutated[suite_name]["test_results"][test_name]["kind"]["Invariant"][
+            field
+        ]
+        detected, _ = validate_full(mutated)
+        if not detected:
+            print(f"FAIL: {label} was accepted", file=sys.stderr)
+            return 1
+
+    invariant_clean: dict[str, Any] = {}
+    for invariant_label in EXPECTED_INVARIANT_TESTS:
+        suite_name, test_name = invariant_label.split("::", 1)
+        invariant_clean.setdefault(
+            suite_name, {"test_results": {}}
+        )["test_results"][test_name] = json.loads(json.dumps(
+            clean[suite_name]["test_results"][test_name]
+        ))
+    invariant_failures, _ = validate_results(
+        invariant_clean,
+        mode="invariants",
+        expected_fuzz_runs=256,
+        expected_invariant_runs=256,
+        expected_invariant_depth=500,
+        expected_manifest_sha256=fixture_manifest(invariant_clean),
+    )
+    if invariant_failures:
+        print(
+            "FAIL: clean invariant-only Forge fixture rejected: "
+            f"{invariant_failures}",
+            file=sys.stderr,
+        )
+        return 1
+
+    invariant_missing_replay = json.loads(json.dumps(invariant_clean))
+    invariant_label = sorted(EXPECTED_INVARIANT_TESTS)[0]
+    suite_name, test_name = invariant_label.split("::", 1)
+    del invariant_missing_replay[suite_name]["test_results"][test_name][
+        "kind"
+    ]["Invariant"]["failed_corpus_replays"]
+    invariant_negative, _ = validate_results(
+        invariant_missing_replay,
+        mode="invariants",
+        expected_fuzz_runs=256,
+        expected_invariant_runs=256,
+        expected_invariant_depth=500,
+        expected_manifest_sha256=fixture_manifest(invariant_clean),
+    )
+    if not invariant_negative:
+        print(
+            "FAIL: invariant-only missing replay field was accepted",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
         "check_forge_results --self-test PASS "
-        "(empty/failure/filter/identity/reduced-count/corpus-replay "
-        "negatives rejected)"
+        "(full+invariant controls; empty/failure/filter/exact-manifest/"
+        "reduced-count/replay/revert negatives rejected)"
     )
     return 0
 
