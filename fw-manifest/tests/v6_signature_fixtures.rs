@@ -291,6 +291,11 @@ fn domain_substitution_fails() {
     resign_page_with_digest(&mut page, &key, &evil_digest);
     // The verifier recomputes with the frozen PQFW_V6 domain → mismatch.
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
+    // The attacker re-signs with the legitimate fixture key, so the
+    // fingerprint leg must STILL pass: the refusal isolates to the
+    // freshly-recomputed-digest leg (a vendor_fpr_matches regression
+    // would otherwise keep this test green for the wrong reason).
+    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
 }
@@ -309,6 +314,11 @@ fn schema_substitution_fails() {
     let evil_digest = sha256(&evil_preimage);
     resign_page_with_digest(&mut page, &key, &evil_digest);
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
+    // The attacker re-signs with the legitimate fixture key, so the
+    // fingerprint leg must STILL pass: the refusal isolates to the
+    // freshly-recomputed-digest leg (a vendor_fpr_matches regression
+    // would otherwise keep this test green for the wrong reason).
+    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
 
     // (b) The page-level schema gate fires FIRST: a page whose schema byte
@@ -334,6 +344,11 @@ fn slot_substitution_fails() {
     let evil_digest = sha256(&evil_preimage);
     resign_page_with_digest(&mut page, &key, &evil_digest);
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
+    // The attacker re-signs with the legitimate fixture key, so the
+    // fingerprint leg must STILL pass: the refusal isolates to the
+    // freshly-recomputed-digest leg (a vendor_fpr_matches regression
+    // would otherwise keep this test green for the wrong reason).
+    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
 }
@@ -349,6 +364,10 @@ fn tuple_change_fails() {
         page[off..off + 4].copy_from_slice(&bumped.to_be_bytes());
         v6::rewrite_normalized_crc(&mut page);
         let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
+        // The mutation leaves the vendor-fpr field untouched, so the
+        // fingerprint leg must STILL pass: the refusal isolates to the
+        // freshly-recomputed-digest leg.
+        assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
         assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
         assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
     }
@@ -361,6 +380,10 @@ fn length_change_fails() {
     page[v6::OFF_SECURE_LEN..v6::OFF_SECURE_LEN + 4].copy_from_slice(&0x1008u32.to_be_bytes());
     v6::rewrite_normalized_crc(&mut page);
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
+    // The mutation leaves the vendor-fpr field untouched, so the
+    // fingerprint leg must STILL pass: the refusal isolates to the
+    // freshly-recomputed-digest leg.
+    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
 }
@@ -372,6 +395,10 @@ fn image_hash_change_fails() {
     page[v6::OFF_SECURE_HASH] ^= 0x01; // one bit of the signed secure hash
     v6::rewrite_normalized_crc(&mut page);
     let m = v6::parse_and_validate(&page, PhysicalSlot::B).unwrap();
+    // The mutation leaves the vendor-fpr field untouched, so the
+    // fingerprint leg must STILL pass: the refusal isolates to the
+    // freshly-recomputed-digest leg.
+    assert!(m.vendor_fpr_matches(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_signature(&vk.pk_seed, &vk.pk_root));
     assert!(!m.verify_with_embedded_key(&vk.pk_seed, &vk.pk_root));
 }
