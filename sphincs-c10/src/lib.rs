@@ -13,6 +13,10 @@
 //! The algorithm matches the Solidity verifier `SPHINCsC10Asm.sol` and
 //! the Python reference signer (adapted from
 //! <https://github.com/nconsigny/SPHINCs->).
+//!
+//! Credit: the C10 parameter set, the reference Python signer, and the Yul
+//! on-chain verifier this crate is byte-compatible with are the work of
+//! Nicolas Consigny (`nconsigny`, <nicolas@ethereum.org>), MIT-licensed.
 
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]

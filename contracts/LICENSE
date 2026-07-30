@@ -19,3 +19,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Portions of this software are derived from third-party MIT-licensed work and
+remain the copyright of their respective authors:
+
+  * src/verifiers/SPHINCsC10Asm.sol — derived from SPHINCs-C10Sha256Asm.sol in
+    https://github.com/nconsigny/SPHINCs- (MIT), the original Yul on-chain
+    SPHINCS+C verifier and C10 parameter set by Nicolas Consigny
+    (nconsigny, nicolas@ethereum.org).
