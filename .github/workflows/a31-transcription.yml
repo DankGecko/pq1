@@ -6,7 +6,9 @@ name: A3.1 transcription lint
 # `**/*.lean` and `contracts/verification/**`, so a PR that edits ONLY C10Program.lean
 # (the transcription side — the likelier drift) would skip ci.yml entirely. This
 # workflow uses a POSITIVE `paths:` filter so the lint fires exactly when transcription
-# drift is possible. Pure Python (no Lean/Foundry toolchain). See
+# drift is possible. The checks are pure Python, but the authoritative
+# verification Makefile deliberately requires the pinned elan `lake` shim as
+# part of its shared fail-closed trust root. See
 # contracts/verification/docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
 #
 # `verify-transcription` runs THREE pure-Python checks: (1) the POSITIONAL statistical
@@ -17,8 +19,9 @@ name: A3.1 transcription lint
 # proving those mutants are invisible to (1) yet caught by (2).
 #
 # Scope reminder: these are REGRESSION GATES + a structural cross-check, not a proof. They
-# are the ONLY CI-enforced piece of the A3.1 Lean track (the `lake`/`elan` verify-* suite
-# runs locally / in review, not in CI). The structural check now covers intra-fragment
+# are the ONLY CI-enforced piece of the A3.1 Lean track (this job installs the
+# elan shim for the common Makefile preflight but does not run the Lean build
+# suite). The structural check now covers intra-fragment
 # source<->AST fidelity in CI (previously local-only); the source->deployed-bytecode leg
 # (R1) and the both-N-masked functional behaviour stay covered by the local `verify-interp`
 # 396-vector corpus + the kernel `execC10Asm_eq`.
@@ -57,5 +60,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: install elan shim (verification Makefile trust root)
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: transcription-fidelity checks (positional lint + structural AST + negative controls)
         run: make -C contracts/verification verify-transcription
