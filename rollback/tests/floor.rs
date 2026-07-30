@@ -10,6 +10,33 @@ use pqsigner_rollback::floor::*;
 
 const FENCE_OK: CompletionLaunchEvidence = CompletionLaunchEvidence::ProvenNoCompletionLaunch;
 
+/// Role plans matching the scripted banks below (indices are the
+/// bank-cell positions).
+const COMPLETABLE_ROLES: [(u16, PlanRole); 4] = [
+    (5, PlanRole::Witness),
+    (6, PlanRole::Witness),
+    (7, PlanRole::Consumed),
+    (8, PlanRole::Reserved),
+];
+const DEAD_ROLES: [(u16, PlanRole); 4] = [
+    (5, PlanRole::Witness),
+    (6, PlanRole::Consumed),
+    (7, PlanRole::Consumed),
+    (8, PlanRole::Consumed),
+];
+const RECOVERING_ROLES: [(u16, PlanRole); 4] = [
+    (5, PlanRole::Witness),
+    (6, PlanRole::Witness),
+    (7, PlanRole::Witness),
+    (8, PlanRole::Reserved),
+];
+const FIRST_BUMP_ROLES: [(u16, PlanRole); 4] = [
+    (1, PlanRole::Witness),
+    (2, PlanRole::Witness),
+    (3, PlanRole::Witness),
+    (4, PlanRole::Reserved),
+];
+
 fn steady_bank(t: u32, g: u32) -> Bank {
     let mut bank = Bank::new();
     for _ in 0..3 {
@@ -116,7 +143,7 @@ fn completable_stage_is_recovering() {
     bank.add(ProbeScript::Corrected(encode_floor_record(6, 2)));
     bank.virgin();
     bank.route1(false);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, COMPLETABLE_ROLES))) {
         FloorView::Recovering(p) => {
             assert_eq!(p.target(), 6);
             assert_eq!(p.group(), 2);
@@ -135,7 +162,7 @@ fn dead_stage_with_no_completion_launch_is_aborted() {
     bank.add(ProbeScript::AmbiguousOrFault);
     bank.add(ProbeScript::AmbiguousOrFault);
     bank.route1(false);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, DEAD_ROLES))) {
         FloorView::Aborted(p) => {
             assert_eq!(p.floor(), 5);
             assert_eq!(p.failed_target(), 6);
@@ -156,7 +183,7 @@ fn dead_stage_with_possible_completion_is_unknown() {
     bank.route1(false);
     match bank.decode(
         CompletionLaunchEvidence::MayHaveLaunched,
-        Some(binding(PhysicalSlot::A, 7)),
+        Some(binding(PhysicalSlot::A, 7, DEAD_ROLES)),
     ) {
         FloorView::Unknown(FloorFault::CompletionMayHaveLaunched) => {}
         other => panic!("expected CompletionMayHaveLaunched, got {}", view_name(&other)),
@@ -168,7 +195,7 @@ fn conflicting_completion_authority_is_unknown() {
     let mut bank = steady_bank(5, 1);
     bank.clean(encode_stage_record(1));
     bank.route1(false);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 6))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 6, RECOVERING_ROLES))) {
         FloorView::Unknown(FloorFault::ConflictingCompletion) => {}
         other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
     }
@@ -180,7 +207,7 @@ fn two_active_stages_are_unknown() {
     bank.clean(encode_stage_record(2));
     bank.clean(encode_stage_record(3));
     bank.route1(false);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, RECOVERING_ROLES))) {
         FloorView::Unknown(FloorFault::AmbiguousStage) => {}
         other => panic!("expected AmbiguousStage, got {}", view_name(&other)),
     }
@@ -194,7 +221,7 @@ fn stage_target_not_above_floor_is_unknown() {
     bank.clean(encode_floor_record(5, 2));
     bank.virgin();
     bank.route1(false);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 6))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 6, RECOVERING_ROLES))) {
         FloorView::Unknown(FloorFault::AmbiguousStage) => {}
         other => panic!("expected AmbiguousStage, got {}", view_name(&other)),
     }
@@ -209,7 +236,7 @@ fn classification_priority_unresolved_stage_outranks_plain_steady() {
     }
     bank.virgin();
     bank.route1(false);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, RECOVERING_ROLES))) {
         FloorView::Recovering(_) => {}
         other => panic!("expected Recovering, got {}", view_name(&other)),
     }
@@ -225,7 +252,7 @@ fn first_bump_stage_requires_base0_proof() {
     }
     bank.virgin();
     bank.route1(false);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 2))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 2, FIRST_BUMP_ROLES))) {
         FloorView::Unknown(FloorFault::MissingBaseProof) => {}
         other => panic!("expected MissingBaseProof, got {}", view_name(&other)),
     }
@@ -238,7 +265,7 @@ fn first_bump_stage_requires_base0_proof() {
     }
     bank.virgin();
     bank.route1(true);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 2))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 2, FIRST_BUMP_ROLES))) {
         FloorView::Recovering(p) => assert_eq!(p.target(), 1),
         other => panic!("expected Recovering, got {}", view_name(&other)),
     }
@@ -364,7 +391,7 @@ fn stage_record_overflow_fails_closed() {
         bank.clean(encode_stage_record(g));
     }
     bank.route1(false);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 2))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 2, FIRST_BUMP_ROLES))) {
         FloorView::Unknown(FloorFault::RecordOverflow {
             kind: RecordKind::Stage,
             ..
@@ -400,7 +427,7 @@ fn empty_map_with_exact_route1_is_not_steady_zero() {
     let mut bank = Bank::new();
     bank.route1(true);
     let mut snap = bank.snapshot(FENCE_OK, None);
-    for slot in snap.cells.iter_mut() {
+    for slot in snap.cells_mut().iter_mut() {
         *slot = None;
     }
     let view = decode_floor(&snap);
@@ -422,7 +449,7 @@ fn prefix_snapshot_omitting_newer_complete_is_incomplete() {
     let mut bank = steady_bank(5, 1);
     let mut snap = bank.snapshot(FENCE_OK, None);
     // Keep only a prefix of the cells.
-    for slot in snap.cells.iter_mut().skip(2) {
+    for slot in snap.cells_mut().iter_mut().skip(2) {
         *slot = None;
     }
     match decode_floor(&snap) {
@@ -444,7 +471,7 @@ fn duplicate_clean_index_is_unknown() {
     let mut bank = steady_bank(5, 1);
     let mut snap = bank.snapshot(FENCE_OK, None);
     let dup = probe_clean(&mut bank.b, 0, encode_floor_record(5, 1));
-    snap.cells[1] = Some(FloorCell {
+    snap.cells_mut()[1] = Some(FloorCell {
         read: dup,
         durability: CLEAN,
         launch: MAY_LAUNCH,
@@ -463,7 +490,7 @@ fn index_address_mismatch_is_unknown() {
     let mut snap = bank.snapshot(FENCE_OK, None);
     let wrong_addr = canonical_cell_addr(0) + 16;
     let read = probe_at(&mut bank.b, 0, wrong_addr, ProbeScript::Clean(encode_floor_record(5, 1)));
-    snap.cells[0] = Some(FloorCell {
+    snap.cells_mut()[0] = Some(FloorCell {
         read,
         durability: CLEAN,
         launch: MAY_LAUNCH,
@@ -484,7 +511,7 @@ fn probe_epoch_inconsistency_is_unknown() {
     let mut snap = bank.snapshot(FENCE_OK, None);
     let mut other = TestBackend::new(8);
     let read = probe_clean(&mut other, 0, encode_floor_record(5, 1));
-    snap.cells[0] = Some(FloorCell {
+    snap.cells_mut()[0] = Some(FloorCell {
         read,
         durability: CLEAN,
         launch: MAY_LAUNCH,
@@ -510,7 +537,7 @@ fn route1_pair_must_be_two_distinct_qws() {
         canonical_route1_addr(0),
         ProbeScript::Clean(ROUTE1_BASE0_CODEWORD),
     );
-    snap.route1[1] = FloorCell {
+    snap.route1_mut()[1] = FloorCell {
         read: dup,
         durability: CLEAN,
         launch: NO_LAUNCH,
@@ -539,7 +566,7 @@ fn garbage_route1_with_committed_group_is_unknown() {
         canonical_route1_addr(1),
         ProbeScript::Clean([0x42; 16]),
     );
-    snap.route1[1] = FloorCell {
+    snap.route1_mut()[1] = FloorCell {
         read: garbage,
         durability: CLEAN,
         launch: MAY_LAUNCH,
@@ -597,5 +624,105 @@ fn view_name(v: &FloorView) -> &'static str {
         FloorView::Recovering(_) => "Recovering",
         FloorView::Aborted(_) => "Aborted",
         FloorView::Unknown(_) => "Unknown",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Role-map accountancy (R5-3): no implicit absorption
+// ---------------------------------------------------------------------------
+
+#[test]
+fn uncertain_qw_outside_role_map_is_unknown() {
+    // The corrected plan cell is NOT in the binding's role map → the
+    // decode must NOT silently absorb it into the plan.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(2));
+    bank.clean(encode_floor_record(6, 2));
+    bank.clean(encode_floor_record(6, 2));
+    bank.add(ProbeScript::Corrected(encode_floor_record(6, 2)));
+    bank.virgin();
+    bank.route1(false);
+    // Role map names only the two witnesses + two reserved virgins;
+    // the corrected cell (index 7) is unmapped.
+    let roles = [
+        (5, PlanRole::Witness),
+        (6, PlanRole::Witness),
+        (8, PlanRole::Reserved),
+        (9, PlanRole::Reserved),
+    ];
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, roles))) {
+        FloorView::Unknown(FloorFault::UnmappedRole { index: 7 }) => {}
+        other => panic!("expected UnmappedRole, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn torn_newer_group_cell_is_not_absorbed_into_old_plan() {
+    // A torn COMPLETE of a NEWER group (index 7, uncertain) presented
+    // alongside an older stage's plan must not be absorbed as an
+    // old-plan cell: UnmappedRole → Unknown.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(2));
+    bank.clean(encode_floor_record(6, 2));
+    bank.clean(encode_floor_record(6, 2));
+    bank.add(ProbeScript::Corrected(encode_complete_record(9))); // torn newer-group COMPLETE
+    bank.virgin();
+    bank.route1(false);
+    let roles = [
+        (5, PlanRole::Witness),
+        (6, PlanRole::Witness),
+        (8, PlanRole::Reserved),
+        (9, PlanRole::Reserved),
+    ];
+    let view = bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, roles)));
+    match view {
+        FloorView::Unknown(FloorFault::UnmappedRole { index: 7 }) => {}
+        other => panic!(
+            "a torn newer-group cell must never be absorbed into an older plan, got {}",
+            view_name(&other)
+        ),
+    }
+}
+
+#[test]
+fn uncertain_qw_inside_role_map_still_recovers() {
+    // Same bank, but the role map names the corrected cell as Consumed:
+    // the plan is completable → Recovering.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(2));
+    bank.clean(encode_floor_record(6, 2));
+    bank.clean(encode_floor_record(6, 2));
+    bank.add(ProbeScript::Corrected(encode_floor_record(6, 2)));
+    bank.virgin();
+    bank.route1(false);
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, COMPLETABLE_ROLES))) {
+        FloorView::Recovering(p) => {
+            assert_eq!(p.target(), 6);
+            assert_eq!(p.clean_records(), 2);
+        }
+        other => panic!("expected Recovering, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn plan_cell_not_matching_physical_reality_is_unknown() {
+    // The role map claims a Reserved cell at index 8, but the bank has
+    // a clean floor record there for the stage: plan/physical mismatch.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(2));
+    bank.clean(encode_floor_record(6, 2));
+    bank.clean(encode_floor_record(6, 2));
+    bank.clean(encode_floor_record(6, 2)); // index 7
+    bank.clean(encode_floor_record(6, 2)); // index 8
+    bank.route1(false);
+    let roles = [
+        (5, PlanRole::Witness),
+        (6, PlanRole::Witness),
+        (7, PlanRole::Witness),
+        (8, PlanRole::Reserved),
+    ];
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, roles))) {
+        FloorView::Unknown(FloorFault::UnmappedRole { index: 8 }) => {}
+        other => panic!("expected UnmappedRole, got {}", view_name(&other)),
     }
 }

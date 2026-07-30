@@ -9,8 +9,8 @@ use fw_manifest::v6::PhysicalSlot;
 use pqsigner_rollback::arm_token::{ArmState, ArmToken};
 use pqsigner_rollback::backend::{Mutation, ProbeScript, RollbackBackend};
 use pqsigner_rollback::floor::{
-    self, CompletionLaunchEvidence, DeadStageProof, EpochBumpReceipt, FloorView, RecoveryProof,
-    StageBinding, SteadyProof,
+    self, CompletionLaunchEvidence, DeadStageProof, EpochBumpReceipt, FloorView, PlanRole,
+    RecoveryProof, StageBinding, SteadyProof,
 };
 use pqsigner_rollback::intents::*;
 use pqsigner_rollback::lifecycle::{decode_lifecycle, LifecycleState};
@@ -69,9 +69,25 @@ fn recovery_proof(t: u32, binding: StageBinding) -> RecoveryProof {
     }
 }
 
-fn binding_for(slot: PhysicalSlot, r: u32, e: u32) -> StageBinding {
-    StageBinding::new(slot, r, e, manifest(slot, r, e).stored_digest).expect("binding range")
+fn binding_for(slot: PhysicalSlot, r: u32, e: u32, roles: [(u16, PlanRole); 4]) -> StageBinding {
+    StageBinding::new(slot, r, e, manifest(slot, r, e).stored_digest, roles).expect("binding range")
 }
+
+/// Role plans matching the scripted banks (indices are bank-cell
+/// positions): recovering scripts carry three witnesses + one reserved
+/// virgin; dead scripts carry one witness + three consumed cells.
+const RECOVERING_ROLES: [(u16, PlanRole); 4] = [
+    (5, PlanRole::Witness),
+    (6, PlanRole::Witness),
+    (7, PlanRole::Witness),
+    (8, PlanRole::Reserved),
+];
+const DEAD_ROLES: [(u16, PlanRole); 4] = [
+    (5, PlanRole::Witness),
+    (6, PlanRole::Consumed),
+    (7, PlanRole::Consumed),
+    (8, PlanRole::Consumed),
+];
 
 /// A Pending lifecycle row for a candidate with the arm token planted in
 /// `backend` in the given state.
@@ -82,11 +98,13 @@ fn pending_row(
     r: u32,
     e: u32,
     state: ArmState,
+    install_id: [u8; 16],
 ) -> LifecycleState {
     let m = manifest(slot, r, e);
+    let (pk_seed, pk_root) = test_key_material();
     let art = pass
-        .verify_artifact(&m, INSTALL_ID)
-        .expect("test manifest is in range");
+        .verify_artifact(&m, install_id, &pk_seed, &pk_root)
+        .expect("test manifest verifies");
     let binding = binding_of(&art);
     backend.set_arm_token(Some(ArmToken::encode(state, &binding)));
     let tok = ArmToken::decode_and_bind(
@@ -179,7 +197,7 @@ fn probation_arm_attempted_once_never_retries() {
     let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
 
     let mut backend = TestBackend::new(7);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     let intent =
         CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent");
     // The recheck requires the backend to re-decode the same floor state.
@@ -209,14 +227,14 @@ fn probation_arm_attempted_once_never_retries() {
         &binding.nonsecure_hash,
     )
     .unwrap();
-    assert_eq!(tok.state, ArmState::Attempted);
+    assert_eq!(tok.state(), ArmState::Attempted);
 
     // ATTEMPTED never retries, at TWO levels:
     // (a) the lifecycle row now decodes as `Attempted` (token is
     //     ATTEMPTED), which is not the `Pending` row the intent requires.
     let steady2 = steady_proof_at(GOLDEN_T);
     let fallback2 = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
-    let row2 = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::Attempted);
+    let row2 = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::Attempted, INSTALL_ID);
     assert!(matches!(
         CheckedSteadyProbationIntent::new(steady2, fallback2, row2, None),
         Err(IntentError::WrongLifecycleRow)
@@ -226,7 +244,7 @@ fn probation_arm_attempted_once_never_retries() {
     //     is ATTEMPTED by entry time the entry refuses (at-most-once).
     let steady3 = steady_proof_at(GOLDEN_T);
     let fallback3 = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
-    let row3 = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let row3 = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     let intent3 = CheckedSteadyProbationIntent::new(steady3, fallback3, row3, None).unwrap();
     // Flip the backend token to ATTEMPTED (as the first handoff left it).
     let binding3 = binding_of(&artifact(&p, PhysicalSlot::A));
@@ -245,7 +263,7 @@ fn probation_requires_strictly_newer_candidate() {
     // Fallback with the SAME R as the candidate.
     let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R, GOLDEN_E);
     let mut backend = TestBackend::new(7);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     assert!(matches!(
         CheckedSteadyProbationIntent::new(steady, fallback, row, None),
         Err(IntentError::CandidateNotNewer)
@@ -260,7 +278,7 @@ fn probation_requires_exact_f_fallback() {
     // Fallback T = GOLDEN_T - 1, not at the floor.
     let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E - 1);
     let mut backend = TestBackend::new(7);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     assert!(matches!(
         CheckedSteadyProbationIntent::new(steady, fallback, row, None),
         Err(IntentError::FallbackNotAtFloor)
@@ -279,7 +297,7 @@ fn probation_epoch_bump_receipt_rules() {
     let mut backend = TestBackend::new(7);
     let steady_for_receipt = steady_proof_at(floor_val);
     assert!(matches!(
-        CheckedSteadyProbationIntent::new(steady_for_receipt, accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E - 1), pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady), None),
+        CheckedSteadyProbationIntent::new(steady_for_receipt, accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E - 1), pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID), None),
         Err(IntentError::MissingPreflight)
     ));
 
@@ -289,7 +307,7 @@ fn probation_epoch_bump_receipt_rules() {
         CheckedSteadyProbationIntent::new(
             steady_proof_at(floor_val),
             accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E - 1),
-            pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady),
+            pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID),
             Some(receipt)
         ),
         Err(IntentError::MissingPreflight)
@@ -300,7 +318,7 @@ fn probation_epoch_bump_receipt_rules() {
     let intent = CheckedSteadyProbationIntent::new(
         steady,
         fallback,
-        pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady),
+        pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID),
         Some(good),
     )
     .expect("intent");
@@ -315,7 +333,7 @@ fn probation_epoch_bump_receipt_rules() {
         CheckedSteadyProbationIntent::new(
             steady_se,
             fb_se,
-            pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady),
+            pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID),
             Some(stray)
         ),
         Err(IntentError::UnexpectedPreflight)
@@ -330,14 +348,14 @@ fn probation_epoch_bump_receipt_rules() {
 fn resume_from_recovery_resumes_bound_plan_only() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, RECOVERING_ROLES);
     let proof = recovery_proof(GOLDEN_T - 1, binding);
     let candidate = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
     let intent = CheckedRecoveryIntent::new(proof, candidate).expect("join");
     let mut backend = TestBackend::new(7);
     backend.set_floor_script(recovering_floor_script(
         GOLDEN_T - 1,
-        binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E),
+        binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, RECOVERING_ROLES),
     ));
     let receipt = resume_from_recovery(&mut backend, intent).expect("resume");
     assert_eq!(receipt.target, GOLDEN_T);
@@ -357,7 +375,7 @@ fn resume_from_recovery_resumes_bound_plan_only() {
 fn recovery_join_mismatch_is_blocked() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, RECOVERING_ROLES);
     let proof = recovery_proof(GOLDEN_T - 1, binding);
     // Candidate with a different manifest (different digest + T).
     let wrong = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R + 1, GOLDEN_E + 1);
@@ -372,13 +390,13 @@ fn recovery_join_mismatch_is_blocked() {
 fn aborted_boots_only_exact_f_artifact_with_zero_writes() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES);
     let proof = dead_proof(GOLDEN_T - 1, failed);
     // Boot artifact: T == F, different (R,E) from the failed release.
     let boot = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1);
     let intent = CheckedAbortedAcceptedIntent::new(proof, boot).expect("intent");
     let mut backend = TestBackend::new(7);
-    backend.set_floor_script(dead_floor_script(GOLDEN_T - 1, binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E)));
+    backend.set_floor_script(dead_floor_script(GOLDEN_T - 1, binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES)));
     let handoff = boot_accepted_from_aborted(&mut backend, intent).expect("handoff");
     assert_eq!(handoff.t, GOLDEN_T - 1);
     assert!(backend.is_pristine(), "boot_accepted_from_aborted writes nothing");
@@ -389,7 +407,7 @@ fn aborted_boots_only_exact_f_artifact_with_zero_writes() {
 fn aborted_rejects_non_exact_f_artifact_and_new_release() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES);
     let proof = dead_proof(GOLDEN_T - 1, failed);
     // A "new release" artifact with T > F cannot be admitted.
     let new_release = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E);
@@ -411,7 +429,7 @@ fn peer_repair_equal_release_set_arms_and_writes_no_backend() {
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
     let mut backend = TestBackend::new(7);
     // Twin: opposite slot, SAME (R, E).
-    let twin_row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let twin_row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, TWIN_INSTALL_ID);
     let intent = CheckedPeerRepairIntent::new(FreshFloorProof::Steady(steady), source, twin_row)
         .expect("intent");
     backend.set_floor_script(steady_floor_script(GOLDEN_T));
@@ -428,7 +446,7 @@ fn peer_repair_rejects_non_twin() {
     let steady = steady_proof_at(GOLDEN_T);
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
     let mut backend = TestBackend::new(7);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     assert!(matches!(
         CheckedPeerRepairIntent::new(FreshFloorProof::Steady(steady), source, row),
         Err(IntentError::PeerRepairMismatch)
@@ -436,7 +454,7 @@ fn peer_repair_rejects_non_twin() {
     // Same slot → not the opposite-slot twin.
     let steady = steady_proof_at(GOLDEN_T);
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     assert!(matches!(
         CheckedPeerRepairIntent::new(FreshFloorProof::Steady(steady), source, row),
         Err(IntentError::PeerRepairMismatch)
@@ -447,23 +465,23 @@ fn peer_repair_rejects_non_twin() {
 fn degraded_repair_under_aborted_requires_exact_f() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES);
     let proof = dead_proof(GOLDEN_T - 1, failed);
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E - 1);
     let mut backend = TestBackend::new(7);
     // Target with T == F → arms.
-    let row_ok = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1, ArmState::ArmReady);
+    let row_ok = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1, ArmState::ArmReady, INSTALL_ID);
     let intent = CheckedDegradedRepairIntent::new(FreshFloorProof::Aborted(proof), source, row_ok, degraded_history(PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1))
         .expect("intent");
-    backend.set_floor_script(dead_floor_script(GOLDEN_T - 1, binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E)));
+    backend.set_floor_script(dead_floor_script(GOLDEN_T - 1, binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES)));
     assert!(arm_degraded_artifact_repair(&mut backend, intent).is_ok());
     assert_eq!(backend.floor_mutation_count(), 0);
 
     // Target with T != F → rejected.
-    let failed2 = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let failed2 = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES);
     let proof2 = dead_proof(GOLDEN_T - 1, failed2);
     let source2 = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E - 1);
-    let row_bad = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E, ArmState::ArmReady);
+    let row_bad = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     assert!(matches!(
         CheckedDegradedRepairIntent::new(FreshFloorProof::Aborted(proof2), source2, row_bad, degraded_history(PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E)),
         Err(IntentError::FloorRegression)
@@ -482,7 +500,7 @@ fn probation_floor_drift_rejects_handoff() {
     let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
 
     let mut backend = TestBackend::new(7);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     let intent =
         CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent");
     // The backend's floor state MATCHES the intent's proof at this point…
@@ -500,7 +518,7 @@ fn probation_floor_drift_rejects_handoff() {
 fn aborted_boot_rejects_floor_drift() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES);
     let proof = dead_proof(GOLDEN_T - 1, failed);
     let boot = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1);
     let intent = CheckedAbortedAcceptedIntent::new(proof, boot).expect("intent");
@@ -522,13 +540,13 @@ fn peer_repair_floor_drift_rejects_handoff() {
     let steady = steady_proof_at(GOLDEN_T);
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
     let mut backend = TestBackend::new(7);
-    let twin_row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let twin_row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, TWIN_INSTALL_ID);
     let intent = CheckedPeerRepairIntent::new(FreshFloorProof::Steady(steady), source, twin_row)
         .expect("intent");
     // Drift: the floor moved since intent construction.
     backend.set_floor_script(dead_floor_script(
         GOLDEN_T - 1,
-        binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E),
+        binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, RECOVERING_ROLES),
     ));
     assert_eq!(
         arm_peer_repair(&mut backend, intent).unwrap_err(),
@@ -562,7 +580,7 @@ fn start_epoch_bump_floor_drift_rejects_begin() {
 fn resume_floor_drift_rejects_resume() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, RECOVERING_ROLES);
     let proof = recovery_proof(GOLDEN_T - 1, binding);
     let candidate = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
     let intent = CheckedRecoveryIntent::new(proof, candidate).expect("join");
@@ -588,7 +606,7 @@ fn degraded_repair_steady_requires_target_strictly_above_floor() {
     let steady9 = steady_proof_at(9);
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, 10);
     let mut backend = TestBackend::new(7);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, 4, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, 4, ArmState::ArmReady, INSTALL_ID);
     assert!(matches!(
         CheckedDegradedRepairIntent::new(FreshFloorProof::Steady(steady9), source, row, degraded_history(PhysicalSlot::B, GOLDEN_R + 1, 4)),
         Err(IntentError::FloorRegression)
@@ -597,7 +615,7 @@ fn degraded_repair_steady_requires_target_strictly_above_floor() {
     // Steady with T == F → rejected (not strictly above).
     let steady = steady_proof_at(GOLDEN_T);
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     assert!(matches!(
         CheckedDegradedRepairIntent::new(FreshFloorProof::Steady(steady), source, row, degraded_history(PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E)),
         Err(IntentError::FloorRegression)
@@ -606,7 +624,7 @@ fn degraded_repair_steady_requires_target_strictly_above_floor() {
     // Steady with T > F → accepted and arms (with recheck active).
     let steady = steady_proof_at(GOLDEN_T);
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E + 1, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E + 1, ArmState::ArmReady, INSTALL_ID);
     let intent = CheckedDegradedRepairIntent::new(FreshFloorProof::Steady(steady), source, row, degraded_history(PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E + 1))
         .expect("T>F accepted");
     backend.set_floor_script(steady_floor_script(GOLDEN_T));
@@ -626,7 +644,7 @@ fn handoff_rejects_token_with_mismatched_target() {
     let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
 
     let mut backend = TestBackend::new(7);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
     let intent =
         CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent");
     // Replace the backend token with a structurally valid token whose
@@ -653,13 +671,13 @@ fn handoff_rejects_token_with_mismatched_target() {
 fn degraded_repair_rejects_fresh_target_without_history() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES);
     let proof = dead_proof(GOLDEN_T - 1, failed);
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E - 1);
     let mut backend = TestBackend::new(7);
     // Target has NO degraded history at this tuple: the supplied history
     // binds a DIFFERENT (older R) prior identity.
-    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1, ArmState::ArmReady, INSTALL_ID);
     assert!(matches!(
         CheckedDegradedRepairIntent::new(
             FreshFloorProof::Aborted(proof),
@@ -675,11 +693,11 @@ fn degraded_repair_rejects_fresh_target_without_history() {
 fn degraded_repair_rejects_stale_install_identity() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES);
     let proof = dead_proof(GOLDEN_T - 1, failed);
     let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E - 1);
     let mut backend = TestBackend::new(7);
-    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1, ArmState::ArmReady);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1, ArmState::ArmReady, INSTALL_ID);
     // History whose prior identity carries the TARGET's current install
     // id (no fresh identity): build it manually with INSTALL_ID.
     use pqsigner_rollback::evidence::ArtifactIdentity;
@@ -705,14 +723,14 @@ fn degraded_repair_rejects_stale_install_identity() {
 fn resume_stage_binding_drift_rejected() {
     let p = pass();
     let mut setup = TestBackend::new(7);
-    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, RECOVERING_ROLES);
     let proof = recovery_proof(GOLDEN_T - 1, binding);
     let candidate = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
     let intent = CheckedRecoveryIntent::new(proof, candidate).expect("join");
     let mut backend = TestBackend::new(7);
     // Same cells, but the stage's bound candidate identity drifted
     // (different digest) — the snapshot digest must now differ.
-    let drifted = binding_for(PhysicalSlot::A, GOLDEN_R + 1, GOLDEN_E);
+    let drifted = binding_for(PhysicalSlot::A, GOLDEN_R + 1, GOLDEN_E, RECOVERING_ROLES);
     backend.set_floor_script(recovering_floor_script(GOLDEN_T - 1, drifted));
     assert_eq!(
         resume_from_recovery(&mut backend, intent).unwrap_err(),
@@ -747,5 +765,23 @@ fn receipt_allocation_group_mismatch_rejected() {
     assert!(matches!(
         CheckedSteadyIntent::new(steady_g1, artifact, Some(receipt)),
         Err(IntentError::MissingPreflight)
+    ));
+}
+
+#[test]
+fn peer_repair_rejects_stale_twin_install_identity() {
+    // R5-5: a twin carrying the SOURCE's install id (a stale
+    // opposite-slot copy from the same generation, never erased/
+    // restaged) is not a fresh twin.
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let steady = steady_proof_at(GOLDEN_T);
+    let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let mut backend = TestBackend::new(7);
+    // Twin with the SAME install id as the source (INSTALL_ID).
+    let twin_row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
+    assert!(matches!(
+        CheckedPeerRepairIntent::new(FreshFloorProof::Steady(steady), source, twin_row),
+        Err(IntentError::PeerRepairMismatch)
     ));
 }

@@ -20,7 +20,7 @@
 use fw_manifest::v6::PhysicalSlot;
 
 use crate::arm_token::{ArmState, ArmToken};
-use crate::backend::RollbackBackend;
+use crate::backend::{ArmTransitionPermit, FloorBeginPermit, FloorResumePermit, RollbackBackend};
 use crate::evidence::{AcceptedArtifact, VerifiedArtifact};
 use crate::floor::{
     DeadStageProof, EpochBumpReceipt, RecoveryProof, SteadyProof, TClassification,
@@ -218,13 +218,16 @@ fn arm_and_handoff<B: RollbackBackend>(
     // The re-bind must match the artifact's exact (R, E, T), not merely
     // be self-consistent (the binding hash commits to the token's own
     // structural tuple).
-    if (token.binding.r, token.binding.e, token.binding.t) != (id.r, id.e, id.t) {
+    if (token.binding().r, token.binding().e, token.binding().t) != (id.r, id.e, id.t) {
         return Err(IntentError::TokenNotArmReady);
     }
-    if token.state != ArmState::ArmReady {
+    if token.state() != ArmState::ArmReady {
         return Err(IntentError::TokenNotArmReady);
     }
-    backend.transition_arm_token(ArmState::Attempted);
+    // Mint the one-time transition permit inside the entry after the
+    // pre-mutation validation (R5-2); the frozen transition-then-recheck
+    // order follows (§10 item 5).
+    backend.transition_arm_token(ArmTransitionPermit::mint(ArmState::Attempted));
     // Frozen recheck: fresh complete floor/stage decode must agree with
     // the intent's proof snapshot (no drift since construction).
     run_recheck(backend, recheck)?;
@@ -239,10 +242,10 @@ fn arm_and_handoff<B: RollbackBackend>(
         &id.nonsecure_hash,
     )
     .map_err(|_| IntentError::TokenNotArmReady)?;
-    if (token.binding.r, token.binding.e, token.binding.t) != (id.r, id.e, id.t) {
+    if (token.binding().r, token.binding().e, token.binding().t) != (id.r, id.e, id.t) {
         return Err(IntentError::TokenNotArmReady);
     }
-    if token.state != ArmState::Attempted {
+    if token.state() != ArmState::Attempted {
         return Err(IntentError::TokenNotArmReady);
     }
     Ok(ProbationHandoff {
@@ -452,7 +455,10 @@ pub fn start_from_steady<B: RollbackBackend>(
                 fallback_t: None,
             };
             run_recheck(backend, &recheck)?;
-            backend.begin_floor_plan(&receipt);
+            backend.begin_floor_plan(
+                FloorBeginPermit::mint(t, receipt.group()),
+                &receipt,
+            );
             Ok(StartOutcome::Began {
                 target: t,
                 group: receipt.group(),
@@ -514,7 +520,7 @@ pub fn resume_from_recovery<B: RollbackBackend>(
         fallback_t: None,
     };
     run_recheck(backend, &recheck)?;
-    backend.resume_floor_plan(target);
+    backend.resume_floor_plan(FloorResumePermit::mint(target));
     Ok(ResumeReceipt { target, group })
 }
 
@@ -640,6 +646,14 @@ impl CheckedPeerRepairIntent {
             || twin.e() != src.e()
             || twin.t() != src.t()
         {
+            return Err(IntentError::PeerRepairMismatch);
+        }
+        // Fresh install identity (FROZEN-OTP-API-3 L1041–1043, §10 item
+        // 9): a stale opposite-slot copy from a previous generation is
+        // never a twin. The full erase/restage receipt for the twin
+        // lands with the physical writer (host-model note, same posture
+        // as the degraded-repair evidence set).
+        if twin.install_id() == src.install_id() {
             return Err(IntentError::PeerRepairMismatch);
         }
         if twin.t() != floor_proof.floor() {

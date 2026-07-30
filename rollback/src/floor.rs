@@ -120,29 +120,65 @@ pub struct FloorCell {
     pub launch: LaunchAttribution,
 }
 
+/// One cell of the durable stage's ordered physical-cell role plan
+/// (MODEL choice pending OPEN-OTP-1..3: the real plan serialization is
+/// the open OTP codec's; the plan content and its digest are bound
+/// here). Mirrors the spec's "complete ordered cell-role assignment"
+/// (§7.1 L2539) and "ordered non-aliasing physical-cell role map"
+/// (FROZEN-OTP-API-3 L876).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlanRole {
+    /// A clean floor record planned as a replica witness (already
+    /// programmed and EOP-verified).
+    Witness,
+    /// A consumed/quarantined plan cell (torn, corrected, ambiguous,
+    /// may-have-launched).
+    Consumed,
+    /// A reserved, claimable, canonically-virgin plan cell.
+    Reserved,
+}
+
+/// Plan size in cells (== [`PLAN_CELLS`]).
+pub const STAGE_PLAN_CELLS: usize = PLAN_CELLS as usize;
+
 /// The durable stage's bound candidate/manifest identity (§7.1
-/// L2536–2538: the stage binds codec/domain, prior-group identity, target
-/// and active group, candidate/manifest identity). Required whenever a
-/// stage record exists. Private fields: constructible only through the
-/// range-checked constructor.
+/// L2536–2538) PLUS its ordered per-index role plan: exactly
+/// [`STAGE_PLAN_CELLS`] cells, each assigned one [`PlanRole`]. Required
+/// whenever a stage record exists. Private fields: constructible only
+/// through the validating constructor. NOTE (model): the 16-byte model
+/// stage-record QW references the plan; the plan content is carried
+/// here as the durable-stage model input, and it is folded into the
+/// snapshot digest. OPEN-OTP-1..3 owns the production serialization.
 #[derive(PartialEq, Eq, Debug)]
 pub struct StageBinding {
     slot: fw_manifest::v6::PhysicalSlot,
     r: u32,
     e: u32,
     manifest_digest: [u8; 32],
+    roles: [(u16, PlanRole); STAGE_PLAN_CELLS],
 }
 
 impl StageBinding {
-    /// The only constructor. `R`/`E` must be in `1..=0xFFFF_FFFE`.
+    /// The only constructor. `R`/`E` must be in `1..=0xFFFF_FFFE`; the
+    /// role plan must be strictly ordered by index with every index
+    /// inside the reserved bank (ordered and non-aliasing).
     pub fn new(
         slot: fw_manifest::v6::PhysicalSlot,
         r: u32,
         e: u32,
         manifest_digest: [u8; 32],
+        roles: [(u16, PlanRole); STAGE_PLAN_CELLS],
     ) -> Option<StageBinding> {
         let valid = |v: u32| (fw_manifest::v6::VERSION_MIN..=fw_manifest::v6::VERSION_MAX).contains(&v);
         if !valid(r) || !valid(e) {
+            return None;
+        }
+        for w in roles.windows(2) {
+            if w[0].0 >= w[1].0 {
+                return None;
+            }
+        }
+        if roles.iter().any(|&(i, _)| i as usize >= RESERVED_ROLLBACK_QWS) {
             return None;
         }
         Some(StageBinding {
@@ -150,6 +186,7 @@ impl StageBinding {
             r,
             e,
             manifest_digest,
+            roles,
         })
     }
 
@@ -168,6 +205,19 @@ impl StageBinding {
     pub fn manifest_digest(&self) -> &[u8; 32] {
         &self.manifest_digest
     }
+
+    /// The ordered per-index role plan.
+    pub fn roles(&self) -> &[(u16, PlanRole); STAGE_PLAN_CELLS] {
+        &self.roles
+    }
+
+    /// The role assigned to `index`, if any.
+    pub fn role_of(&self, index: u16) -> Option<PlanRole> {
+        self.roles
+            .iter()
+            .find(|&&(i, _)| i == index)
+            .map(|&(_, role)| role)
+    }
 }
 
 /// The complete decoder input: exactly [`RESERVED_ROLLBACK_QWS`] cells
@@ -182,12 +232,48 @@ impl StageBinding {
 /// every canonical index exactly once through the fresh-array probe.
 pub struct FloorSnapshot {
     /// One cell per canonical reserved index; every slot must be filled.
-    pub cells: [Option<FloorCell>; RESERVED_ROLLBACK_QWS],
+    cells: [Option<FloorCell>; RESERVED_ROLLBACK_QWS],
     /// The two Route-1 markers (distinct physical QWs).
-    pub route1: [FloorCell; 2],
-    pub completion_fence: CompletionLaunchEvidence,
+    route1: [FloorCell; 2],
+    completion_fence: CompletionLaunchEvidence,
     /// Required iff a stage record is present.
-    pub stage_binding: Option<StageBinding>,
+    stage_binding: Option<StageBinding>,
+}
+
+impl FloorSnapshot {
+    /// The bank cells (one per canonical reserved index).
+    pub fn cells(&self) -> &[Option<FloorCell>; RESERVED_ROLLBACK_QWS] {
+        &self.cells
+    }
+
+    /// The two Route-1 markers.
+    pub fn route1(&self) -> &[FloorCell; 2] {
+        &self.route1
+    }
+
+    /// The completion-launch fence input.
+    pub fn completion_fence(&self) -> CompletionLaunchEvidence {
+        self.completion_fence
+    }
+
+    /// The stage's bound candidate identity and role plan.
+    pub fn stage_binding(&self) -> Option<&StageBinding> {
+        self.stage_binding.as_ref()
+    }
+
+    /// TEST-SCAFFOLD mutators (feature-gated): adversarial map-injection
+    /// tests mutate a probed snapshot through these. Not part of the
+    /// library surface.
+    #[cfg(feature = "test-backend")]
+    pub fn cells_mut(&mut self) -> &mut [Option<FloorCell>; RESERVED_ROLLBACK_QWS] {
+        &mut self.cells
+    }
+
+    /// See [`FloorSnapshot::cells_mut`].
+    #[cfg(feature = "test-backend")]
+    pub fn route1_mut(&mut self) -> &mut [FloorCell; 2] {
+        &mut self.route1
+    }
 }
 
 impl FloorSnapshot {
@@ -418,6 +504,11 @@ pub enum FloorFault {
     /// [`RESERVED_ROLLBACK_QWS`] cells were presented (a prefix snapshot
     /// omitting newer records would otherwise lower the floor).
     IncompleteMap { expected: usize, got: usize },
+    /// A QW's actual role is not the one the stage's authenticated
+    /// role map assigns (or it has no assignment): an uncertain QW is
+    /// never silently absorbed into a plan, and a plan cell that does
+    /// not match physical reality rejects the decode.
+    UnmappedRole { index: u16 },
 }
 
 /// The four mutually exclusive decoder classes (FROZEN-OTP-API-3
@@ -565,7 +656,7 @@ fn classify_route1(cell: &FloorCell) -> Route1Class {
 
 fn snapshot_digest(snapshot: &FloorSnapshot) -> [u8; 32] {
     let mut h = Sha256::new();
-    for cell in snapshot.cells.iter().flatten().chain(snapshot.route1.iter()) {
+    for cell in snapshot.cells().iter().flatten().chain(snapshot.route1().iter()) {
         match &cell.read {
             FreshQwRead::Clean(qw) => {
                 h.update([0x01]);
@@ -588,16 +679,25 @@ fn snapshot_digest(snapshot: &FloorSnapshot) -> [u8; 32] {
     // The digest binds the COMPLETE floor/stage state: the completion
     // fence discriminant and the stage's bound candidate identity
     // (R3-4), not merely the raw cell bytes.
-    h.update([match snapshot.completion_fence {
+    h.update([match snapshot.completion_fence() {
         CompletionLaunchEvidence::ProvenNoCompletionLaunch => 0xA0,
         CompletionLaunchEvidence::MayHaveLaunched => 0xA1,
     }]);
-    match &snapshot.stage_binding {
+    match snapshot.stage_binding() {
         Some(b) => {
             h.update([0xB1, b.slot().to_u8()]);
             h.update(b.r().to_be_bytes());
             h.update(b.e().to_be_bytes());
             h.update(b.manifest_digest());
+            // The stage's ordered role plan is part of the bound state.
+            for &(index, role) in b.roles() {
+                h.update(index.to_be_bytes());
+                h.update([match role {
+                    PlanRole::Witness => 0xC1,
+                    PlanRole::Consumed => 0xC2,
+                    PlanRole::Reserved => 0xC3,
+                }]);
+            }
         }
         None => h.update([0xB0]),
     }
@@ -648,7 +748,7 @@ fn validate_physical_map(snapshot: &FloorSnapshot) -> Result<(), FloorFault> {
         Ok(())
     }
 
-    for (i, cell) in snapshot.cells.iter().enumerate() {
+    for (i, cell) in snapshot.cells().iter().enumerate() {
         let Some(cell) = cell else { continue };
         match &cell.read {
             FreshQwRead::Clean(qw) => {
@@ -677,7 +777,7 @@ fn validate_physical_map(snapshot: &FloorSnapshot) -> Result<(), FloorFault> {
             FreshQwRead::AmbiguousOrFault => {}
         }
     }
-    for (j, cell) in snapshot.route1.iter().enumerate() {
+    for (j, cell) in snapshot.route1().iter().enumerate() {
         if let FreshQwRead::Clean(qw) = &cell.read {
             check(&mut seen, &mut n_seen, &mut epoch, qw, canonical_route1_addr(j))?;
         }
@@ -686,7 +786,7 @@ fn validate_physical_map(snapshot: &FloorSnapshot) -> Result<(), FloorFault> {
     // their own canonical pages (a duplicate index already fired above;
     // identical (index, addr) pairs are caught the same way).
     if let (FreshQwRead::Clean(a), FreshQwRead::Clean(b)) =
-        (&snapshot.route1[0].read, &snapshot.route1[1].read)
+        (&snapshot.route1()[0].read, &snapshot.route1()[1].read)
     {
         if a.index() == b.index() || a.addr() == b.addr() {
             return Err(FloorFault::NonCanonicalMap(MapFault::NonDisjointRoute1));
@@ -709,7 +809,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     // FULL scan mandatory (FROZEN-OTP-API-3): every one of the
     // RESERVED_ROLLBACK_QWS cells must be present — a prefix or
     // caller-trimmed map fails closed, never a lower floor.
-    let present = snapshot.cells.iter().flatten().count();
+    let present = snapshot.cells().iter().flatten().count();
     if present != RESERVED_ROLLBACK_QWS {
         return FloorView::Unknown(FloorFault::IncompleteMap {
             expected: RESERVED_ROLLBACK_QWS,
@@ -724,7 +824,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     // Route-1 accountancy (R3-6): only virgin or exact BASE0 codeword is
     // inside the authenticated map; anything else forces Unknown.
     let mut base_proof_ok = true;
-    for (j, cell) in snapshot.route1.iter().enumerate() {
+    for (j, cell) in snapshot.route1().iter().enumerate() {
         match classify_route1(cell) {
             Route1Class::Virgin => base_proof_ok = false,
             Route1Class::Base0Marker => {}
@@ -745,7 +845,8 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     let digest = snapshot_digest(snapshot);
 
     // ---- accountancy pass -------------------------------------------------
-    let mut floor_records: [(u32, u32); MAX_FLOOR_RECORDS] = [(0, 0); MAX_FLOOR_RECORDS];
+    let mut floor_records: [(u16, u32, u32); MAX_FLOOR_RECORDS] =
+        [(0, 0, 0); MAX_FLOOR_RECORDS];
     let mut n_floor = 0usize;
     let mut completes: [u32; MAX_COMPLETE_RECORDS] = [0; MAX_COMPLETE_RECORDS];
     let mut n_complete = 0usize;
@@ -753,15 +854,25 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     let mut n_stage = 0usize;
     let mut n_virgin = 0u32;
     let mut n_uncertain = 0u32;
+    let mut virgin_indices: [u16; RESERVED_ROLLBACK_QWS] = [0; RESERVED_ROLLBACK_QWS];
+    let mut n_virgin_idx = 0usize;
+    let mut uncertain_indices: [u16; RESERVED_ROLLBACK_QWS] = [0; RESERVED_ROLLBACK_QWS];
+    let mut n_uncertain_idx = 0usize;
     let mut uncertain_index: Option<u16> = None;
 
-    for (i, cell) in snapshot.cells.iter().enumerate() {
+    for (i, cell) in snapshot.cells().iter().enumerate() {
         let Some(cell) = cell else { continue };
         match classify_cell(cell) {
-            CellClass::Virgin => n_virgin += 1,
+            CellClass::Virgin => {
+                n_virgin += 1;
+                virgin_indices[n_virgin_idx] = i as u16;
+                n_virgin_idx += 1;
+            }
             CellClass::Uncertain => {
                 n_uncertain += 1;
                 uncertain_index.get_or_insert(i as u16);
+                uncertain_indices[n_uncertain_idx] = i as u16;
+                n_uncertain_idx += 1;
             }
             CellClass::Orphan => {
                 let index = match &cell.read {
@@ -777,7 +888,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                         index: i as u16,
                     });
                 }
-                floor_records[n_floor] = (g, t);
+                floor_records[n_floor] = (i as u16, g, t);
                 n_floor += 1;
             }
             CellClass::Role(Record::Complete { g }) => {
@@ -811,7 +922,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     for &g in &completes[..n_complete] {
         let mut t_val: Option<u32> = None;
         let mut witnesses = 0u32;
-        for &(rg, rt) in &floor_records[..n_floor] {
+        for &(_, rg, rt) in &floor_records[..n_floor] {
             if rg == g {
                 match t_val {
                     None => t_val = Some(rt),
@@ -847,7 +958,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     // record whose group has neither COMPLETE nor STAGE evidence forces
     // Unknown — in the committed-Steady arm just as in the active-stage
     // arm (§7.1 L2568–2569: orphaned evidence yields Unknown).
-    for &(rg, _) in &floor_records[..n_floor] {
+    for &(_, rg, _) in &floor_records[..n_floor] {
         if !completes[..n_complete].contains(&rg) && !stages[..n_stage].contains(&rg) {
             return FloorView::Unknown(FloorFault::AmbiguousStage);
         }
@@ -900,7 +1011,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
         }
         Some(g) => {
             // The stage must carry its bound candidate identity.
-            let binding = match &snapshot.stage_binding {
+            let binding = match snapshot.stage_binding() {
                 Some(b) => b,
                 None => return FloorView::Unknown(FloorFault::AmbiguousStage),
             };
@@ -919,7 +1030,9 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
             };
             let mut t_val: Option<u32> = None;
             let mut clean_records = 0u32;
-            for &(rg, rt) in &floor_records[..n_floor] {
+            let mut stage_record_indices: [u16; MAX_FLOOR_RECORDS] = [0; MAX_FLOOR_RECORDS];
+            let mut n_stage_records = 0usize;
+            for &(idx, rg, rt) in &floor_records[..n_floor] {
                 if rg == g {
                     match t_val {
                         None => t_val = Some(rt),
@@ -929,6 +1042,8 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                         _ => {}
                     }
                     clean_records += 1;
+                    stage_record_indices[n_stage_records] = idx;
+                    n_stage_records += 1;
                 }
             }
             // Floor records belonging to NO group context were already
@@ -941,14 +1056,43 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
             if t == 0 || t <= prior_f || t > crate::arm_token::T_MAX || binding.e().checked_sub(1) != Some(t) {
                 return FloorView::Unknown(FloorFault::AmbiguousStage);
             }
-            // Finite plan: PLAN_CELLS total; touched = clean + uncertain;
-            // achievable clean witnesses = clean + remaining virgin claim.
-            let touched = clean_records + n_uncertain;
-            if touched > PLAN_CELLS {
-                return FloorView::Unknown(FloorFault::AmbiguousStage);
+            // Role-map accountancy (R5-3): the stage's authenticated
+            // ordered role map is the ONLY map a QW may join — nothing
+            // is absorbed implicitly. Every stage floor record must be a
+            // planned Witness; every uncertain QW must be a planned
+            // Consumed cell; every plan entry must match physical
+            // reality.
+            for &idx in &stage_record_indices[..n_stage_records] {
+                if binding.role_of(idx) != Some(PlanRole::Witness) {
+                    return FloorView::Unknown(FloorFault::UnmappedRole { index: idx });
+                }
             }
-            let remaining_capacity = PLAN_CELLS - touched;
-            let achievable = clean_records + remaining_capacity.min(n_virgin);
+            for &idx in &uncertain_indices[..n_uncertain_idx] {
+                if binding.role_of(idx) != Some(PlanRole::Consumed) {
+                    return FloorView::Unknown(FloorFault::UnmappedRole { index: idx });
+                }
+            }
+            let mut n_reserved = 0u32;
+            for &(idx, role) in binding.roles() {
+                let mapped = match role {
+                    PlanRole::Witness => stage_record_indices[..n_stage_records].contains(&idx),
+                    PlanRole::Consumed => uncertain_indices[..n_uncertain_idx].contains(&idx),
+                    PlanRole::Reserved => {
+                        if virgin_indices[..n_virgin_idx].contains(&idx) {
+                            n_reserved += 1;
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if !mapped {
+                    return FloorView::Unknown(FloorFault::UnmappedRole { index: idx });
+                }
+            }
+            // Finite plan: achievable clean witnesses = clean records +
+            // reserved virgin claims (and only those).
+            let achievable = clean_records + n_reserved;
             if achievable >= INITIAL_THRESHOLD {
                 FloorView::Recovering(RecoveryProof {
                     prior_f,
@@ -964,7 +1108,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                 // Mathematically dead plan. Classification priority puts
                 // Aborted LAST: only after no completion authority and no
                 // ambiguity remains.
-                match snapshot.completion_fence {
+                match snapshot.completion_fence() {
                     CompletionLaunchEvidence::ProvenNoCompletionLaunch => {
                         FloorView::Aborted(DeadStageProof {
                             floor: prior_f,

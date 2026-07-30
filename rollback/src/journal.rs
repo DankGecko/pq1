@@ -73,9 +73,12 @@ pub fn observe_marker(
 // ---------------------------------------------------------------------------
 
 /// `FullInstallGeneration` — two durably-clean exact reads, exact
-/// complementarity, neither forbidden value. Boot-scoped linear proof.
+/// complementarity, neither forbidden value. Boot-scoped linear proof,
+/// bound to the artifact's sealed evidence key (R5-4): it can join only
+/// the artifact it was minted for, in its own pass.
 pub struct FullInstallGeneration {
     install_id: [u8; 16],
+    evidence_key: [u8; 32],
 }
 
 impl FullInstallGeneration {
@@ -83,14 +86,20 @@ impl FullInstallGeneration {
     pub fn install_id(&self) -> [u8; 16] {
         self.install_id
     }
+
+    /// Digest of the `ArtifactEvidenceKey` this proof binds.
+    pub fn evidence_key(&self) -> &[u8; 32] {
+        &self.evidence_key
+    }
 }
 
 /// `SurvivingInstallGeneration` — the identity reconstructed from exactly
 /// one independently durable, clean, nontrivial half, permitted only
 /// because the caller supplied later-lifecycle evidence. Boot-scoped
-/// linear proof.
+/// linear proof, bound to the artifact's sealed evidence key (R5-4).
 pub struct SurvivingInstallGeneration {
     install_id: [u8; 16],
+    evidence_key: [u8; 32],
 }
 
 impl SurvivingInstallGeneration {
@@ -98,6 +107,11 @@ impl SurvivingInstallGeneration {
     /// contributes it; the missing half contributed NO authority).
     pub fn install_id(&self) -> [u8; 16] {
         self.install_id
+    }
+
+    /// Digest of the `ArtifactEvidenceKey` this proof binds.
+    pub fn evidence_key(&self) -> &[u8; 32] {
+        &self.evidence_key
     }
 }
 
@@ -176,13 +190,17 @@ fn complement(raw: &[u8; 16]) -> [u8; 16] {
 pub(crate) fn full_install_generation(
     id: InstallHalfEvidence,
     inv: InstallHalfEvidence,
+    evidence_key: [u8; 32],
 ) -> Option<FullInstallGeneration> {
     match (id, inv) {
         (InstallHalfEvidence::Exact(a), InstallHalfEvidence::Exact(b)) => {
             if is_forbidden_install_id(&a) || complement(&a) != b {
                 None
             } else {
-                Some(FullInstallGeneration { install_id: a })
+                Some(FullInstallGeneration {
+                    install_id: a,
+                    evidence_key,
+                })
             }
         }
         _ => None,
@@ -208,11 +226,17 @@ pub(crate) fn surviving_install_generation(
     id: InstallHalfEvidence,
     inv: InstallHalfEvidence,
     evidence: LaterLifecycleEvidence,
+    evidence_key: [u8; 32],
 ) -> Option<SurvivingInstallGeneration> {
     // Both evidence kinds carry the same weight here; the parameter
     // exists so no call site can reconstruct without it.
     let _ = evidence;
-    let wrap = |install_id| Some(SurvivingInstallGeneration { install_id });
+    let wrap = |install_id| {
+        Some(SurvivingInstallGeneration {
+            install_id,
+            evidence_key,
+        })
+    };
     match (id, inv) {
         // Impossible writer-order: a proven-virgin half after later
         // lifecycle evidence rejects outright.
@@ -401,6 +425,12 @@ mod tests {
             }
             o
         };
+        let key = sphincs_c10::SigningKey::keygen(
+            *b"RB-TEST-SK-SEED-NONPROD-00000001",
+            *b"RB-TEST-PK-00001",
+        );
+        let vk = key.verifying_key();
+        let fpr = v6::vendor_fingerprint(&vk.pk_seed, &vk.pk_root);
         let fields = ReleasePackageFields {
             slot: PhysicalSlot::A,
             release_version: 0x0102_0304,
@@ -409,14 +439,24 @@ mod tests {
             nonsecure_len: 0x2000,
             secure_hash: &seq(0x00),
             nonsecure_hash: &seq(0x20),
-            vendor_fpr: &seq(0x40),
+            vendor_fpr: &fpr,
             build_id: &seq(0x60),
-            signature: &[0xAA; fw_manifest::SIGNATURE_LEN],
+            signature: &[0xFF; fw_manifest::SIGNATURE_LEN],
         };
-        let page = v6::build_release_package(&fields).unwrap();
+        let mut page = v6::build_release_package(&fields).unwrap();
+        let digest = v6::parse_and_validate(&page, PhysicalSlot::A)
+            .unwrap()
+            .manifest_digest();
+        let sig = key.sign(&digest, None);
+        page[v6::OFF_SIGNATURE..v6::OFF_SIGNATURE + fw_manifest::SIGNATURE_LEN]
+            .copy_from_slice(&sig);
+        v6::rewrite_normalized_crc(&mut page);
         let m = v6::parse_and_validate(&page, PhysicalSlot::A).unwrap();
         let pass = VerificationPass::begin(1, 1, [0x42; 32]);
-        *pass.verify_artifact(&m, ID).unwrap().key()
+        *pass
+            .verify_artifact(&m, ID, &vk.pk_seed, &vk.pk_root)
+            .unwrap()
+            .key()
     }
 
     #[test]
@@ -424,6 +464,7 @@ mod tests {
         let full = full_install_generation(
             InstallHalfEvidence::Exact(ID),
             InstallHalfEvidence::Exact(ID_INV),
+            test_key().digest(),
         );
         assert_eq!(full.map(|g| g.install_id()), Some(ID));
 
@@ -431,11 +472,13 @@ mod tests {
         assert!(full_install_generation(
             InstallHalfEvidence::Exact([0x00; 16]),
             InstallHalfEvidence::Exact([0xFF; 16]),
+            test_key().digest(),
         )
         .is_none());
         assert!(full_install_generation(
             InstallHalfEvidence::Exact([0xFF; 16]),
             InstallHalfEvidence::Exact([0x00; 16]),
+            test_key().digest(),
         )
         .is_none());
 
@@ -445,6 +488,7 @@ mod tests {
         assert!(full_install_generation(
             InstallHalfEvidence::Exact(ID),
             InstallHalfEvidence::Exact(bad),
+            test_key().digest(),
         )
         .is_none());
 
@@ -452,6 +496,7 @@ mod tests {
         assert!(full_install_generation(
             InstallHalfEvidence::Exact(ID),
             InstallHalfEvidence::Indeterminate,
+            test_key().digest(),
         )
         .is_none());
     }
@@ -465,12 +510,14 @@ mod tests {
             InstallHalfEvidence::Exact(ID),
             InstallHalfEvidence::Indeterminate,
             ev,
+            test_key().digest(),
         );
         assert_eq!(s.map(|g| g.install_id()), Some(ID));
         let s = surviving_install_generation(
             InstallHalfEvidence::Indeterminate,
             InstallHalfEvidence::Exact(ID_INV),
             ev,
+            test_key().digest(),
         );
         assert_eq!(s.map(|g| g.install_id()), Some(ID));
 
@@ -480,12 +527,14 @@ mod tests {
             InstallHalfEvidence::Exact(ID),
             InstallHalfEvidence::ProvenBlankVirgin,
             ev,
+            test_key().digest(),
         )
         .is_none());
         assert!(surviving_install_generation(
             InstallHalfEvidence::ProvenBlankVirgin,
             InstallHalfEvidence::Exact(ID_INV),
             ev,
+            test_key().digest(),
         )
         .is_none());
 
@@ -496,6 +545,7 @@ mod tests {
             InstallHalfEvidence::Exact(ID),
             InstallHalfEvidence::Exact(bad),
             ev,
+            test_key().digest(),
         )
         .is_none());
 
@@ -504,6 +554,7 @@ mod tests {
             InstallHalfEvidence::Indeterminate,
             InstallHalfEvidence::Indeterminate,
             ev,
+            test_key().digest(),
         )
         .is_none());
 
@@ -512,6 +563,7 @@ mod tests {
             InstallHalfEvidence::Exact([0x00; 16]),
             InstallHalfEvidence::Indeterminate,
             ev,
+            test_key().digest(),
         )
         .is_none());
     }

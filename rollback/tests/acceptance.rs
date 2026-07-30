@@ -54,7 +54,7 @@ fn row_uninstalled_requires_full_generation() {
     let idq = probe_at(&mut b, 4, art.identity().install_id_qw_address(), ProbeScript::Clean(INSTALL_ID));
     let invq = probe_at(&mut b, 5, art.identity().install_id_inv_qw_address(), ProbeScript::Clean(ERASED));
     let gen = pqsigner_rollback::lifecycle::decode_install_generation(
-        art.identity(),
+        &art,
         pqsigner_rollback::lifecycle::AttributedRead {
             read: &idq,
             durability: CLEAN,
@@ -85,7 +85,7 @@ fn row_pending() {
     match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), F) {
         LifecycleState::Pending { artifact, token } => {
             assert_eq!(artifact.e(), GOLDEN_E);
-            assert_eq!(token.state, ArmState::ArmReady);
+            assert_eq!(token.state(), ArmState::ArmReady);
         }
         _ => panic!("expected Pending"),
     }
@@ -100,7 +100,7 @@ fn row_attempted() {
     let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), F) {
-        LifecycleState::Attempted { token, .. } => assert_eq!(token.state, ArmState::Attempted),
+        LifecycleState::Attempted { token, .. } => assert_eq!(token.state(), ArmState::Attempted),
         _ => panic!("expected Attempted"),
     }
 }
@@ -335,5 +335,29 @@ fn row_name(s: &LifecycleState) -> &'static str {
         LifecycleState::DegradedConfirmed(_) => "DegradedConfirmed",
         LifecycleState::DegradedEpochCandidate(_) => "DegradedEpochCandidate",
         LifecycleState::Malformed(_) => "Malformed",
+    }
+}
+
+#[test]
+fn generation_minted_for_a_rejected_for_b() {
+    // R5-4: generation evidence minted for artifact A (same install_id)
+    // must not join artifact B — the proof binds A's sealed key.
+    let mut b = TestBackend::new(7);
+    let p = pass();
+    let art_a = artifact(&p, PhysicalSlot::A);
+    let art_b = artifact(&p, PhysicalSlot::B);
+    // Mint the generation for A through the canonical orchestrator.
+    let id = probe_at(&mut b, 4, art_a.identity().install_id_qw_address(), ProbeScript::Clean(INSTALL_ID));
+    let inv = probe_at(&mut b, 5, art_a.identity().install_id_inv_qw_address(), ProbeScript::Clean(INSTALL_ID_INV));
+    let gen_for_a = pqsigner_rollback::lifecycle::decode_install_generation(&art_a, atr(&id), atr(&inv), None);
+    assert!(gen_for_a.is_some(), "generation mints for A");
+    // Present it for B (identical install_id, different sealed key).
+    let (c0, c1, pd) = probe_journal(&mut b, &art_b, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
+    match decode_lifecycle(art_b, gen_for_a, atr_nl(&c0), atr_nl(&c1), atr_nl(&pd), None, F) {
+        LifecycleState::Malformed(MalformedReason::BadInstallGeneration) => {}
+        other => panic!(
+            "A's generation evidence must never join B, got {}",
+            row_name(&other)
+        ),
     }
 }

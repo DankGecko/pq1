@@ -156,16 +156,28 @@ impl VerificationPass {
         }
     }
 
-    /// Wrap a verified manifest + install identity into a
-    /// `VerifiedArtifact` joined to this pass. Returns `None` for
-    /// out-of-range `R`/`E` (fail-closed; see
+    /// Run the immutable artifact checks (§7.1 L2586–2598 model subset:
+    /// stored-digest recomputation match, vendor-key fingerprint
+    /// equality, and C10 signature over the freshly recomputed digest
+    /// with the immutable embedded key — FA-1.2b's authority path) and
+    /// wrap a passing manifest + install identity into a
+    /// `VerifiedArtifact` joined to this pass. Returns `None` on ANY
+    /// verification failure or out-of-range `R`/`E` (fail-closed; see
     /// [`ArtifactIdentity::derive`]).
     pub fn verify_artifact(
         &self,
         manifest: &ManifestV6,
         install_id: [u8; 16],
+        pk_seed: &[u8; 16],
+        pk_root: &[u8; 16],
     ) -> Option<VerifiedArtifact> {
         let identity = ArtifactIdentity::derive(manifest, install_id)?;
+        if !manifest.stored_digest_matches() {
+            return None;
+        }
+        if !manifest.verify_with_embedded_key(pk_seed, pk_root) {
+            return None;
+        }
         Some(VerifiedArtifact {
             key: self.mint_key(identity),
         })

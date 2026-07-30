@@ -1252,6 +1252,7 @@ dependencies = [
  "pqsigner-geometry",
  "pqsigner-rollback",
  "sha2",
+ "sphincs-c10",
  "subtle",
 ]
 

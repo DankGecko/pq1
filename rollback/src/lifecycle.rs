@@ -99,11 +99,12 @@ pub enum LifecycleState {
 /// a `FullInstallGeneration` can result (before-activation rule); with
 /// `Some(..)` the qualified-survivor rule applies.
 pub fn decode_install_generation(
-    identity: &crate::evidence::ArtifactIdentity,
+    artifact: &VerifiedArtifact,
     id: AttributedRead<'_>,
     inv: AttributedRead<'_>,
     later_evidence: Option<fw_manifest::v6::LaterLifecycleEvidence>,
 ) -> Option<InstallGenerationEvidence> {
+    let identity = artifact.identity();
     for (read, expected_addr) in [
         (id.read, identity.install_id_qw_address()),
         (inv.read, identity.install_id_inv_qw_address()),
@@ -123,11 +124,14 @@ pub fn decode_install_generation(
     }
     let id_ev = install_half_evidence(id.read, id.durability, id.launch);
     let inv_ev = install_half_evidence(inv.read, inv.durability, inv.launch);
+    // Bind the minted proof to THIS artifact's sealed key (R5-4).
+    let key_digest = artifact.key().digest();
     match later_evidence {
-        None => full_install_generation(id_ev, inv_ev).map(InstallGenerationEvidence::Full),
-        Some(ev) => {
-            surviving_install_generation(id_ev, inv_ev, ev).map(InstallGenerationEvidence::Surviving)
+        None => {
+            full_install_generation(id_ev, inv_ev, key_digest).map(InstallGenerationEvidence::Full)
         }
+        Some(ev) => surviving_install_generation(id_ev, inv_ev, ev, key_digest)
+            .map(InstallGenerationEvidence::Surviving),
     }
 }
 
@@ -270,7 +274,7 @@ pub fn decode_lifecycle(
             if !token_matches(&token, &artifact) {
                 return LifecycleState::Malformed(MalformedReason::TokenBindingMismatch);
             }
-            match token.state {
+            match token.state() {
                 ArmState::ArmReady => LifecycleState::Pending { artifact, token },
                 ArmState::Attempted => LifecycleState::Attempted { artifact, token },
             }
@@ -288,10 +292,18 @@ fn generation_matches(
     artifact: &VerifiedArtifact,
     after_activation: bool,
 ) -> bool {
+    // The generation must reconstruct the SAME identity AND bind the
+    // SAME sealed key as the artifact (R5-4: no old-pass or
+    // cross-artifact generation evidence).
+    let key_digest = artifact.key().digest();
     match generation {
-        Some(InstallGenerationEvidence::Full(g)) => g.install_id() == artifact.install_id(),
+        Some(InstallGenerationEvidence::Full(g)) => {
+            g.install_id() == artifact.install_id() && g.evidence_key() == &key_digest
+        }
         Some(InstallGenerationEvidence::Surviving(g)) => {
-            after_activation && g.install_id() == artifact.install_id()
+            after_activation
+                && g.install_id() == artifact.install_id()
+                && g.evidence_key() == &key_digest
         }
         None => false,
     }
@@ -331,14 +343,14 @@ fn canonical_journal_reads(
 /// The bound token must carry exactly the artifact's tuple and identity.
 fn token_matches(token: &ArmToken, artifact: &VerifiedArtifact) -> bool {
     let id = artifact.identity();
-    token.binding.slot == id.slot
-        && token.binding.r == id.r
-        && token.binding.e == id.e
-        && token.binding.t == id.t
-        && token.binding.install_id == id.install_id
-        && token.binding.manifest_digest == id.manifest_digest
-        && token.binding.secure_hash == id.secure_hash
-        && token.binding.nonsecure_hash == id.nonsecure_hash
+    token.binding().slot == id.slot
+        && token.binding().r == id.r
+        && token.binding().e == id.e
+        && token.binding().t == id.t
+        && token.binding().install_id == id.install_id
+        && token.binding().manifest_digest == id.manifest_digest
+        && token.binding().secure_hash == id.secure_hash
+        && token.binding().nonsecure_hash == id.nonsecure_hash
 }
 
 // ---------------------------------------------------------------------------

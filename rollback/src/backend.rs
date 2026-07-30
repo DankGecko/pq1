@@ -23,22 +23,83 @@ pub enum Mutation {
     FloorResume { target: u32 },
 }
 
+/// One-time permit for the TAMP `ARM_READY -> ATTEMPTED` transition.
+/// Minted ONLY inside the six typed entries (crate-private constructor)
+/// after the entry's pre-mutation validation. Linear: the backend call
+/// consumes it.
+pub struct ArmTransitionPermit {
+    to: ArmState,
+}
+
+impl ArmTransitionPermit {
+    pub(crate) fn mint(to: ArmState) -> Self {
+        ArmTransitionPermit { to }
+    }
+
+    /// The transition the permit authorizes.
+    pub fn to(&self) -> ArmState {
+        self.to
+    }
+}
+
+/// One-time permit for one `begin(intent)` floor-plan mutation.
+/// Minted ONLY inside `start_from_steady` after the frozen recheck.
+pub struct FloorBeginPermit {
+    target: u32,
+    group: u32,
+}
+
+impl FloorBeginPermit {
+    pub(crate) fn mint(target: u32, group: u32) -> Self {
+        FloorBeginPermit { target, group }
+    }
+
+    /// The plan target.
+    pub fn target(&self) -> u32 {
+        self.target
+    }
+
+    /// The plan's allocation group.
+    pub fn group(&self) -> u32 {
+        self.group
+    }
+}
+
+/// One-time permit for one resume step of a bound active plan. Minted
+/// ONLY inside `resume_from_recovery` after the frozen recheck.
+pub struct FloorResumePermit {
+    target: u32,
+}
+
+impl FloorResumePermit {
+    pub(crate) fn mint(target: u32) -> Self {
+        FloorResumePermit { target }
+    }
+
+    /// The resumed plan target.
+    pub fn target(&self) -> u32 {
+        self.target
+    }
+}
+
 /// The mutation surface the six entries may touch. Deliberately narrow:
 /// token transitions and floor-plan begin/resume ONLY — there is no
 /// generic write method, so an entry physically cannot reach manifests,
-/// images, Route-1 pages, or OTP outside these typed calls.
+/// images, Route-1 pages, or OTP outside these typed calls. Every
+/// mutation consumes a one-time permit minted inside a typed entry
+/// (R5-2): no downstream caller can mutate directly.
 pub trait RollbackBackend {
     /// Current arm-token words, if any token is present.
     fn read_arm_token(&self) -> Option<[u32; crate::arm_token::TOKEN_WORDS]>;
 
     /// Perform the TAMP state transition (`ARM_READY -> ATTEMPTED`).
-    fn transition_arm_token(&mut self, to: ArmState);
+    fn transition_arm_token(&mut self, permit: ArmTransitionPermit);
 
     /// Invoke `begin(intent)` exactly once for a preflighted plan.
-    fn begin_floor_plan(&mut self, receipt: &EpochBumpReceipt);
+    fn begin_floor_plan(&mut self, permit: FloorBeginPermit, receipt: &EpochBumpReceipt);
 
     /// Resume one step of the bound active plan.
-    fn resume_floor_plan(&mut self, target: u32);
+    fn resume_floor_plan(&mut self, permit: FloorResumePermit);
 
     /// The complete mutation log prefix (for zero-write assertions).
     fn mutation_log(&self) -> &[Option<Mutation>];
@@ -57,8 +118,7 @@ pub trait RollbackBackend {
 
 #[cfg(feature = "test-backend")]
 mod scripted {
-    use super::{Mutation, RollbackBackend};
-    use crate::arm_token::ArmState;
+    use super::{ArmTransitionPermit, FloorBeginPermit, FloorResumePermit, Mutation, RollbackBackend};
     use crate::floor::{
         self, CompletionLaunchEvidence, EpochBumpReceipt, FloorView, StageBinding,
     };
@@ -267,7 +327,8 @@ mod scripted {
             self.token
         }
 
-        fn transition_arm_token(&mut self, to: ArmState) {
+        fn transition_arm_token(&mut self, permit: ArmTransitionPermit) {
+            let to = permit.to();
             if let Some(mut words) = self.token {
                 let (s, s_inv) = to.pair();
                 words[crate::arm_token::WORD_STATE] = s;
@@ -277,15 +338,18 @@ mod scripted {
             self.record(Mutation::ArmTokenTransition(to));
         }
 
-        fn begin_floor_plan(&mut self, receipt: &EpochBumpReceipt) {
+        fn begin_floor_plan(&mut self, permit: FloorBeginPermit, receipt: &EpochBumpReceipt) {
+            let _ = receipt;
             self.record(Mutation::FloorBegin {
-                target: receipt.target(),
-                group: receipt.group(),
+                target: permit.target(),
+                group: permit.group(),
             });
         }
 
-        fn resume_floor_plan(&mut self, target: u32) {
-            self.record(Mutation::FloorResume { target });
+        fn resume_floor_plan(&mut self, permit: FloorResumePermit) {
+            self.record(Mutation::FloorResume {
+                target: permit.target(),
+            });
         }
 
         fn mutation_log(&self) -> &[Option<Mutation>] {
@@ -304,8 +368,14 @@ mod scripted {
                 let mut cells: [Option<FloorCellScript>; 32] = [None; 32];
                 cells[..script.cells_len].copy_from_slice(&script.cells[..script.cells_len]);
                 let binding = script.stage_binding.as_ref().map(|b| {
-                    floor::StageBinding::new(b.slot(), b.r(), b.e(), *b.manifest_digest())
-                        .expect("script binding was range-checked")
+                    floor::StageBinding::new(
+                        b.slot(),
+                        b.r(),
+                        b.e(),
+                        *b.manifest_digest(),
+                        *b.roles(),
+                    )
+                    .expect("script binding was validated")
                 });
                 (
                     cells,

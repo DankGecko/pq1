@@ -190,10 +190,24 @@ pub struct StructuralToken {
 /// supplied artifact fields. Deliberately NOT `Copy`/`Clone`: a live
 /// token is a one-time arming capability owned linearly by the intent
 /// that consumed it (FROZEN-JRN-IFACE-3 at-most-once discipline).
+/// Private fields: only `decode_and_bind` can mint one (never
+/// struct-literal-forgeable).
 #[derive(PartialEq, Eq, Debug)]
 pub struct ArmToken {
-    pub state: ArmState,
-    pub binding: ArmBinding,
+    state: ArmState,
+    binding: ArmBinding,
+}
+
+impl ArmToken {
+    /// The token's decoded state.
+    pub fn state(&self) -> ArmState {
+        self.state
+    }
+
+    /// The token's verified binding.
+    pub fn binding(&self) -> &ArmBinding {
+        &self.binding
+    }
 }
 
 fn slot_code(slot: PhysicalSlot) -> (u32, u32) {

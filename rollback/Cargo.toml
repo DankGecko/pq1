@@ -33,8 +33,11 @@ subtle            = { version = "2", default-features = false }
 
 # Self dev-dependency: activates `test-backend` for this crate's own
 # integration tests (the library builds WITHOUT the fake backend).
+# sphincs-c10 (dev only): signs test manifests so `verify_artifact`'s
+# real C10 verification (R5-1) has genuinely valid signatures to check.
 [dev-dependencies]
 pqsigner-rollback = { path = ".", features = ["test-backend"] }
+sphincs-c10       = { workspace = true }
 
 [features]
 # Compile the fake/scripted storage backend (ScriptedBackend). TEST

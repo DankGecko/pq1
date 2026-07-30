@@ -83,8 +83,8 @@ fn token_encode_decode_round_trip() {
         &b.nonsecure_hash,
     )
     .expect("bind");
-    assert_eq!(t.state, ArmState::ArmReady);
-    assert_eq!(t.binding.install_id, INSTALL_ID);
+    assert_eq!(t.state(), ArmState::ArmReady);
+    assert_eq!(t.binding().install_id, INSTALL_ID);
 }
 
 #[test]

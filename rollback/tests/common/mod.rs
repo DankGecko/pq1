@@ -42,9 +42,34 @@ pub fn seq(start: u8) -> [u8; 32] {
     out
 }
 
-/// A valid manifest-v6 for the golden tuple at `slot` (patterned
-/// signature; signature verification is not under test here).
-pub fn manifest(slot: PhysicalSlot, r: u32, e: u32) -> ManifestV6 {
+// ---------------------------------------------------------------------------
+// Test key material — TEST ONLY. A dedicated nonproduction C10 keypair
+// used to sign test manifests so `verify_artifact`'s real verification
+// (R5-1) has genuine signatures. Never a production/vendor/wallet key.
+// ---------------------------------------------------------------------------
+
+/// TEST-ONLY signing-key seed.
+pub const TEST_SK_SEED: [u8; 32] = *b"RB-TEST-SK-SEED-NONPROD-00000001";
+/// TEST-ONLY public seed.
+pub const TEST_PK_SEED: [u8; 16] = *b"RB-TEST-PK-00001";
+
+/// The test signing key (regenerated per call; deterministic).
+pub fn test_signing_key() -> sphincs_c10::SigningKey {
+    sphincs_c10::SigningKey::keygen(TEST_SK_SEED, TEST_PK_SEED)
+}
+
+/// The test key's verifying material `(pk_seed, pk_root)`.
+pub fn test_key_material() -> ([u8; 16], [u8; 16]) {
+    let vk = test_signing_key().verifying_key();
+    (vk.pk_seed, vk.pk_root)
+}
+
+/// A valid signed manifest-v6 PAGE at `slot` with tuple `(r, e)`: built
+/// through the canonical builder, then genuinely signed with the test
+/// key and the vendor-fpr field set to the test key's fingerprint.
+pub fn signed_page(slot: PhysicalSlot, r: u32, e: u32) -> [u8; 8192] {
+    let (pk_seed, pk_root) = test_key_material();
+    let fpr = v6::vendor_fingerprint(&pk_seed, &pk_root);
     let fields = ReleasePackageFields {
         slot,
         release_version: r,
@@ -53,12 +78,24 @@ pub fn manifest(slot: PhysicalSlot, r: u32, e: u32) -> ManifestV6 {
         nonsecure_len: 0x2000,
         secure_hash: &seq(0x00),
         nonsecure_hash: &seq(0x20),
-        vendor_fpr: &seq(0x40),
+        vendor_fpr: &fpr,
         build_id: &seq(0x60),
-        signature: &[0xAA; SIGNATURE_LEN],
+        signature: &[0xFF; SIGNATURE_LEN],
     };
-    let page = v6::build_release_package(&fields).expect("fields valid");
-    v6::parse_and_validate(&page, slot).expect("page parses")
+    let mut page = v6::build_release_package(&fields).expect("fields valid");
+    let digest = v6::parse_and_validate(&page, slot)
+        .expect("page parses")
+        .manifest_digest();
+    let sig = test_signing_key().sign(&digest, None);
+    page[v6::OFF_SIGNATURE..v6::OFF_SIGNATURE + SIGNATURE_LEN].copy_from_slice(&sig);
+    v6::rewrite_normalized_crc(&mut page);
+    page
+}
+
+/// A valid SIGNED manifest-v6 at `slot` with tuple `(r, e)` (parses
+/// [`signed_page`]).
+pub fn manifest(slot: PhysicalSlot, r: u32, e: u32) -> ManifestV6 {
+    v6::parse_and_validate(&signed_page(slot, r, e), slot).expect("signed page parses")
 }
 
 /// One verification pass (host-model immutable allocator).
@@ -68,8 +105,9 @@ pub fn pass() -> VerificationPass {
 
 /// A verified golden artifact for `slot` under `pass`.
 pub fn artifact(pass: &VerificationPass, slot: PhysicalSlot) -> VerifiedArtifact {
-    pass.verify_artifact(&manifest(slot, GOLDEN_R, GOLDEN_E), INSTALL_ID)
-        .expect("golden manifest is in range")
+    let (pk_seed, pk_root) = test_key_material();
+    pass.verify_artifact(&manifest(slot, GOLDEN_R, GOLDEN_E), INSTALL_ID, &pk_seed, &pk_root)
+        .expect("golden manifest verifies")
 }
 
 /// Script a clean read at the canonical bank address and probe it.
@@ -114,14 +152,23 @@ pub fn full_generation(
     inv_idx: u16,
 ) -> InstallGenerationEvidence {
     let identity = art.identity();
-    let id = probe_at(b, id_idx, identity.install_id_qw_address(), ProbeScript::Clean(INSTALL_ID));
+    let mut inv_bytes = [0u8; 16];
+    for (i, b) in inv_bytes.iter_mut().enumerate() {
+        *b = !art.install_id()[i];
+    }
+    let id = probe_at(
+        b,
+        id_idx,
+        identity.install_id_qw_address(),
+        ProbeScript::Clean(art.install_id()),
+    );
     let inv = probe_at(
         b,
         inv_idx,
         identity.install_id_inv_qw_address(),
-        ProbeScript::Clean(INSTALL_ID_INV),
+        ProbeScript::Clean(inv_bytes),
     );
-    pqsigner_rollback::lifecycle::decode_install_generation(identity, atr(&id), atr(&inv), None)
+    pqsigner_rollback::lifecycle::decode_install_generation(art, atr(&id), atr(&inv), None)
         .expect("full generation")
 }
 
@@ -210,7 +257,7 @@ pub fn recovering_floor_script(t: u32, binding: StageBinding) -> FloorScript {
 // ---------------------------------------------------------------------------
 
 use pqsigner_rollback::floor::{
-    decode_floor, CompletionLaunchEvidence, FloorSnapshot, FloorView, StageBinding,
+    decode_floor, CompletionLaunchEvidence, FloorSnapshot, FloorView, PlanRole, StageBinding,
     ROUTE1_BASE0_CODEWORD,
 };
 use pqsigner_rollback::lifecycle::{decode_lifecycle, AttributedRead, LifecycleState};
@@ -329,9 +376,10 @@ pub fn accepted_artifact(
 ) -> pqsigner_rollback::evidence::AcceptedArtifact {
     use fw_manifest::v6::{QW_CONFIRMED_0, QW_CONFIRMED_1};
     let m = manifest(slot, r, e);
+    let (pk_seed, pk_root) = test_key_material();
     let art = pass
-        .verify_artifact(&m, INSTALL_ID)
-        .expect("test manifest is in range");
+        .verify_artifact(&m, INSTALL_ID, &pk_seed, &pk_root)
+        .expect("test manifest verifies");
     let (c0, c1, pd) = probe_journal(
         b,
         &art,
@@ -352,10 +400,16 @@ pub fn accepted_artifact(
 pub const OLD_INSTALL_ID: [u8; 16] = [
     0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,
 ];
+/// The peer-repair twin's FRESH install identity (must differ from the
+/// source's INSTALL_ID, R5-5).
+pub const TWIN_INSTALL_ID: [u8; 16] = [
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+];
 
-/// A stage binding with the golden R (model default digest).
-pub fn binding(slot: PhysicalSlot, e: u32) -> StageBinding {
-    StageBinding::new(slot, GOLDEN_R, e, seq(0x99)).expect("binding range")
+/// A stage binding with the golden R (model default digest) and an
+/// explicit ordered role plan (R5-3).
+pub fn binding(slot: PhysicalSlot, e: u32, roles: [(u16, PlanRole); 4]) -> StageBinding {
+    StageBinding::new(slot, GOLDEN_R, e, seq(0x99), roles).expect("binding range")
 }
 
 /// Probe the three lifecycle journal QWs at the artifact's canonical
