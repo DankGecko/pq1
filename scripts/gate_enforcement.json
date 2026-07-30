@@ -186,11 +186,22 @@
       "make": "make -C contracts/verification verify-transcription",
       "polices_paths": [
         "contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol",
-        "contracts/verification/lean/SphincsCVerify/Interpreter/C10Program.lean"
+        "contracts/verification/lean/SphincsCVerify/Interpreter/C10Program.lean",
+        "contracts/verification/lean/SphincsCVerify/Interpreter/C10Source.lean",
+        "contracts/verification/scripts/check_c10_transcription.py",
+        "contracts/verification/scripts/check_c10_transcription_ast.py",
+        "contracts/verification/scripts/test_c10_transcription_ast_negative.py",
+        "contracts/verification/scripts/check_c10_source_pin.py",
+        "contracts/verification/scripts/check_sphincs_digest_field_order.py",
+        "aa/src/userop.rs",
+        "contracts/smart-wallet/src/PQSmartWallet.sol",
+        "contracts/verification/lean/SphincsCVerify/Wallet/ValidateUserOp.lean",
+        "contracts/verification/Makefile",
+        ".github/workflows/a31-transcription.yml"
       ],
       "runs_in": "a31-transcription.yml",
       "enforcement": "per_pr_blocking",
-      "note": "the A3.1 c10Program<->Yul positional lint; the ONLY CI-enforced piece of the A3.1 track. Dedicated workflow with a POSITIVE paths filter (ci.yml paths-ignores all of contracts/verification/**). Enrolled 2026-07-02 (was absent \u2014 G1META-1)."
+      "note": "Dedicated positive-filter workflow for the A3.1 source<->transcription checks plus the Rust/Solidity/Lean signed-digest field-order pin; ci.yml is also unfiltered and invokes the same authoritative target. The Lean proof and axiom-closure legs are enforced separately by lean-fv.yml."
     },
     {
       "id": "verify-extracted",
