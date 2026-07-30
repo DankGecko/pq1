@@ -83,9 +83,9 @@ fn row_pending() {
     let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), F) {
-        LifecycleState::Pending { artifact, token } => {
-            assert_eq!(artifact.e(), GOLDEN_E);
-            assert_eq!(token.state(), ArmState::ArmReady);
+        LifecycleState::Pending(row) => {
+            assert_eq!(row.artifact().e(), GOLDEN_E);
+            assert_eq!(row.token().state(), ArmState::ArmReady);
         }
         _ => panic!("expected Pending"),
     }
@@ -100,7 +100,7 @@ fn row_attempted() {
     let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), F) {
-        LifecycleState::Attempted { token, .. } => assert_eq!(token.state(), ArmState::Attempted),
+        LifecycleState::Attempted(row) => assert_eq!(row.token().state(), ArmState::Attempted),
         _ => panic!("expected Attempted"),
     }
 }

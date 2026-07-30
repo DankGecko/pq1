@@ -60,24 +60,51 @@ pub enum MalformedReason {
     NonCanonicalJournalQw,
 }
 
+/// The artifact + bound token payload of a PENDING/ATTEMPTED row.
+/// Crate-private constructor (R6-4): `decode_lifecycle` is the sole
+/// producer — no caller can synthesize a probation row and bypass the
+/// decode gates (terminal-first probing, both-terminals-BlankVirgin,
+/// exact PENDING, canonical-QW/one-epoch binding, generation join).
+pub struct PendingRow {
+    artifact: VerifiedArtifact,
+    token: ArmToken,
+}
+
+impl PendingRow {
+    pub(crate) fn new(artifact: VerifiedArtifact, token: ArmToken) -> PendingRow {
+        PendingRow { artifact, token }
+    }
+
+    /// The row's verified artifact.
+    pub fn artifact(&self) -> &VerifiedArtifact {
+        &self.artifact
+    }
+
+    /// The row's bound arm token.
+    pub fn token(&self) -> &ArmToken {
+        &self.token
+    }
+
+    /// Consume the row into its parts (intents are linear consumers).
+    pub fn into_parts(self) -> (VerifiedArtifact, ArmToken) {
+        (self.artifact, self.token)
+    }
+}
+
 /// The six accepted lifecycle rows plus `Malformed` (§6.2 L2165–2172).
 pub enum LifecycleState {
     /// Verified newly installed body/full identity before activation:
     /// both terminals `BlankVirgin`, PENDING `BlankVirgin`, token
-    /// ignored. Requires `FullInstallGeneration`.
+    /// ignored. Requires `FullInstallGeneration`. (`VerifiedArtifact`
+    /// itself is only minted through `VerificationPass::verify_artifact`
+    /// — the real §7.1 check set — and this row grants no authority.)
     Uninstalled { artifact: VerifiedArtifact },
     /// Both terminals `BlankVirgin`; PENDING exact; token exact
     /// `ARM_READY`; `E > F`.
-    Pending {
-        artifact: VerifiedArtifact,
-        token: ArmToken,
-    },
+    Pending(PendingRow),
     /// Both terminals `BlankVirgin`; PENDING exact; token exact
     /// `ATTEMPTED`; `E > F`.
-    Attempted {
-        artifact: VerifiedArtifact,
-        token: ArmToken,
-    },
+    Attempted(PendingRow),
     /// `FullTerminalSet` — robust `CONFIRMED`. `F <= T`. Bootable.
     ConfirmedRobust(AcceptedArtifact),
     /// `SurvivingTerminalSet`, `F == T` — degraded `CONFIRMED`.
@@ -275,8 +302,8 @@ pub fn decode_lifecycle(
                 return LifecycleState::Malformed(MalformedReason::TokenBindingMismatch);
             }
             match token.state() {
-                ArmState::ArmReady => LifecycleState::Pending { artifact, token },
-                ArmState::Attempted => LifecycleState::Attempted { artifact, token },
+                ArmState::ArmReady => LifecycleState::Pending(PendingRow::new(artifact, token)),
+                ArmState::Attempted => LifecycleState::Attempted(PendingRow::new(artifact, token)),
             }
         }
         _ => LifecycleState::Malformed(MalformedReason::OutOfOrderMarkers),

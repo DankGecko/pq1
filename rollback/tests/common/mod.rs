@@ -446,3 +446,70 @@ pub fn degraded_history(
     let restage = EraseRestageReceipt::new(slot, prior.manifest_digest);
     DegradedHistoryEvidence::new(prior, restage).expect("history joins")
 }
+
+// ---------------------------------------------------------------------------
+// Artifact scripts for the frozen artifact recheck (R6-1)
+// ---------------------------------------------------------------------------
+
+use pqsigner_rollback::backend::{ArtifactScript, JournalQwScript};
+use pqsigner_rollback::qw_read::{Durability as D, LaunchAttribution as L};
+
+fn jq(outcome: ProbeScript, durability: D, launch: L) -> JournalQwScript {
+    JournalQwScript {
+        outcome,
+        durability,
+        launch,
+    }
+}
+
+/// The artifact script for a PENDING candidate: both terminals
+/// proven-virgin, exact PENDING, full install pair.
+pub fn pending_script(slot: PhysicalSlot, r: u32, e: u32, install_id: [u8; 16]) -> ArtifactScript {
+    let (pk_seed, pk_root) = test_key_material();
+    let mut inv = [0u8; 16];
+    for (i, b) in inv.iter_mut().enumerate() {
+        *b = !install_id[i];
+    }
+    ArtifactScript {
+        page: signed_page(slot, r, e),
+        pk_seed,
+        pk_root,
+        terminal_c0: jq(ProbeScript::Clean(ERASED), D::DurableClean, L::ProvenNoLaunch),
+        terminal_c1: jq(ProbeScript::Clean(ERASED), D::DurableClean, L::ProvenNoLaunch),
+        pending: jq(
+            ProbeScript::Clean(fw_manifest::v6::QW_PENDING),
+            D::DurableClean,
+            L::MayHaveLaunched,
+        ),
+        install_id: jq(ProbeScript::Clean(install_id), D::DurableClean, L::MayHaveLaunched),
+        install_id_inv: jq(ProbeScript::Clean(inv), D::DurableClean, L::MayHaveLaunched),
+    }
+}
+
+/// The artifact script for a robust CONFIRMED artifact (fallback /
+/// aborted boot): both terminal replicas exact.
+pub fn robust_script(slot: PhysicalSlot, r: u32, e: u32, install_id: [u8; 16]) -> ArtifactScript {
+    let (pk_seed, pk_root) = test_key_material();
+    let mut inv = [0u8; 16];
+    for (i, b) in inv.iter_mut().enumerate() {
+        *b = !install_id[i];
+    }
+    ArtifactScript {
+        page: signed_page(slot, r, e),
+        pk_seed,
+        pk_root,
+        terminal_c0: jq(
+            ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_0),
+            D::DurableClean,
+            L::MayHaveLaunched,
+        ),
+        terminal_c1: jq(
+            ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_1),
+            D::DurableClean,
+            L::MayHaveLaunched,
+        ),
+        pending: jq(ProbeScript::Clean(ERASED), D::DurableClean, L::ProvenNoLaunch),
+        install_id: jq(ProbeScript::Clean(install_id), D::DurableClean, L::MayHaveLaunched),
+        install_id_inv: jq(ProbeScript::Clean(inv), D::DurableClean, L::MayHaveLaunched),
+    }
+}

@@ -68,6 +68,12 @@ pub enum IntentError {
     /// re-decode disagrees on class, floor, or snapshot digest). The
     /// intent is consumed and no authority is granted.
     FloorDrift,
+    /// The frozen artifact recheck-immediately-before-handoff found the
+    /// artifact/lifecycle evidence CHANGED since intent construction
+    /// (manifest re-verification, identity, terminal QWs, or install
+    /// generation disagree). The intent is consumed and no authority is
+    /// granted.
+    ArtifactDrift,
 }
 
 /// Nonwritable recovery-join failure (FROZEN-OTP-API-3 L986–989):
@@ -193,12 +199,95 @@ fn run_recheck<B: RollbackBackend>(backend: &mut B, ctx: &RecheckContext) -> Res
     })
 }
 
+/// What the frozen artifact recheck expects of the presented artifact.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ArtifactExpectation {
+    /// A PENDING probation candidate: both terminals proven
+    /// `BlankVirgin`, exact PENDING, and a valid install generation for
+    /// the artifact's sealed key.
+    PendingCandidate,
+    /// A robust CONFIRMED artifact (probation fallback / aborted boot):
+    /// exact `FullTerminalSet` for the artifact's sealed key.
+    Robust,
+}
+
+/// The artifact half of the frozen recheck-immediately-before-handoff
+/// (R6-1; FROZEN-OTP-API-3 L897–900, §10 item 5): re-probe and re-verify
+/// the manifest, re-derive the identity, and re-check the state-
+/// appropriate lifecycle evidence against the intent's sealed key. Any
+/// drift consumes the intent and grants no authority.
+fn reverify_artifact<B: RollbackBackend>(
+    backend: &mut B,
+    artifact: &VerifiedArtifact,
+    expect: ArtifactExpectation,
+) -> Result<(), IntentError> {
+    let id = artifact.identity();
+    let recheck = backend
+        .reverify_artifact(id)
+        .ok_or(IntentError::ArtifactDrift)?;
+    if recheck.identity != *id {
+        return Err(IntentError::ArtifactDrift);
+    }
+    match expect {
+        ArtifactExpectation::PendingCandidate => {
+            for (read, _, launch) in [&recheck.terminal_c0, &recheck.terminal_c1] {
+                if crate::qw_read::BlankVirgin::prove(read, *launch).is_none() {
+                    return Err(IntentError::ArtifactDrift);
+                }
+            }
+            let (read, durability, _) = &recheck.pending;
+            if !crate::journal::exact_marker(read, &fw_manifest::v6::QW_PENDING, *durability) {
+                return Err(IntentError::ArtifactDrift);
+            }
+            let gen = crate::lifecycle::decode_install_generation(
+                artifact,
+                crate::lifecycle::AttributedRead {
+                    read: &recheck.install_id.0,
+                    durability: recheck.install_id.1,
+                    launch: recheck.install_id.2,
+                },
+                crate::lifecycle::AttributedRead {
+                    read: &recheck.install_id_inv.0,
+                    durability: recheck.install_id_inv.1,
+                    launch: recheck.install_id_inv.2,
+                },
+                None,
+            );
+            if gen.is_none() {
+                return Err(IntentError::ArtifactDrift);
+            }
+            Ok(())
+        }
+        ArtifactExpectation::Robust => {
+            let key_digest = artifact.key().digest();
+            match crate::journal::decode_terminal_set(
+                &recheck.terminal_c0.0,
+                recheck.terminal_c0.1,
+                recheck.terminal_c0.2,
+                &recheck.terminal_c1.0,
+                recheck.terminal_c1.1,
+                recheck.terminal_c1.2,
+                artifact.key(),
+            ) {
+                crate::journal::TerminalSetOutcome::Full(set)
+                    if set.evidence_key() == &key_digest =>
+                {
+                    Ok(())
+                }
+                _ => Err(IntentError::ArtifactDrift),
+            }
+        }
+    }
+}
+
 /// Perform only the TAMP `ARM_READY -> ATTEMPTED` transition, then run
 /// the frozen recheck (fresh complete floor/stage decode with
-/// class/floor/snapshot-digest equality) and re-read/re-bind the token
-/// to exact `ATTEMPTED` immediately before handoff (FROZEN-OTP-API-3
-/// L991–997, L898–900). Any drift or token anomaly consumes the intent
-/// and grants no authority. No rollback-state mutation.
+/// class/floor/snapshot-digest equality), re-verify the candidate
+/// artifact/lifecycle evidence against fresh reads, and re-read/re-bind
+/// the token to exact `ATTEMPTED` immediately before handoff
+/// (FROZEN-OTP-API-3 L991–997, L898–900, R6-1). Any drift or token
+/// anomaly consumes the intent and grants no authority. No
+/// rollback-state mutation.
 fn arm_and_handoff<B: RollbackBackend>(
     backend: &mut B,
     artifact: &VerifiedArtifact,
@@ -231,6 +320,9 @@ fn arm_and_handoff<B: RollbackBackend>(
     // Frozen recheck: fresh complete floor/stage decode must agree with
     // the intent's proof snapshot (no drift since construction).
     run_recheck(backend, recheck)?;
+    // Frozen artifact recheck (R6-1): the candidate's manifest and
+    // lifecycle evidence must still verify against fresh reads.
+    reverify_artifact(backend, artifact, ArtifactExpectation::PendingCandidate)?;
     // Fresh token decode + binding immediately before handoff.
     let words = backend.read_arm_token().ok_or(IntentError::TokenNotArmReady)?;
     let token = ArmToken::decode_and_bind(
@@ -308,7 +400,7 @@ impl CheckedSteadyProbationIntent {
         receipt: Option<EpochBumpReceipt>,
     ) -> Result<Self, IntentError> {
         let (candidate, token) = match candidate_row {
-            LifecycleState::Pending { artifact, token } => (artifact, token),
+            LifecycleState::Pending(row) => row.into_parts(),
             _ => return Err(IntentError::WrongLifecycleRow),
         };
         let fb = fallback.artifact();
@@ -381,7 +473,11 @@ pub fn arm_probation_from_steady<B: RollbackBackend>(
         snapshot_digest: *intent.steady.snapshot_digest(),
         fallback_t: Some(intent.fallback.artifact().t()),
     };
-    arm_and_handoff(backend, &intent.candidate, &recheck)
+    let handoff = arm_and_handoff(backend, &intent.candidate, &recheck)?;
+    // R6-1: the robust exact-`F` fallback must ALSO still verify
+    // immediately before handoff (§10 item 5: "reverify both artifacts").
+    reverify_artifact(backend, intent.fallback.artifact(), ArtifactExpectation::Robust)?;
+    Ok(handoff)
 }
 
 // ---------------------------------------------------------------------------
@@ -580,6 +676,9 @@ pub fn boot_accepted_from_aborted<B: RollbackBackend>(
         fallback_t: None,
     };
     run_recheck(backend, &recheck)?;
+    // R6-1: re-verify the artifact's manifest and robust terminal
+    // evidence against fresh reads immediately before handoff.
+    reverify_artifact(backend, art, ArtifactExpectation::Robust)?;
     Ok(BootHandoff {
         slot: id.slot,
         r: id.r,
@@ -617,8 +716,61 @@ impl FreshFloorProof {
     }
 }
 
-/// Owns the floor proof, the `RobustAccepted` source, and the restaged
-/// opposite-slot A/B twin (PENDING with exact `ARM_READY`).
+/// Writer-minted linear receipt for the twin slot's complete
+/// erase/restage (§10 item 9: "the independently restaged opposite-slot
+/// archived A/B twin... fresh install identity"). HOST-MODEL
+/// constructor stands in for the physical writer; the receipt proves
+/// the twin is a FRESH restage (new install id ≠ the prior twin
+/// generation's id), not merely a different stale copy.
+#[derive(PartialEq, Eq, Debug)]
+pub struct TwinRestageReceipt {
+    slot: PhysicalSlot,
+    prior_manifest_digest: [u8; 32],
+    prior_install_id: [u8; 16],
+    new_install_id: [u8; 16],
+}
+
+impl TwinRestageReceipt {
+    /// HOST-MODEL constructor (the writer is out of scope). `None` when
+    /// the new install id equals the prior generation's (no fresh
+    /// identity, no restage).
+    pub fn new(
+        slot: PhysicalSlot,
+        prior_manifest_digest: [u8; 32],
+        prior_install_id: [u8; 16],
+        new_install_id: [u8; 16],
+    ) -> Option<TwinRestageReceipt> {
+        if prior_install_id == new_install_id {
+            return None;
+        }
+        Some(TwinRestageReceipt {
+            slot,
+            prior_manifest_digest,
+            prior_install_id,
+            new_install_id,
+        })
+    }
+
+    pub fn slot(&self) -> PhysicalSlot {
+        self.slot
+    }
+
+    pub fn prior_manifest_digest(&self) -> &[u8; 32] {
+        &self.prior_manifest_digest
+    }
+
+    pub fn prior_install_id(&self) -> [u8; 16] {
+        self.prior_install_id
+    }
+
+    pub fn new_install_id(&self) -> [u8; 16] {
+        self.new_install_id
+    }
+}
+
+/// Owns the floor proof, the `RobustAccepted` source, the restaged
+/// opposite-slot A/B twin (PENDING with exact `ARM_READY`), and the
+/// twin's erase/restage receipt.
 pub struct CheckedPeerRepairIntent {
     floor_proof: FreshFloorProof,
     #[allow(dead_code)]
@@ -630,14 +782,20 @@ pub struct CheckedPeerRepairIntent {
 impl CheckedPeerRepairIntent {
     /// The sole equal-`R` PENDING exception (FROZEN-OTP-API-3 L1035–1043):
     /// the twin must be the opposite-slot artifact of the source's exact
-    /// logical A/B release set with identical `(R,E,T)` and `T == F`.
+    /// logical A/B release set with identical `(R,E,T)` and `T == F`,
+    /// and must carry a FRESH install identity proven by the twin's
+    /// erase/restage receipt (R6-2: the receipt binds the twin slot and
+    /// its NEW install id, which its constructor already required to
+    /// differ from the PRIOR twin generation's id — not merely from the
+    /// source's).
     pub fn new(
         floor_proof: FreshFloorProof,
         source: AcceptedArtifact,
         twin_row: LifecycleState,
+        receipt: TwinRestageReceipt,
     ) -> Result<Self, IntentError> {
         let (twin, token) = match twin_row {
-            LifecycleState::Pending { artifact, token } => (artifact, token),
+            LifecycleState::Pending(row) => row.into_parts(),
             _ => return Err(IntentError::WrongLifecycleRow),
         };
         let src = source.artifact();
@@ -648,12 +806,10 @@ impl CheckedPeerRepairIntent {
         {
             return Err(IntentError::PeerRepairMismatch);
         }
-        // Fresh install identity (FROZEN-OTP-API-3 L1041–1043, §10 item
-        // 9): a stale opposite-slot copy from a previous generation is
-        // never a twin. The full erase/restage receipt for the twin
-        // lands with the physical writer (host-model note, same posture
-        // as the degraded-repair evidence set).
-        if twin.install_id() == src.install_id() {
+        if twin.install_id() == src.install_id()
+            || receipt.slot() != twin.slot()
+            || receipt.new_install_id() != twin.install_id()
+        {
             return Err(IntentError::PeerRepairMismatch);
         }
         if twin.t() != floor_proof.floor() {
@@ -771,7 +927,7 @@ impl CheckedDegradedRepairIntent {
         history: DegradedHistoryEvidence,
     ) -> Result<Self, IntentError> {
         let (target, token) = match target_row {
-            LifecycleState::Pending { artifact, token } => (artifact, token),
+            LifecycleState::Pending(row) => row.into_parts(),
             _ => return Err(IntentError::WrongLifecycleRow),
         };
         // Degraded-history binding: the repair target must be the

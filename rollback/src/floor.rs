@@ -509,6 +509,11 @@ pub enum FloorFault {
     /// never silently absorbed into a plan, and a plan cell that does
     /// not match physical reality rejects the decode.
     UnmappedRole { index: u16 },
+    /// The committed allocation history is not a valid monotone
+    /// sequence: duplicate group, or targets not non-decreasing in
+    /// group order. The allocation cursor is only ever the max
+    /// VALIDATED group — never reissued.
+    NonMonotoneAllocation,
 }
 
 /// The four mutually exclusive decoder classes (FROZEN-OTP-API-3
@@ -917,8 +922,12 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     // ---- committed groups -------------------------------------------------
     // A group is committed when its durable COMPLETE exists; it must
     // retain at least DEGRADED_THRESHOLD clean witnesses, and all its
-    // floor records must agree on one target (no aliasing).
-    let mut committed: Option<(u32, u32)> = None; // (g, t) with highest t
+    // floor records must agree on one target (no aliasing). The
+    // committed history must be a valid monotone allocation sequence
+    // (R6-3): no duplicate groups, targets non-decreasing in group
+    // order; the allocation cursor is the max VALIDATED group.
+    let mut committed_list: [(u32, u32); MAX_COMPLETE_RECORDS] = [(0, 0); MAX_COMPLETE_RECORDS];
+    let mut n_committed = 0usize;
     for &g in &completes[..n_complete] {
         let mut t_val: Option<u32> = None;
         let mut witnesses = 0u32;
@@ -941,10 +950,26 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
         if t == 0 || t > crate::arm_token::T_MAX {
             return FloorView::Unknown(FloorFault::ConflictingCompletion);
         }
-        if committed.map_or(true, |(_, ct)| t > ct) {
-            committed = Some((g, t));
+        committed_list[n_committed] = (g, t);
+        n_committed += 1;
+    }
+    // Sequence validation: unique groups; targets non-decreasing in
+    // group order. A non-monotone or duplicate history is Unknown,
+    // never a silent max-pick.
+    for w in committed_list[..n_committed].windows(2) {
+        let ((g0, _), (g1, _)) = (w[0], w[1]);
+        if g0 == g1 {
+            return FloorView::Unknown(FloorFault::NonMonotoneAllocation);
         }
     }
+    committed_list[..n_committed].sort_unstable_by_key(|&(g, _)| g);
+    for w in committed_list[..n_committed].windows(2) {
+        let ((_, t0), (_, t1)) = (w[0], w[1]);
+        if t1 < t0 {
+            return FloorView::Unknown(FloorFault::NonMonotoneAllocation);
+        }
+    }
+    let committed: Option<(u32, u32)> = committed_list[..n_committed].last().copied();
 
     // A stage record for a group that is already committed is conflicting
     // completion authority.

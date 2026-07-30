@@ -82,6 +82,25 @@ impl FloorResumePermit {
     }
 }
 
+/// Fresh re-probed artifact evidence for the frozen
+/// recheck-immediately-before-handoff (R6-1): the artifact's
+/// re-derived identity plus fresh reads of all five journal QWs at the
+/// identity's canonical addresses, each with explicit attributions.
+pub struct ArtifactRecheck {
+    /// Identity re-derived from the re-probed, re-verified manifest.
+    pub identity: crate::evidence::ArtifactIdentity,
+    /// `QW_CONFIRMED_0` fresh read + attributions.
+    pub terminal_c0: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
+    /// `QW_CONFIRMED_1` fresh read + attributions.
+    pub terminal_c1: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
+    /// `QW_PENDING` fresh read + attributions.
+    pub pending: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
+    /// `QW_INSTALL_ID` fresh read + attributions.
+    pub install_id: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
+    /// `QW_INSTALL_ID_INV` fresh read + attributions.
+    pub install_id_inv: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
+}
+
 /// The mutation surface the six entries may touch. Deliberately narrow:
 /// token transitions and floor-plan begin/resume ONLY — there is no
 /// generic write method, so an entry physically cannot reach manifests,
@@ -110,6 +129,15 @@ pub trait RollbackBackend {
     /// attributed per-QW reads immediately before mutation/handoff).
     /// This is the capability behind the frozen recheck-before-handoff.
     fn redecode_floor(&mut self) -> FloorView;
+
+    /// Re-probe the artifact evidence for `identity` (manifest page,
+    /// terminal QWs, install generation) against CURRENT backend state
+    /// — the artifact half of the frozen pre-handoff recheck (R6-1).
+    /// `None` when the backend cannot produce a coherent re-read.
+    fn reverify_artifact(
+        &mut self,
+        identity: &crate::evidence::ArtifactIdentity,
+    ) -> Option<ArtifactRecheck>;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +146,10 @@ pub trait RollbackBackend {
 
 #[cfg(feature = "test-backend")]
 mod scripted {
-    use super::{ArmTransitionPermit, FloorBeginPermit, FloorResumePermit, Mutation, RollbackBackend};
+    use super::{
+        ArmTransitionPermit, ArtifactRecheck, FloorBeginPermit, FloorResumePermit, Mutation,
+        RollbackBackend,
+    };
     use crate::floor::{
         self, CompletionLaunchEvidence, EpochBumpReceipt, FloorView, StageBinding,
     };
@@ -138,6 +169,27 @@ mod scripted {
         Uncorrectable,
         /// Unattributable read (status: torn/fault/may-have-launched).
         AmbiguousOrFault,
+    }
+
+    /// One scripted journal-QW read: outcome plus explicit attributions.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct JournalQwScript {
+        pub outcome: ProbeScript,
+        pub durability: Durability,
+        pub launch: LaunchAttribution,
+    }
+
+    /// A complete scripted artifact for `reverify_artifact` (R6-1): the
+    /// signed manifest page, its key material, and the five journal QWs.
+    pub struct ArtifactScript {
+        pub page: [u8; 8192],
+        pub pk_seed: [u8; 16],
+        pub pk_root: [u8; 16],
+        pub terminal_c0: JournalQwScript,
+        pub terminal_c1: JournalQwScript,
+        pub pending: JournalQwScript,
+        pub install_id: JournalQwScript,
+        pub install_id_inv: JournalQwScript,
     }
 
     /// One scripted floor-bank cell: probe outcome plus the explicit
@@ -196,6 +248,7 @@ mod scripted {
         log: [Option<Mutation>; 64],
         log_len: usize,
         floor_script: Option<FloorScript>,
+        artifact_scripts: [Option<ArtifactScript>; 2],
     }
 
     impl<const CELLS: usize> Default for ScriptedBackend<CELLS> {
@@ -214,6 +267,7 @@ mod scripted {
                 log: [None; 64],
                 log_len: 0,
                 floor_script: None,
+                artifact_scripts: [None, None],
             }
         }
 
@@ -254,6 +308,18 @@ mod scripted {
         /// entry is how drift tests simulate backend mutation.
         pub fn set_floor_script(&mut self, script: FloorScript) {
             self.floor_script = Some(script);
+        }
+
+        /// Set (or replace) the artifact script for `slot`, consumed by
+        /// `reverify_artifact`. Replacing it between intent construction
+        /// and entry is how artifact-drift tests simulate physical
+        /// mutation.
+        pub fn set_artifact_script(&mut self, slot: fw_manifest::v6::PhysicalSlot, script: ArtifactScript) {
+            let idx = match slot {
+                fw_manifest::v6::PhysicalSlot::A => 0,
+                fw_manifest::v6::PhysicalSlot::B => 1,
+            };
+            self.artifact_scripts[idx] = Some(script);
         }
 
         /// Number of recorded mutations.
@@ -423,6 +489,59 @@ mod scripted {
                 ],
             );
             floor::decode_floor(&snapshot)
+        }
+
+        fn reverify_artifact(
+            &mut self,
+            identity: &crate::evidence::ArtifactIdentity,
+        ) -> Option<ArtifactRecheck> {
+            let idx = match identity.slot {
+                fw_manifest::v6::PhysicalSlot::A => 0,
+                fw_manifest::v6::PhysicalSlot::B => 1,
+            };
+            // Extract the script into locals first (everything is
+            // Copy), then probe with &mut self.
+            let (page, pk_seed, pk_root, t_c0, t_c1, pd, iid, iid_inv) = {
+                let script = self.artifact_scripts[idx].as_ref()?;
+                (
+                    script.page,
+                    script.pk_seed,
+                    script.pk_root,
+                    script.terminal_c0,
+                    script.terminal_c1,
+                    script.pending,
+                    script.install_id,
+                    script.install_id_inv,
+                )
+            };
+            // Re-verify the manifest (structure, digest, vendor
+            // signature, fingerprint) and re-derive the identity.
+            let m = fw_manifest::v6::parse_and_validate(&page, identity.slot).ok()?;
+            if !m.verify_with_embedded_key(&pk_seed, &pk_root) {
+                return None;
+            }
+            let ProbeScript::Clean(install_id) = iid.outcome else {
+                return None;
+            };
+            let derived = crate::evidence::ArtifactIdentity::derive(&m, install_id)?;
+
+            let mk = |b: &mut Self, index: u16, addr: u32, s: &JournalQwScript| {
+                assert!(b.script(index, addr, s.outcome));
+                (b.fresh_probe(index, addr), s.durability, s.launch)
+            };
+            let terminal_c0 = mk(self, 40, derived.confirmed_0_qw_address, &t_c0);
+            let terminal_c1 = mk(self, 41, derived.confirmed_1_qw_address, &t_c1);
+            let pending = mk(self, 42, derived.pending_qw_address, &pd);
+            let install = mk(self, 43, derived.install_id_qw_address(), &iid);
+            let install_inv = mk(self, 44, derived.install_id_inv_qw_address(), &iid_inv);
+            Some(ArtifactRecheck {
+                identity: derived,
+                terminal_c0,
+                terminal_c1,
+                pending,
+                install_id: install,
+                install_id_inv: install_inv,
+            })
         }
     }
 }

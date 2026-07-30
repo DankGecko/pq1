@@ -726,3 +726,68 @@ fn plan_cell_not_matching_physical_reality_is_unknown() {
         other => panic!("expected UnmappedRole, got {}", view_name(&other)),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Allocation sequence validation (R6-3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn non_monotone_committed_history_is_unknown() {
+    // COMPLETE(g1, T=10) + COMPLETE(g2, T=5): the old max-pick would
+    // yield Steady(10, g1) and preflight would reissue g2. Must be
+    // Unknown, never Steady(10).
+    let mut bank = Bank::new();
+    bank.clean(encode_floor_record(10, 1));
+    bank.clean(encode_complete_record(1));
+    bank.clean(encode_floor_record(5, 2));
+    bank.clean(encode_complete_record(2));
+    bank.route1(false);
+    let view = bank.decode(FENCE_OK, None);
+    if let FloorView::Steady(p) = &view {
+        panic!(
+            "non-monotone history admitted as Steady({}) — allocation cursor would be reissued",
+            p.floor()
+        );
+    }
+    match view {
+        FloorView::Unknown(FloorFault::NonMonotoneAllocation) => {}
+        other => panic!("expected NonMonotoneAllocation, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn duplicate_committed_group_is_unknown() {
+    let mut bank = Bank::new();
+    bank.clean(encode_floor_record(5, 1));
+    bank.clean(encode_complete_record(1));
+    bank.clean(encode_complete_record(1)); // duplicate group
+    bank.route1(false);
+    match bank.decode(FENCE_OK, None) {
+        FloorView::Unknown(FloorFault::NonMonotoneAllocation) => {}
+        other => panic!("expected NonMonotoneAllocation, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn monotone_two_group_history_yields_highest_target() {
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(5, 1));
+    }
+    bank.clean(encode_complete_record(1));
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(9, 2));
+    }
+    bank.clean(encode_complete_record(2));
+    bank.route1(false);
+    match bank.decode(FENCE_OK, None) {
+        FloorView::Steady(p) => {
+            assert_eq!(p.floor(), 9);
+            assert_eq!(p.group(), GroupIdentity::Group(2));
+            // The allocation cursor is the max VALIDATED group.
+            let receipt = preflight(&p, 10).expect("receipt");
+            assert_eq!(receipt.group(), 3);
+        }
+        other => panic!("expected Steady(9), got {}", view_name(&other)),
+    }
+}
