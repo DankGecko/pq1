@@ -232,3 +232,42 @@ fn pending_marker_observation() {
     let _ = LaunchAttribution::MayHaveLaunched;
     let _ = FreshQwRead::AmbiguousOrFault;
 }
+
+#[test]
+fn probe_classification_is_canonical_not_scriptable() {
+    // R2-1: the script sets the raw STATUS; the provided `fresh_probe`
+    // derives the outcome class. A backend can never upgrade a corrected
+    // or faulted read to Clean, and the CleanQw always binds the
+    // REQUESTED index/address, never one the backend chose.
+    let mut b = TestBackend::new(7);
+
+    // Corrected bytes that happen to equal a codeword classify as
+    // Corrected (zero quorum weight), never Clean.
+    let read = probe(&mut b, 0, ProbeScript::Corrected(QW_CONFIRMED_0));
+    match &read {
+        FreshQwRead::Corrected { index, .. } => assert_eq!(*index, 0),
+        FreshQwRead::Clean(_) => panic!("a corrected read must never classify as Clean"),
+        _ => panic!("expected Corrected"),
+    }
+
+    // An ECCD script classifies as Uncorrectable regardless of bytes.
+    let read = probe(&mut b, 1, ProbeScript::Uncorrectable);
+    assert!(matches!(read, FreshQwRead::Uncorrectable { index: 1 }));
+
+    // An unattributable script classifies as AmbiguousOrFault.
+    let read = probe(&mut b, 2, ProbeScript::AmbiguousOrFault);
+    assert!(matches!(read, FreshQwRead::AmbiguousOrFault));
+
+    // A Clean script binds exactly the requested index/address/epoch.
+    let addr = pqsigner_rollback::floor::canonical_cell_addr(5);
+    let read = probe_clean(&mut b, 5, INSTALL_ID);
+    match &read {
+        FreshQwRead::Clean(qw) => {
+            assert_eq!(qw.index(), 5);
+            assert_eq!(qw.addr(), addr);
+            assert_eq!(qw.probe_epoch(), 7);
+            assert_eq!(qw.bytes(), &INSTALL_ID);
+        }
+        _ => panic!("expected Clean"),
+    }
+}

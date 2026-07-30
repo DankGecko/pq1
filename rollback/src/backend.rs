@@ -63,21 +63,23 @@ mod scripted {
         self, CompletionLaunchEvidence, EpochBumpReceipt, FloorCell, FloorSnapshot, FloorView,
         StageBinding,
     };
-    use crate::qw_read::{Durability, FreshArrayProbe, FreshQwRead, LaunchAttribution,
-        RawProbeOutcome};
+    use crate::qw_read::{
+        Durability, FreshArrayProbe, FreshQwRead, LaunchAttribution, ProbeStatus, RawProbeResult,
+    };
 
-    /// Scriptable probe outcome for the fake backend (Copy data only;
-    /// the typed [`FreshQwRead`] wrapper is built by the
-    /// [`FreshArrayProbe`] provided method).
+    /// Scriptable probe script for the fake backend (Copy data only).
+    /// The script sets the raw STATUS (and bytes where meaningful); the
+    /// outcome class is derived canonically by
+    /// [`FreshArrayProbe::fresh_probe`], never chosen here.
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub enum ProbeScript {
-        /// ECC-clean read of these bytes.
+        /// ECC-clean read of these bytes (status: no ECC event).
         Clean([u8; 16]),
-        /// ECC-corrected read (zero quorum weight).
+        /// Single-bit ECC correction (status: corrected).
         Corrected([u8; 16]),
-        /// ECC double-bit error.
+        /// Double-bit ECC error (status: ECCD).
         Uncorrectable,
-        /// Torn / may-have-launched / faulted.
+        /// Unattributable read (status: torn/fault/may-have-launched).
         AmbiguousOrFault,
     }
 
@@ -224,24 +226,37 @@ mod scripted {
             self.probe_epoch
         }
 
-        fn fresh_raw_read(&mut self, index: u16, addr: u32) -> RawProbeOutcome {
+        fn fresh_raw_read(&mut self, index: u16, addr: u32) -> RawProbeResult {
             for slot in self.scripts.iter() {
                 if let Some((i, _, outcome)) = slot {
                     if *i == index {
                         return match outcome {
-                            ProbeScript::Clean(bytes) => RawProbeOutcome::Clean { bytes: *bytes },
-                            ProbeScript::Corrected(bytes) => {
-                                RawProbeOutcome::Corrected { bytes: *bytes }
-                            }
-                            ProbeScript::Uncorrectable => RawProbeOutcome::Uncorrectable,
-                            ProbeScript::AmbiguousOrFault => RawProbeOutcome::AmbiguousOrFault,
+                            ProbeScript::Clean(bytes) => RawProbeResult {
+                                bytes: *bytes,
+                                status: ProbeStatus::NoEccEvent,
+                            },
+                            ProbeScript::Corrected(bytes) => RawProbeResult {
+                                bytes: *bytes,
+                                status: ProbeStatus::EccCorrected,
+                            },
+                            ProbeScript::Uncorrectable => RawProbeResult {
+                                bytes: [0xFF; 16],
+                                status: ProbeStatus::EccDoubleError,
+                            },
+                            ProbeScript::AmbiguousOrFault => RawProbeResult {
+                                bytes: [0xFF; 16],
+                                status: ProbeStatus::Unattributable,
+                            },
                         };
                     }
                 }
             }
             // Unscripted indices fail closed.
             let _ = addr;
-            RawProbeOutcome::AmbiguousOrFault
+            RawProbeResult {
+                bytes: [0xFF; 16],
+                status: ProbeStatus::Unattributable,
+            }
         }
     }
 
@@ -285,14 +300,14 @@ mod scripted {
             let mut reads: [Option<FreshQwRead>; 32] = [const { None }; 32];
             for (i, cell) in script.cells[..script.cells_len].iter().enumerate() {
                 if let Some(scripted) = cell {
-                    let addr = 0x20 * i as u32;
+                    let addr = floor::canonical_cell_addr(i as u16);
                     self.script(i as u16, addr, scripted.outcome);
                     reads[i] = Some(self.fresh_probe(i as u16, addr));
                 }
             }
             let mut r1: [Option<FreshQwRead>; 2] = [None, None];
             for (j, cell) in script.route1.iter().enumerate() {
-                let addr = 0x2000 + 0x20 * j as u32;
+                let addr = floor::canonical_route1_addr(j);
                 self.script(60 + j as u16, addr, cell.outcome);
                 r1[j] = Some(self.fresh_probe(60 + j as u16, addr));
             }

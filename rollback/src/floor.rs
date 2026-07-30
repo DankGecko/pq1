@@ -38,6 +38,46 @@ pub const MAX_COMPLETE_RECORDS: usize = 8;
 /// Maximum tracked stage records.
 pub const MAX_STAGE_RECORDS: usize = 8;
 
+// ---------------------------------------------------------------------------
+// Canonical physical map (MODEL choice — the production OTP assignment
+// belongs to OPEN-OTP-1..3 and the geometry registry's OTP extension).
+// Reserved rollback QW `index` sits at `OTP_ROLLBACK_BANK_BASE + index*16`;
+// the Route-1 markers are the FIRST quad-words of the registry's Route-1
+// journal pages (bank-1 pages 64 and 122).
+// ---------------------------------------------------------------------------
+
+/// MODEL base address of the reserved rollback QW bank.
+pub const OTP_ROLLBACK_BANK_BASE: u32 = 0x0BFA_0000;
+
+/// The canonical absolute address of reserved rollback QW `index`.
+pub const fn canonical_cell_addr(index: u16) -> u32 {
+    OTP_ROLLBACK_BANK_BASE + index as u32 * 16
+}
+
+/// The canonical absolute address of Route-1 marker `which` (0 or 1).
+pub const fn canonical_route1_addr(which: usize) -> u32 {
+    pqsigner_geometry::page_addr(
+        pqsigner_geometry::Bank::One,
+        pqsigner_geometry::ROUTE1_JOURNAL_PAGES[which],
+    )
+}
+
+/// Why a snapshot's canonical physical map is invalid (FROZEN-OTP-API-3
+/// L931: one physical QW can never count twice or alias a role).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MapFault {
+    /// Two `Clean` reads in one snapshot carry the same physical index.
+    DuplicateIndex { index: u16 },
+    /// A `CleanQw`'s bound address does not equal the canonical
+    /// registry-derived address for its index.
+    AddressMismatch { index: u16 },
+    /// Not all `Clean` reads in the snapshot share one probe epoch (one
+    /// common immutable-entry pass).
+    InconsistentProbeEpoch,
+    /// The two Route-1 reads are not distinct physical QWs.
+    NonDisjointRoute1,
+}
+
 /// Which accountancy array overflowed (see
 /// [`FloorFault::RecordOverflow`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -273,6 +313,10 @@ pub enum FloorFault {
     /// are never silently dropped (a truncated view could admit a lower
     /// committed floor than the bank actually proves).
     RecordOverflow { kind: RecordKind, index: u16 },
+    /// The snapshot's canonical physical map is invalid (duplicate
+    /// index, index/address mismatch, probe-epoch inconsistency, or a
+    /// non-disjoint Route-1 pair).
+    NonCanonicalMap(MapFault),
 }
 
 /// The four mutually exclusive decoder classes (FROZEN-OTP-API-3
@@ -425,6 +469,62 @@ pub fn route1_marker_is_exact(cell: &FloorCell<'_>) -> bool {
 // The decoder
 // ---------------------------------------------------------------------------
 
+/// Validate the snapshot's canonical physical map BEFORE accountancy:
+/// every `Clean` read must sit at the canonical address for its index,
+/// indices must be unique across cells and the Route-1 pair, all `Clean`
+/// reads must share one probe epoch, and the Route-1 pair must be two
+/// distinct physical QWs at their canonical pages.
+fn validate_physical_map(snapshot: &FloorSnapshot<'_>) -> Result<(), FloorFault> {
+    let mut seen: [u16; MAX_ROLLBACK_CELLS + 2] = [0; MAX_ROLLBACK_CELLS + 2];
+    let mut n_seen = 0usize;
+    let mut epoch: Option<u32> = None;
+
+    let mut check = |qw: &crate::qw_read::CleanQw, canonical_addr: u32| -> Result<(), FloorFault> {
+        if seen[..n_seen].contains(&qw.index()) {
+            return Err(FloorFault::NonCanonicalMap(MapFault::DuplicateIndex {
+                index: qw.index(),
+            }));
+        }
+        seen[n_seen] = qw.index();
+        n_seen += 1;
+        if qw.addr() != canonical_addr {
+            return Err(FloorFault::NonCanonicalMap(MapFault::AddressMismatch {
+                index: qw.index(),
+            }));
+        }
+        match epoch {
+            None => epoch = Some(qw.probe_epoch()),
+            Some(e) if e != qw.probe_epoch() => {
+                return Err(FloorFault::NonCanonicalMap(MapFault::InconsistentProbeEpoch));
+            }
+            _ => {}
+        }
+        Ok(())
+    };
+
+    for cell in snapshot.cells {
+        if let FreshQwRead::Clean(qw) = cell.read {
+            check(qw, canonical_cell_addr(qw.index()))?;
+        }
+    }
+    for (j, cell) in snapshot.route1.iter().enumerate() {
+        if let FreshQwRead::Clean(qw) = cell.read {
+            check(qw, canonical_route1_addr(j))?;
+        }
+    }
+    // Route-1 non-disjointness: both Clean reads must be distinct QWs at
+    // their own canonical pages (a duplicate index already fired above;
+    // identical (index, addr) pairs are caught the same way).
+    if let (FreshQwRead::Clean(a), FreshQwRead::Clean(b)) =
+        (snapshot.route1[0].read, snapshot.route1[1].read)
+    {
+        if a.index() == b.index() || a.addr() == b.addr() {
+            return Err(FloorFault::NonCanonicalMap(MapFault::NonDisjointRoute1));
+        }
+    }
+    Ok(())
+}
+
 /// Scan every reserved rollback QW and both Route-1 markers and yield
 /// exactly one mutually exclusive class (FROZEN-OTP-API-3 L856–867).
 ///
@@ -436,13 +536,18 @@ pub fn route1_marker_is_exact(cell: &FloorCell<'_>) -> bool {
 /// uncorrectable/may-have-launched QW outside the authenticated map
 /// forces `Unknown`; no aliasing; no mutable head oracle.
 pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
-    // Bound the bank BEFORE scanning: a larger snapshot is never
+    // Bound the bank BEFORE anything else: a larger snapshot is never
     // silently truncated (accountancy overflow fails closed).
     if snapshot.cells.len() > MAX_ROLLBACK_CELLS {
         return FloorView::Unknown(FloorFault::RecordOverflow {
             kind: RecordKind::Cell,
             index: snapshot.cells.len() as u16,
         });
+    }
+    // Canonical physical map next: no aliasing, no misaddressed reads,
+    // one common probe pass (FROZEN-OTP-API-3 L926–932).
+    if let Err(fault) = validate_physical_map(snapshot) {
+        return FloorView::Unknown(fault);
     }
     let digest = snapshot_digest(snapshot.cells, &snapshot.route1);
 
@@ -544,6 +649,16 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
         }
     }
 
+    // Floor records belonging to NO group context are orphan roles: any
+    // record whose group has neither COMPLETE nor STAGE evidence forces
+    // Unknown — in the committed-Steady arm just as in the active-stage
+    // arm (§7.1 L2568–2569: orphaned evidence yields Unknown).
+    for &(rg, _) in &floor_records[..n_floor] {
+        if !completes[..n_complete].contains(&rg) && !stages[..n_stage].contains(&rg) {
+            return FloorView::Unknown(FloorFault::AmbiguousStage);
+        }
+    }
+
     // ---- active stage ------------------------------------------------------
     let active: Option<u32> = match n_stage {
         0 => None,
@@ -622,14 +737,8 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
                     clean_records += 1;
                 }
             }
-            // Floor records belonging to NO group context are orphan
-            // roles: any record whose group has neither complete nor
-            // stage evidence.
-            for &(rg, _) in &floor_records[..n_floor] {
-                if rg != g && !completes[..n_complete].contains(&rg) {
-                    return FloorView::Unknown(FloorFault::AmbiguousStage);
-                }
-            }
+            // Floor records belonging to NO group context were already
+            // rejected by the hoisted orphan-role check above.
             let t = match t_val {
                 Some(t) => t,
                 None => 0,

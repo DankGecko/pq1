@@ -44,8 +44,8 @@ impl Bank {
         } else {
             ERASED
         };
-        self.r1.push(probe_clean(&mut self.b, 60, codeword));
-        self.r1.push(probe_clean(&mut self.b, 61, codeword));
+        self.r1.push(probe_route1(&mut self.b, 0, codeword));
+        self.r1.push(probe_route1(&mut self.b, 1, codeword));
     }
 
     /// Attribute reads per cell: clean erased reads are scripted as
@@ -626,6 +626,190 @@ fn full_bank_of_floor_records_does_not_overflow() {
         stage_binding: None,
     };
     match decode_floor(&s) {
+        FloorView::Unknown(FloorFault::AmbiguousStage) => {}
+        other => panic!("expected AmbiguousStage, got {}", view_name(&other)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Canonical physical map (R2-2: no aliasing, no misaddressing, one pass)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn duplicate_clean_index_is_unknown() {
+    // Two cells referencing the SAME physical QW index: one QW must
+    // never fill two roles.
+    let mut b = TestBackend::new(7);
+    let r0a = probe_clean(&mut b, 0, encode_floor_record(5, 1));
+    let r0b = probe_clean(&mut b, 0, encode_floor_record(5, 1)); // same index
+    let r1 = probe_clean(&mut b, 1, encode_floor_record(5, 1));
+    let r2 = probe_clean(&mut b, 2, encode_complete_record(1));
+    let ra = probe_route1(&mut b, 0, ERASED);
+    let rb = probe_route1(&mut b, 1, ERASED);
+    let reads = [r0a, r0b, r1, r2];
+    let cells: Vec<FloorCell<'_>> = reads
+        .iter()
+        .map(|read| FloorCell {
+            read,
+            durability: CLEAN,
+            launch: MAY_LAUNCH,
+        })
+        .collect();
+    let route1 = [
+        FloorCell { read: &ra, durability: CLEAN, launch: NO_LAUNCH },
+        FloorCell { read: &rb, durability: CLEAN, launch: NO_LAUNCH },
+    ];
+    let s = FloorSnapshot {
+        cells: &cells,
+        route1,
+        completion_fence: FENCE_OK,
+        stage_binding: None,
+    };
+    match decode_floor(&s) {
+        FloorView::Unknown(FloorFault::NonCanonicalMap(MapFault::DuplicateIndex { index: 0 })) => {}
+        other => panic!("expected DuplicateIndex, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn index_address_mismatch_is_unknown() {
+    // A CleanQw bound to an address that is NOT the canonical address
+    // for its index must never be reinterpreted at that index.
+    let mut b = TestBackend::new(7);
+    let wrong_addr = pqsigner_rollback::floor::canonical_cell_addr(0) + 16;
+    let r0 = probe_at(&mut b, 0, wrong_addr, ProbeScript::Clean(encode_floor_record(5, 1)));
+    let r1 = probe_clean(&mut b, 1, encode_floor_record(5, 1));
+    let r2 = probe_clean(&mut b, 2, encode_complete_record(1));
+    let ra = probe_route1(&mut b, 0, ERASED);
+    let rb = probe_route1(&mut b, 1, ERASED);
+    let reads = [r0, r1, r2];
+    let cells: Vec<FloorCell<'_>> = reads
+        .iter()
+        .map(|read| FloorCell {
+            read,
+            durability: CLEAN,
+            launch: MAY_LAUNCH,
+        })
+        .collect();
+    let route1 = [
+        FloorCell { read: &ra, durability: CLEAN, launch: NO_LAUNCH },
+        FloorCell { read: &rb, durability: CLEAN, launch: NO_LAUNCH },
+    ];
+    let s = FloorSnapshot {
+        cells: &cells,
+        route1,
+        completion_fence: FENCE_OK,
+        stage_binding: None,
+    };
+    match decode_floor(&s) {
+        FloorView::Unknown(FloorFault::NonCanonicalMap(MapFault::AddressMismatch {
+            index: 0,
+        })) => {}
+        other => panic!("expected AddressMismatch, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn probe_epoch_inconsistency_is_unknown() {
+    // Cells probed under two different epochs (two passes) can never
+    // join one decode.
+    let mut b1 = TestBackend::new(7);
+    let mut b2 = TestBackend::new(8);
+    let r0 = probe_clean(&mut b1, 0, encode_floor_record(5, 1));
+    let r1 = probe_clean(&mut b2, 1, encode_floor_record(5, 1));
+    let r2 = probe_clean(&mut b2, 2, encode_complete_record(1));
+    let ra = probe_route1(&mut b2, 0, ERASED);
+    let rb = probe_route1(&mut b2, 1, ERASED);
+    let reads = [r0, r1, r2];
+    let cells: Vec<FloorCell<'_>> = reads
+        .iter()
+        .map(|read| FloorCell {
+            read,
+            durability: CLEAN,
+            launch: MAY_LAUNCH,
+        })
+        .collect();
+    let route1 = [
+        FloorCell { read: &ra, durability: CLEAN, launch: NO_LAUNCH },
+        FloorCell { read: &rb, durability: CLEAN, launch: NO_LAUNCH },
+    ];
+    let s = FloorSnapshot {
+        cells: &cells,
+        route1,
+        completion_fence: FENCE_OK,
+        stage_binding: None,
+    };
+    match decode_floor(&s) {
+        FloorView::Unknown(FloorFault::NonCanonicalMap(MapFault::InconsistentProbeEpoch)) => {}
+        other => panic!("expected InconsistentProbeEpoch, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn route1_pair_must_be_two_distinct_qws() {
+    // Both Route-1 reads pointing at the SAME physical QW: never BASE0.
+    let mut b = TestBackend::new(7);
+    let mut bank_reads = Vec::new();
+    for i in 0..4u16 {
+        bank_reads.push(probe_clean(&mut b, i, ERASED));
+    }
+    // Second route-1 read scripted at the FIRST marker's index/address.
+    let ra = probe_route1(&mut b, 0, ROUTE1_BASE0_CODEWORD);
+    let rb = probe_at(
+        &mut b,
+        60,
+        pqsigner_rollback::floor::canonical_route1_addr(0),
+        ProbeScript::Clean(ROUTE1_BASE0_CODEWORD),
+    );
+    let cells: Vec<FloorCell<'_>> = bank_reads
+        .iter()
+        .map(|read| FloorCell {
+            read,
+            durability: CLEAN,
+            launch: NO_LAUNCH,
+        })
+        .collect();
+    let route1 = [
+        FloorCell { read: &ra, durability: CLEAN, launch: NO_LAUNCH },
+        FloorCell { read: &rb, durability: CLEAN, launch: NO_LAUNCH },
+    ];
+    let s = FloorSnapshot {
+        cells: &cells,
+        route1,
+        completion_fence: FENCE_OK,
+        stage_binding: None,
+    };
+    let view = decode_floor(&s);
+    if let FloorView::Steady(_) = &view {
+        panic!("a non-disjoint Route-1 pair must never yield Steady(0)");
+    }
+    assert!(matches!(view, FloorView::Unknown(_)), "expected Unknown");
+}
+
+#[test]
+fn orphan_role_in_committed_steady_arm_is_unknown() {
+    // R2-5 PoC: floor(g1,t5)+complete(g1) plus floor(g2,t9) with g2's
+    // stage/complete cells proven virgin. Previously Steady(5); the
+    // orphan g2 role must force Unknown.
+    let mut bank = Bank::new();
+    bank.clean(encode_floor_record(5, 1));
+    bank.clean(encode_floor_record(5, 1));
+    bank.clean(encode_complete_record(1));
+    bank.clean(encode_floor_record(9, 2)); // orphan: no stage, no complete
+    bank.virgin();
+    bank.route1(false);
+    let cells = bank.cells_auto();
+    let s = FloorSnapshot {
+        cells: &cells,
+        route1: bank.route1_cells(),
+        completion_fence: FENCE_OK,
+        stage_binding: None,
+    };
+    let view = decode_floor(&s);
+    if let FloorView::Steady(p) = &view {
+        panic!("orphan role admitted as Steady({})", p.floor());
+    }
+    match view {
         FloorView::Unknown(FloorFault::AmbiguousStage) => {}
         other => panic!("expected AmbiguousStage, got {}", view_name(&other)),
     }

@@ -139,6 +139,7 @@ fn start_epoch_bump_invokes_begin_exactly_once() {
     let receipt: EpochBumpReceipt = floor::preflight(&steady, GOLDEN_T + 1, 4).unwrap();
     let intent = CheckedSteadyIntent::new(steady, artifact, Some(receipt)).expect("intent");
     let mut backend = TestBackend::new(7);
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
     let out = start_from_steady(&mut backend, intent).expect("start");
     assert_eq!(
         out,
@@ -335,6 +336,7 @@ fn resume_from_recovery_resumes_bound_plan_only() {
     let candidate = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
     let intent = CheckedRecoveryIntent::new(proof, candidate).expect("join");
     let mut backend = TestBackend::new(7);
+    backend.set_floor_script(recovering_floor_script(GOLDEN_T - 1, binding));
     let receipt = resume_from_recovery(&mut backend, intent).expect("resume");
     assert_eq!(receipt.target, GOLDEN_T);
     assert_eq!(receipt.group, 2);
@@ -529,5 +531,114 @@ fn peer_repair_floor_drift_rejects_handoff() {
     assert_eq!(
         arm_peer_repair(&mut backend, intent).unwrap_err(),
         IntentError::FloorDrift
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R2-3: recheck before the mutating entries (start/resume)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn start_epoch_bump_floor_drift_rejects_begin() {
+    let p = pass();
+    let mut b = TestBackend::new(7);
+    let steady = steady_proof_at(GOLDEN_T);
+    let artifact = accepted_artifact(&p, &mut b, PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1);
+    let receipt = floor::preflight(&steady, GOLDEN_T + 1, 4).unwrap();
+    let intent = CheckedSteadyIntent::new(steady, artifact, Some(receipt)).expect("intent");
+    let mut backend = TestBackend::new(7);
+    // Drift: the backend's floor moved since intent construction.
+    backend.set_floor_script(steady_floor_script(GOLDEN_T + 1));
+    assert_eq!(
+        start_from_steady(&mut backend, intent).unwrap_err(),
+        IntentError::FloorDrift
+    );
+    assert_eq!(backend.floor_mutation_count(), 0, "no begin on drift");
+}
+
+#[test]
+fn resume_floor_drift_rejects_resume() {
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let proof = recovery_proof(GOLDEN_T - 1, binding);
+    let candidate = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let intent = CheckedRecoveryIntent::new(proof, candidate).expect("join");
+    let mut backend = TestBackend::new(7);
+    // Drift: the bound plan is gone (backend shows plain Steady).
+    backend.set_floor_script(steady_floor_script(GOLDEN_T - 1));
+    assert_eq!(
+        resume_from_recovery(&mut backend, intent).unwrap_err(),
+        IntentError::FloorDrift
+    );
+    assert_eq!(backend.floor_mutation_count(), 0, "no resume on drift");
+}
+
+// ---------------------------------------------------------------------------
+// R2-4: degraded repair floor relations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn degraded_repair_steady_requires_target_strictly_above_floor() {
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    // Review PoC: Steady(F=9), target T=3 → FloorRegression.
+    let steady9 = steady_proof_at(9);
+    let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, 10);
+    let mut backend = TestBackend::new(7);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, 4, ArmState::ArmReady);
+    assert!(matches!(
+        CheckedDegradedRepairIntent::new(FreshFloorProof::Steady(steady9), source, row),
+        Err(IntentError::FloorRegression)
+    ));
+
+    // Steady with T == F → rejected (not strictly above).
+    let steady = steady_proof_at(GOLDEN_T);
+    let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E, ArmState::ArmReady);
+    assert!(matches!(
+        CheckedDegradedRepairIntent::new(FreshFloorProof::Steady(steady), source, row),
+        Err(IntentError::FloorRegression)
+    ));
+
+    // Steady with T > F → accepted and arms (with recheck active).
+    let steady = steady_proof_at(GOLDEN_T);
+    let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E + 1, ArmState::ArmReady);
+    let intent = CheckedDegradedRepairIntent::new(FreshFloorProof::Steady(steady), source, row)
+        .expect("T>F accepted");
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
+    assert!(arm_degraded_artifact_repair(&mut backend, intent).is_ok());
+    assert_eq!(backend.floor_mutation_count(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// R2-6: the handoff re-bind matches (R, E, T)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn handoff_rejects_token_with_mismatched_target() {
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let steady = steady_proof_at(GOLDEN_T);
+    let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
+
+    let mut backend = TestBackend::new(7);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let intent =
+        CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent");
+    // Replace the backend token with a structurally valid token whose
+    // tuple carries DIFFERENT (E, T) — internally consistent (T == E-1),
+    // binding hash self-consistent, but NOT the artifact's tuple. Only
+    // the (R,E,T) re-bind can catch it.
+    let art = artifact(&p, PhysicalSlot::A);
+    let mut binding = binding_of(&art);
+    binding.e += 1;
+    binding.t = binding.e - 1;
+    backend.set_arm_token(Some(ArmToken::encode(ArmState::ArmReady, &binding)));
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
+    assert_eq!(
+        arm_probation_from_steady(&mut backend, intent).unwrap_err(),
+        IntentError::TokenNotArmReady
     );
 }

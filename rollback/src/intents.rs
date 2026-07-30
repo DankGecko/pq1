@@ -138,32 +138,40 @@ enum RecheckClass {
     Aborted,
     /// Either `Steady(F)` or `Aborted(F)` (repair entries).
     SteadyOrAborted,
+    /// Exact `Recovering` with the bound active plan (same target,
+    /// group, and snapshot digest).
+    Recovering { target: u32, group: u32 },
 }
 
 /// Run the frozen recheck: a FRESH complete floor/stage decode against
-/// current backend state must return the expected class at the same
-/// floor with a byte-equal snapshot digest. Any drift consumes the
+/// current backend state must return the expected class with the same
+/// bound values and a byte-equal snapshot digest. Any drift consumes the
 /// intent and grants no authority.
 fn run_recheck<B: RollbackBackend>(backend: &mut B, ctx: &RecheckContext) -> Result<(), IntentError> {
     use crate::floor::FloorView;
-    let view = backend.redecode_floor();
-    let (floor, digest, class_ok) = match &view {
-        FloorView::Steady(p) => (
-            p.floor(),
-            *p.snapshot_digest(),
-            matches!(ctx.class, RecheckClass::Steady | RecheckClass::SteadyOrAborted),
-        ),
-        FloorView::Aborted(p) => (
-            p.floor(),
-            *p.snapshot_digest(),
-            matches!(ctx.class, RecheckClass::Aborted | RecheckClass::SteadyOrAborted),
-        ),
-        _ => (0, [0u8; 32], false),
-    };
-    if class_ok && floor == ctx.floor && digest == ctx.snapshot_digest {
-        Ok(())
-    } else {
-        Err(IntentError::FloorDrift)
+    match (ctx.class, backend.redecode_floor()) {
+        (RecheckClass::Steady, FloorView::Steady(p))
+        | (RecheckClass::SteadyOrAborted, FloorView::Steady(p))
+            if p.floor() == ctx.floor && p.snapshot_digest() == &ctx.snapshot_digest =>
+        {
+            Ok(())
+        }
+        (RecheckClass::Aborted, FloorView::Aborted(p))
+        | (RecheckClass::SteadyOrAborted, FloorView::Aborted(p))
+            if p.floor() == ctx.floor && p.snapshot_digest() == &ctx.snapshot_digest =>
+        {
+            Ok(())
+        }
+        (
+            RecheckClass::Recovering { target, group },
+            FloorView::Recovering(p),
+        ) if p.target() == target
+            && p.group() == group
+            && p.snapshot_digest() == &ctx.snapshot_digest =>
+        {
+            Ok(())
+        }
+        _ => Err(IntentError::FloorDrift),
     }
 }
 
@@ -189,6 +197,12 @@ fn arm_and_handoff<B: RollbackBackend>(
         &id.nonsecure_hash,
     )
     .map_err(|_| IntentError::TokenNotArmReady)?;
+    // The re-bind must match the artifact's exact (R, E, T), not merely
+    // be self-consistent (the binding hash commits to the token's own
+    // structural tuple).
+    if (token.binding.r, token.binding.e, token.binding.t) != (id.r, id.e, id.t) {
+        return Err(IntentError::TokenNotArmReady);
+    }
     if token.state != ArmState::ArmReady {
         return Err(IntentError::TokenNotArmReady);
     }
@@ -207,6 +221,9 @@ fn arm_and_handoff<B: RollbackBackend>(
         &id.nonsecure_hash,
     )
     .map_err(|_| IntentError::TokenNotArmReady)?;
+    if (token.binding.r, token.binding.e, token.binding.t) != (id.r, id.e, id.t) {
+        return Err(IntentError::TokenNotArmReady);
+    }
     if token.state != ArmState::Attempted {
         return Err(IntentError::TokenNotArmReady);
     }
@@ -332,7 +349,6 @@ pub fn arm_probation_from_steady<B: RollbackBackend>(
 
 /// Owns one `SteadyProof` and a `RobustAccepted` confirmed artifact.
 pub struct CheckedSteadyIntent {
-    #[allow(dead_code)]
     steady: SteadyProof,
     artifact: AcceptedArtifact,
     receipt: Option<EpochBumpReceipt>,
@@ -380,8 +396,10 @@ impl CheckedSteadyIntent {
 
 /// `start_from_steady` (§10 L3593–3596, L3644–3657): `T < F` fails
 /// closed; `T == F` issues NO OTP unlock/program command or persistent
-/// stage write; `T > F` invokes exactly one `begin(intent)` through the
-/// backend.
+/// stage write; `T > F` first runs the frozen recheck (fresh complete
+/// decode must reproduce exact `Steady(F)` with the intent proof's
+/// snapshot digest) and only then invokes exactly one `begin(intent)`
+/// through the backend.
 pub fn start_from_steady<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedSteadyIntent,
@@ -390,6 +408,14 @@ pub fn start_from_steady<B: RollbackBackend>(
     match intent.receipt {
         None => Ok(StartOutcome::SameEpochNoWrite),
         Some(receipt) => {
+            // FROZEN-OTP-API-3 L897–900: a fresh full decode immediately
+            // before the mutation.
+            let recheck = RecheckContext {
+                class: RecheckClass::Steady,
+                floor: intent.steady.floor(),
+                snapshot_digest: *intent.steady.snapshot_digest(),
+            };
+            run_recheck(backend, &recheck)?;
             backend.begin_floor_plan(&receipt);
             Ok(StartOutcome::Began {
                 target: t,
@@ -433,14 +459,24 @@ impl CheckedRecoveryIntent {
 }
 
 /// `resume_from_recovery` (§10 L3597–3602): resumes only the bound active
-/// plan. It cannot call `begin`, ordinary preflight/classification, or
-/// any fallback path; a raw `RecoveryProof` cannot reach the writer.
+/// plan, after the frozen recheck reproduces exact `Recovering` with the
+/// same target, group, and snapshot digest. It cannot call `begin`,
+/// ordinary preflight/classification, or any fallback path; a raw
+/// `RecoveryProof` cannot reach the writer.
 pub fn resume_from_recovery<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedRecoveryIntent,
 ) -> Result<ResumeReceipt, IntentError> {
     let target = intent.proof.target();
     let group = intent.proof.group();
+    // FROZEN-OTP-API-3 L897–900: a fresh full decode immediately before
+    // the mutation, reproducing the bound plan.
+    let recheck = RecheckContext {
+        class: RecheckClass::Recovering { target, group },
+        floor: target,
+        snapshot_digest: *intent.proof.snapshot_digest(),
+    };
+    run_recheck(backend, &recheck)?;
     backend.resume_floor_plan(target);
     Ok(ResumeReceipt { target, group })
 }
@@ -609,10 +645,12 @@ pub struct CheckedDegradedRepairIntent {
 
 impl CheckedDegradedRepairIntent {
     /// Under `Aborted`, exact `T == F` is mandatory and the backend
-    /// remains untouched. Under `Steady`, a repaired `T > F` target earns
-    /// only the ordinary one-plan establishment LATER (the repair itself
-    /// grants no floor authority, §10 L3619–3621) — so no `T` constraint
-    /// applies on the Steady side here.
+    /// remains untouched. Under `Steady`, the repair itself grants no
+    /// floor authority, and §10 item 10 (L3615–3621) permits the
+    /// candidate to later earn robust terminal evidence through
+    /// probation — so the Steady arm requires `target.t() > floor`
+    /// STRICTLY (a `T <= F` target is dead weight the repair path must
+    /// not carry).
     pub fn new(
         floor_proof: FreshFloorProof,
         source: AcceptedArtifact,
@@ -622,9 +660,16 @@ impl CheckedDegradedRepairIntent {
             LifecycleState::Pending { artifact, token } => (artifact, token),
             _ => return Err(IntentError::WrongLifecycleRow),
         };
-        if let FreshFloorProof::Aborted(proof) = &floor_proof {
-            if target.t() != proof.floor() {
-                return Err(IntentError::FloorRegression);
+        match &floor_proof {
+            FreshFloorProof::Aborted(proof) => {
+                if target.t() != proof.floor() {
+                    return Err(IntentError::FloorRegression);
+                }
+            }
+            FreshFloorProof::Steady(proof) => {
+                if target.t() <= proof.floor() {
+                    return Err(IntentError::FloorRegression);
+                }
             }
         }
         Ok(CheckedDegradedRepairIntent {

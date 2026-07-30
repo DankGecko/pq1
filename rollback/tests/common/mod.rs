@@ -74,16 +74,34 @@ pub fn artifact(pass: &VerificationPass, slot: PhysicalSlot) -> VerifiedArtifact
         .expect("golden manifest is in range")
 }
 
-/// Script a clean read and probe it.
+/// Script a clean read at the canonical bank address and probe it.
 pub fn probe_clean(b: &mut ScriptedBackend, index: u16, bytes: [u8; 16]) -> FreshQwRead {
-    b.script(index, 0x1000 + 0x20 * index as u32, ProbeScript::Clean(bytes));
-    b.fresh_probe(index, 0x1000 + 0x20 * index as u32)
+    let addr = pqsigner_rollback::floor::canonical_cell_addr(index);
+    assert!(b.script(index, addr, ProbeScript::Clean(bytes)));
+    b.fresh_probe(index, addr)
 }
 
-/// Script any outcome and probe it.
+/// Script any outcome at the canonical bank address and probe it.
 pub fn probe(b: &mut ScriptedBackend, index: u16, outcome: ProbeScript) -> FreshQwRead {
-    b.script(index, 0x1000 + 0x20 * index as u32, outcome);
-    b.fresh_probe(index, 0x1000 + 0x20 * index as u32)
+    let addr = pqsigner_rollback::floor::canonical_cell_addr(index);
+    assert!(b.script(index, addr, outcome));
+    b.fresh_probe(index, addr)
+}
+
+/// Script any outcome at an EXPLICIT address (for map-validation tests).
+pub fn probe_at(b: &mut ScriptedBackend, index: u16, addr: u32, outcome: ProbeScript) -> FreshQwRead {
+    assert!(b.script(index, addr, outcome));
+    b.fresh_probe(index, addr)
+}
+
+/// Script a clean Route-1 marker read at its canonical page address.
+/// `which` is 0 (bank-1 page 64) or 1 (bank-1 page 122); the marker QW
+/// index is 60+which (disjoint from every bank-cell index in these tests).
+pub fn probe_route1(b: &mut ScriptedBackend, which: u16, bytes: [u8; 16]) -> FreshQwRead {
+    let addr = pqsigner_rollback::floor::canonical_route1_addr(which as usize);
+    let index = 60 + which;
+    assert!(b.script(index, addr, ProbeScript::Clean(bytes)));
+    b.fresh_probe(index, addr)
 }
 
 pub const ERASED: [u8; 16] = [0xFF; 16];
@@ -165,6 +183,24 @@ pub fn dead_floor_script(t: u32, binding: StageBinding) -> FloorScript {
     s
 }
 
+/// The floor script mirroring `recovery_proof(t, binding)`: committed
+/// group 1 plus a completable stage (three clean records, one virgin
+/// cell).
+pub fn recovering_floor_script(t: u32, binding: StageBinding) -> FloorScript {
+    let mut s = steady_floor_script(t);
+    assert!(s.push(cell(encode_stage_record(2))));
+    for _ in 0..3 {
+        assert!(s.push(cell(encode_floor_record(t + 1, 2))));
+    }
+    assert!(s.push(FloorCellScript {
+        outcome: PS::Clean(ERASED),
+        durability: CLEAN,
+        launch: NO_LAUNCH,
+    }));
+    s.stage_binding = Some(binding);
+    s
+}
+
 // ---------------------------------------------------------------------------
 // Floor-bank scaffold (model OTP bank through the scripted backend)
 // ---------------------------------------------------------------------------
@@ -210,8 +246,8 @@ impl Bank {
         } else {
             ERASED
         };
-        self.r1.push(probe_clean(&mut self.b, 60, codeword));
-        self.r1.push(probe_clean(&mut self.b, 61, codeword));
+        self.r1.push(probe_route1(&mut self.b, 0, codeword));
+        self.r1.push(probe_route1(&mut self.b, 1, codeword));
     }
 
     /// Attribute reads per cell: clean erased reads are scripted as

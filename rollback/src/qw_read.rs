@@ -89,46 +89,67 @@ impl CleanQw {
     }
 }
 
-/// The raw outcome a probe implementation reports for one forced fresh
-/// read. Implementors supply only this; the typed [`FreshQwRead`] /
-/// [`CleanQw`] wrapper is constructed by the trait's provided method, so
-/// no backend can mislabel an outcome class.
-pub enum RawProbeOutcome {
-    /// ECC-clean read of `bytes`.
-    Clean { bytes: [u8; 16] },
-    /// ECC-corrected read (zero quorum weight).
-    Corrected { bytes: [u8; 16] },
-    /// ECC double-bit error.
-    Uncorrectable,
-    /// Torn / may-have-launched / faulted observation.
-    AmbiguousOrFault,
+/// The raw, untyped result a probe implementation reports for one forced
+/// fresh read: the bytes read plus the raw attributed status snapshot.
+/// Classification of the outcome class is CANONICAL — it happens only in
+/// [`FreshArrayProbe::fresh_probe`], so an implementor can never choose
+/// (or mislabel) the outcome class.
+pub struct RawProbeResult {
+    /// The bytes read. Meaningful only when `status` indicates the read
+    /// completed; ignored for error classes by the canonical classifier.
+    pub bytes: [u8; 16],
+    /// The raw attributed status snapshot for this read.
+    pub status: ProbeStatus,
+}
+
+/// The raw attributed status snapshot for one fresh read (untyped input
+/// to the canonical classifier in [`FreshArrayProbe::fresh_probe`]). The
+/// real platform implementation — NMI/ESR/cache mechanics behind each
+/// variant — remains `OPEN-ECC-1`-gated and silicon-validated.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProbeStatus {
+    /// The read completed without any ECC event.
+    NoEccEvent,
+    /// Single-bit ECC correction was applied by hardware (ECCC).
+    EccCorrected,
+    /// Double-bit ECC error detected (ECCD).
+    EccDoubleError,
+    /// The read could not be attributed cleanly (fault, torn,
+    /// may-have-launched, NMI ambiguity).
+    Unattributable,
 }
 
 /// The exact-index fresh-array primitive (FROZEN-OTP-API-3 L916–918).
-/// Implementations force one attributed array read per call, invalidate
-/// documented cache/buffer state, and snapshot ECC status (§10 L3622–3624;
-/// the exact SRAM probe/NMI/cache mechanics remain `OPEN-ECC-1` and
-/// silicon-gated).
+/// Implementations force one attributed array read per call and report
+/// RAW bytes + a raw status snapshot; the provided [`fresh_probe`] method
+/// is the ONLY place where the outcome class is derived, and the only
+/// [`CleanQw`] constructor available outside this module.
 pub trait FreshArrayProbe {
     /// The single immutable-entry probe epoch all reads of this pass bind.
     fn probe_epoch(&self) -> u32;
 
     /// Force one fresh attributed read at the exact physical `index` /
-    /// absolute `addr`. This is the only method implementors write.
-    fn fresh_raw_read(&mut self, index: u16, addr: u32) -> RawProbeOutcome;
+    /// absolute `addr`, returning raw bytes + the raw status snapshot.
+    /// This is the only method implementors write.
+    fn fresh_raw_read(&mut self, index: u16, addr: u32) -> RawProbeResult;
 
-    /// The typed boundary — the ONLY [`CleanQw`] constructor available
-    /// outside this module. The returned read binds exactly the index and
-    /// address requested; a backend cannot return a `CleanQw` for an
-    /// index it was not asked to read.
+    /// The typed boundary. Canonically derives the outcome class from
+    /// the raw status and binds exactly the requested index/address and
+    /// this pass's probe epoch — a backend can never return a `CleanQw`
+    /// for an index it was not asked to read, nor upgrade a corrected or
+    /// faulted read to `Clean`.
     fn fresh_probe(&mut self, index: u16, addr: u32) -> FreshQwRead {
-        match self.fresh_raw_read(index, addr) {
-            RawProbeOutcome::Clean { bytes } => {
-                FreshQwRead::Clean(CleanQw::new(index, addr, bytes, self.probe_epoch()))
+        let result = self.fresh_raw_read(index, addr);
+        match result.status {
+            ProbeStatus::NoEccEvent => {
+                FreshQwRead::Clean(CleanQw::new(index, addr, result.bytes, self.probe_epoch()))
             }
-            RawProbeOutcome::Corrected { bytes } => FreshQwRead::Corrected { bytes, index },
-            RawProbeOutcome::Uncorrectable => FreshQwRead::Uncorrectable { index },
-            RawProbeOutcome::AmbiguousOrFault => FreshQwRead::AmbiguousOrFault,
+            ProbeStatus::EccCorrected => FreshQwRead::Corrected {
+                bytes: result.bytes,
+                index,
+            },
+            ProbeStatus::EccDoubleError => FreshQwRead::Uncorrectable { index },
+            ProbeStatus::Unattributable => FreshQwRead::AmbiguousOrFault,
         }
     }
 }

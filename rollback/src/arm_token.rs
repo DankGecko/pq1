@@ -187,8 +187,10 @@ pub struct StructuralToken {
 }
 
 /// A decoded, structurally valid arm token whose binding matched the
-/// supplied artifact fields.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// supplied artifact fields. Deliberately NOT `Copy`/`Clone`: a live
+/// token is a one-time arming capability owned linearly by the intent
+/// that consumed it (FROZEN-JRN-IFACE-3 at-most-once discipline).
+#[derive(PartialEq, Eq, Debug)]
 pub struct ArmToken {
     pub state: ArmState,
     pub binding: ArmBinding,
