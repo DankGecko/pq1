@@ -45,11 +45,13 @@ Independent checks (all run; every failure is reported), headed by:
   C9 (witness coverage), C10 (bridge-axiom RHS shape), C11 (exact closure key
   set), C13 (duplicate dump records), C14 (duplicate list identities), and the
   load itself rejects duplicate JSON object keys (C15). C16 pins the exact
-  axiom/artifact row schemas, artifact field types, and status/method tallies —
-  an extra field, fabricated method, or null codehash cannot satisfy the
-  discharge-artifact check by presence alone. Plain `json.loads` is silently
-  last-wins, which would let a benign second record hide a rogue first one
-  (the advertised-vs-checked divergence this gate exists to close).
+  axiom/artifact row schemas, canonical row and artifact values, artifact field
+  types, artifact uniqueness, and status/method tallies — an ID/name swap,
+  duplicated receipt, extra field, fabricated method, or null codehash cannot
+  satisfy the discharge-artifact check by shape/presence alone. Plain
+  `json.loads` is silently last-wins, which would let a benign second record
+  hide a rogue first one (the advertised-vs-checked divergence this gate exists
+  to close).
 
 ================================  SCOPE / CAVEAT  =============================
 The LIVE-closure source is `#print axioms` (dump_axioms.lean). In Lean v4.22.0
@@ -108,16 +110,24 @@ ALLOWED_AXIOM_STATUSES = frozenset(STATUS_TO_SUMMARY_KEY)
 REQUIRED_SUMMARY_KEYS = frozenset(
     (*STATUS_TO_SUMMARY_KEY.values(), "total_axioms_in_closure")
 )
-# Checker-owned schema pins. Each row is compact JSON, bytewise sorted, with
-# one trailing "\n", then SHA-256:
-#   axiom:    [axiom id, sorted row keys]
-#   artifact: [axiom id, axiom status, artifact type, sorted artifact keys]
-# Update only alongside an inspected, intentional AXIOM_STATUS schema change.
+# Checker-owned schema/value pins. Each row is compact JSON, bytewise sorted,
+# with one trailing "\n", then SHA-256:
+#   axiom schema:    [axiom id, sorted row keys]
+#   artifact schema: [axiom id, axiom status, artifact type, sorted keys]
+#   axiom values:    [axiom id, sorted [field, value] pairs except artifacts]
+#   artifact values: [axiom id, artifact index, sorted [field, value] pairs]
+# Update only alongside an inspected, intentional AXIOM_STATUS change.
 EXPECTED_AXIOM_SCHEMA_SHA256 = (
     "13f1c6284e8f7a8cbd4293ec74013481a63b40df309ac81e2c353ed6d6453204"
 )
 EXPECTED_ARTIFACT_SCHEMA_SHA256 = (
     "150f3fb7c7fddea81bd78930806845da826440b3e0e5607c65294bdf3d07a4c7"
+)
+EXPECTED_AXIOM_VALUE_SHA256 = (
+    "9de0abe0577c69a30dad2844accf04f12081d755f58477424e2c035cdba78f74"
+)
+EXPECTED_ARTIFACT_VALUE_SHA256 = (
+    "addc699297832bf74f78d19b5114a979237d327b235b47514fe4421b002ad4e5"
 )
 EXPECTED_ARTIFACT_METHOD_STATUS_COUNTS = {
     ("cited-tcb", "audit-citation"): 1,
@@ -512,14 +522,17 @@ def _canonical_rows_digest(rows: list[list[object]]) -> str:
 
 
 def check_ledger_schema(ledger: dict) -> list[str]:
-    """C16 — exact row schemas, artifact value types, and method tallies."""
+    """C16 — exact row schemas/values, unique artifacts, and method tallies."""
     fails: list[str] = []
     axioms = ledger.get("axioms")
     if not isinstance(axioms, list):
         return ["C16 axioms is not an array."]
 
     axiom_schema_rows: list[list[object]] = []
+    axiom_value_rows: list[list[object]] = []
     artifact_schema_rows: list[list[object]] = []
+    artifact_value_rows: list[list[object]] = []
+    seen_artifact_values: dict[str, tuple[object, int]] = {}
     method_status_counts: dict[tuple[str, str], int] = {}
     allowed_axiom_fields = AXIOM_REQUIRED_FIELDS | AXIOM_OPTIONAL_FIELDS
     allowed_artifact_fields = ARTIFACT_STRING_FIELDS | {
@@ -539,6 +552,14 @@ def check_ledger_schema(ledger: dict) -> list[str]:
         axiom_id = axiom.get("id")
         status = axiom.get("status")
         axiom_schema_rows.append([axiom_id, sorted(axiom)])
+        axiom_value_rows.append([
+            axiom_id,
+            [
+                [field, axiom[field]]
+                for field in sorted(axiom)
+                if field != "discharge_artifacts"
+            ],
+        ])
 
         missing = sorted(AXIOM_REQUIRED_FIELDS - set(axiom))
         extra = sorted(set(axiom) - allowed_axiom_fields)
@@ -612,6 +633,34 @@ def check_ledger_schema(ledger: dict) -> list[str]:
                 method,
                 sorted(artifact),
             ])
+            artifact_value_rows.append([
+                axiom_id,
+                artifact_index,
+                [
+                    [field, artifact[field]]
+                    for field in sorted(artifact)
+                ],
+            ])
+            canonical_artifact = json.dumps(
+                artifact,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if canonical_artifact in seen_artifact_values:
+                prior_id, prior_index = seen_artifact_values[
+                    canonical_artifact
+                ]
+                fails.append(
+                    f"C16 duplicate discharge artifact at axiom "
+                    f"{axiom_id!r}[{artifact_index}] exactly repeats "
+                    f"{prior_id!r}[{prior_index}]"
+                )
+            else:
+                seen_artifact_values[canonical_artifact] = (
+                    axiom_id,
+                    artifact_index,
+                )
             count_key = (
                 method_component(status),
                 method_component(method),
@@ -668,6 +717,20 @@ def check_ledger_schema(ledger: dict) -> list[str]:
             "C16 exact discharge-artifact schema drift: "
             f"sha256={artifact_schema_digest}, "
             f"expected {EXPECTED_ARTIFACT_SCHEMA_SHA256}"
+        )
+    axiom_value_digest = _canonical_rows_digest(axiom_value_rows)
+    if axiom_value_digest != EXPECTED_AXIOM_VALUE_SHA256:
+        fails.append(
+            "C16 exact axiom-row value drift: "
+            f"sha256={axiom_value_digest}, "
+            f"expected {EXPECTED_AXIOM_VALUE_SHA256}"
+        )
+    artifact_value_digest = _canonical_rows_digest(artifact_value_rows)
+    if artifact_value_digest != EXPECTED_ARTIFACT_VALUE_SHA256:
+        fails.append(
+            "C16 exact discharge-artifact value drift: "
+            f"sha256={artifact_value_digest}, "
+            f"expected {EXPECTED_ARTIFACT_VALUE_SHA256}"
         )
     if method_status_counts != EXPECTED_ARTIFACT_METHOD_STATUS_COUNTS:
         actual = sorted(
@@ -1133,7 +1196,7 @@ def self_test() -> int:
         dup_key_fails = ["duplicate ledger object key rejected"]
     cases.append(("C15 duplicate ledger object key", dup_key_fails))
 
-    # C16 EXACT ROW/ARTIFACT SCHEMA NEGATIVES — exercise the live schema pins,
+    # C16 EXACT ROW/ARTIFACT SCHEMA+VALUE NEGATIVES — exercise the live pins,
     # not a hand-built miniature that could drift away from AXIOM_STATUS.json.
     schema_clean = load_ledger()
     extra_axiom_field = json.loads(json.dumps(schema_clean))
@@ -1169,6 +1232,67 @@ def self_test() -> int:
     cases.append((
         "C16 null pinned codehash",
         check_ledger_schema(null_codehash) if codehash_replaced else [],
+    ))
+    swapped_axiom_names = json.loads(json.dumps(schema_clean))
+    swapped_rows = {
+        axiom["id"]: axiom for axiom in swapped_axiom_names["axioms"]
+    }
+    if "A3.1" in swapped_rows and "A5-EUFCMA" in swapped_rows:
+        swapped_rows["A3.1"]["name"], swapped_rows["A5-EUFCMA"]["name"] = (
+            swapped_rows["A5-EUFCMA"]["name"],
+            swapped_rows["A3.1"]["name"],
+        )
+        swapped_name_fails = check_ledger_schema(swapped_axiom_names)
+    else:
+        swapped_name_fails = []
+    cases.append((
+        "C16 swapped axiom ID/name binding",
+        swapped_name_fails,
+    ))
+    substituted_artifact_value = json.loads(json.dumps(schema_clean))
+    artifact_value_replaced = False
+    for axiom in substituted_artifact_value["axioms"]:
+        for artifact in axiom["discharge_artifacts"]:
+            for field in ("evidence", "path", "date", "tool"):
+                if field in artifact:
+                    artifact[field] += "-mutated"
+                    artifact_value_replaced = True
+                    break
+            if artifact_value_replaced:
+                break
+        if artifact_value_replaced:
+            break
+    cases.append((
+        "C16 substituted artifact value",
+        (
+            check_ledger_schema(substituted_artifact_value)
+            if artifact_value_replaced
+            else []
+        ),
+    ))
+    duplicated_artifact = json.loads(json.dumps(schema_clean))
+    a1_row = next(
+        (
+            axiom for axiom in duplicated_artifact["axioms"]
+            if axiom.get("id") == "A1"
+        ),
+        None,
+    )
+    if (
+        a1_row is not None
+        and len(a1_row.get("discharge_artifacts", [])) >= 2
+    ):
+        a1_row["discharge_artifacts"][1] = json.loads(json.dumps(
+            a1_row["discharge_artifacts"][0]
+        ))
+        duplicated_artifact_fails = check_ledger_schema(
+            duplicated_artifact
+        )
+    else:
+        duplicated_artifact_fails = []
+    cases.append((
+        "C16 duplicate artifact value",
+        duplicated_artifact_fails,
     ))
 
     # control: a CLEAN input must NOT fire (guards against always-fire vacuity)
@@ -1298,9 +1422,9 @@ def main() -> int:
         print("\nThe human-facing ledger no longer matches the machine truth. "
               "Reconcile docs/AXIOM_STATUS.json with the Lean source/dump.", file=sys.stderr)
         return 1
-    print("\nOK: every advertised closure, exact row/artifact schema, count, "
-          "status/method tally, and headline-statement pin matches the live "
-          "Lean truth.")
+    print("\nOK: every advertised closure, exact row/artifact schema and value, "
+          "count, status/method tally, and headline-statement pin matches the "
+          "live Lean truth.")
     return 0
 
 
