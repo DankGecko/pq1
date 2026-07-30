@@ -113,20 +113,11 @@ jobs:
       # never builds it (stays ~2.3 GB, always green on 16 GB). It stays a REAL `qed`
       # (closure [propext, Classical.choice, Quot.sound]) — built + axiom-gated by
       # the non-default `ExtractedFormatDecimalHeavy` lib via
-      # `make verify-extracted-heavy` (the best-effort step below + local dev / a
-      # ≥48 GB runner). This does NOT weaken the §33 axiom gate on any other rank.
+      # `make verify-extracted-heavy` locally / on a ≥48 GB runner. It is not
+      # invoked by this 16 GB job. This does NOT weaken the §33 axiom gate on any
+      # other rank.
       - name: verify-extracted (lake build + axiom-discipline gate, <16 GB)
         run: make -C contracts/verification verify-extracted LAKEFLAGS=-j1
-      # ⚠ HIGH-MEMORY, BEST-EFFORT (continue-on-error): FormatDecimalSpec M7
-      # (~42 GB kernel-TC — see above). PASSES on a `.lake` cache HIT (the common
-      # case; this module rarely changes) and verifies the WYSIWYS axiom closure;
-      # on a genuine cold miss it OOMs this 16 GB runner and is TOLERATED here
-      # (verified locally / on a ≥48 GB runner instead). It does NOT gate the job —
-      # the mandatory §33 axiom discipline for every other rank is the step above.
-      # A green here is NOT proof of "16 GB-safe on a cold cache".
-      - name: verify-extracted-heavy (FormatDecimalSpec M7 — best-effort, cache-hit)
-        continue-on-error: true
-        run: make -C contracts/verification verify-extracted-heavy LAKEFLAGS=-j1
       # Vendored-spec fidelity: the extracted ADRS spec must match the SphincsCVerify
       # v4.22 source it vendors (python diff — lightweight, no toolchain).
       - name: verify-spec-vendored-fidelity

@@ -282,7 +282,7 @@
         "contracts/verification/extracted/Extracted/FormatDecimalSpec.lean"
       ],
       "enforcement": "local_documented",
-      "why": "FormatDecimalSpec kernel type-checking needs about 42 GB RSS. The 16 GB workflow invocation is deliberately continue-on-error and useful only on a cache hit; authoritative cold validation runs locally or on a >=48 GB runner. The mandatory extracted suite remains blocking."
+      "why": "FormatDecimalSpec kernel type-checking needs about 42 GB RSS. It is deliberately absent from the 16 GB hosted workflow: even a continue-on-error attempt can terminate the runner and suppress later mandatory evidence. Authoritative validation runs locally or on a >=48 GB runner. The mandatory extracted suite remains blocking."
     },
     {
       "id": "verify-bytecode",
