@@ -45,6 +45,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: install elan shim (verification Makefile trust root)
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       # Deterministic supply-chain gate (fail-hard):
       #  * bans       — invariant #5: no classical-signer crate (deny.toml [bans])
       #  * advisories — real CVEs in any dep (unmaintained is workspace-scoped per
@@ -70,9 +75,11 @@ jobs:
       # A3.1 transcription-fidelity gate: the deployed verifier SOURCE
       # (SPHINCsC10Asm.sol) and its Lean hand transcription (c10Program) must not
       # drift. Positional constant cross-check (per `-- L<n>` anchors) + global set
-      # equality + statement-kind histogram. Pure Python, no Lean toolchain needed —
-      # this is the ONE A3.1 residual the kernel proof `execC10Asm_eq` cannot see (it
-      # relates c10Program<->spec, never c10Program<->.sol). See
+      # equality + statement-kind histogram. The checker is pure Python; the
+      # elan shim above satisfies the shared fail-closed Makefile trust-root
+      # preflight without running a Lean build. This is the ONE A3.1 residual
+      # the kernel proof `execC10Asm_eq` cannot see (it relates
+      # c10Program<->spec, never c10Program<->.sol). See
       # contracts/verification/docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
       - name: A3.1 c10Program <-> SPHINCsC10Asm.sol transcription lint
         run: make -C contracts/verification verify-transcription
@@ -82,8 +89,8 @@ jobs:
       # so hosted there it would be path-ignored by exactly the edits that break
       # it. That is the FV adversarial-review F1 failure mode (a gate advertised
       # to police drift that never fires) and this job has no path filter, so it
-      # always runs. Pure source inspection: no Lean, no build, no toolchain.
-      # Ships its own --self-test negative control (asserted first).
+      # always runs. Pure source inspection: no Lean build. Ships its own
+      # --self-test negative control (asserted first).
       - name: HW-ASSUME ledger falsifiable (anchors / real tests / bidirectional ids)
         run: make -C contracts/verification verify-hw-assumptions
       # C2 (MMIO bases vs ST's CMSIS header) is NOT here: it SKIP-exits 0 when
