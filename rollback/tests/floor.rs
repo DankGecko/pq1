@@ -502,13 +502,13 @@ fn t_classification_and_preflight() {
         panic!("steady")
     };
     // T > F with margin → receipt (comparison data only).
-    let receipt = preflight(&proof, 6, 4, [0x11; 32]).expect("receipt");
+    let receipt = preflight(&proof, 6, 4).expect("receipt");
     assert_eq!((receipt.floor, receipt.target, receipt.group), (5, 6, 2));
     assert_eq!(receipt.margin, 4);
     // T == F / T < F / insufficient margin → no receipt.
-    assert!(preflight(&proof, 5, 4, [0x11; 32]).is_none());
-    assert!(preflight(&proof, 4, 4, [0x11; 32]).is_none());
-    assert!(preflight(&proof, 6, INITIAL_THRESHOLD - 1, [0x11; 32]).is_none());
+    assert!(preflight(&proof, 5, 4).is_none());
+    assert!(preflight(&proof, 4, 4).is_none());
+    assert!(preflight(&proof, 6, INITIAL_THRESHOLD - 1).is_none());
 }
 
 fn view_name(v: &FloorView) -> &'static str {
@@ -517,5 +517,116 @@ fn view_name(v: &FloorView) -> &'static str {
         FloorView::Recovering(_) => "Recovering",
         FloorView::Aborted(_) => "Aborted",
         FloorView::Unknown(_) => "Unknown",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Accountancy overflow — fail CLOSED, never silently truncate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn floor_bank_larger_than_max_fails_closed() {
+    let mut bank = Bank::new();
+    for _ in 0..(MAX_ROLLBACK_CELLS + 1) {
+        bank.virgin();
+    }
+    bank.route1(false);
+    let cells = bank.cells_auto();
+    let s = FloorSnapshot {
+        cells: &cells,
+        route1: bank.route1_cells(),
+        completion_fence: FENCE_OK,
+        stage_binding: None,
+    };
+    match decode_floor(&s) {
+        FloorView::Unknown(FloorFault::RecordOverflow {
+            kind: RecordKind::Cell,
+            ..
+        }) => {}
+        other => panic!("expected RecordOverflow(Cell), got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn floor_record_overflow_never_admits_a_lower_floor() {
+    // The reproduced PoC: nine COMPLETE records where the 9th carries
+    // group 9 with t=7 while earlier groups top out at t=5. The old
+    // truncating accountancy returned Steady(5) — a two-epoch rollback.
+    // It must now fail CLOSED, and it must NOT return Steady(5).
+    let mut bank = Bank::new();
+    for g in 1..=8u32 {
+        bank.clean(encode_floor_record(5, g));
+        bank.clean(encode_floor_record(5, g));
+        bank.clean(encode_complete_record(g));
+    }
+    bank.clean(encode_floor_record(7, 9));
+    bank.clean(encode_floor_record(7, 9));
+    bank.clean(encode_complete_record(9)); // the 9th COMPLETE
+    bank.route1(false);
+    let cells = bank.cells_auto();
+    let s = FloorSnapshot {
+        cells: &cells,
+        route1: bank.route1_cells(),
+        completion_fence: FENCE_OK,
+        stage_binding: None,
+    };
+    let view = decode_floor(&s);
+    if let FloorView::Steady(p) = &view {
+        panic!("BLOCKER PoC admitted a truncated floor: Steady({})", p.floor());
+    }
+    match view {
+        FloorView::Unknown(FloorFault::RecordOverflow {
+            kind: RecordKind::Complete,
+            index,
+        }) => {
+            assert_eq!(index as usize, 26, "the 9th COMPLETE is the overflow");
+        }
+        other => panic!("expected RecordOverflow(Complete), got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn stage_record_overflow_fails_closed() {
+    let mut bank = Bank::new();
+    for g in 1..=9u32 {
+        bank.clean(encode_stage_record(g));
+    }
+    bank.route1(false);
+    let cells = bank.cells_auto();
+    let s = FloorSnapshot {
+        cells: &cells,
+        route1: bank.route1_cells(),
+        completion_fence: FENCE_OK,
+        stage_binding: Some(binding(PhysicalSlot::A, 2)),
+    };
+    match decode_floor(&s) {
+        FloorView::Unknown(FloorFault::RecordOverflow {
+            kind: RecordKind::Stage,
+            ..
+        }) => {}
+        other => panic!("expected RecordOverflow(Stage), got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn full_bank_of_floor_records_does_not_overflow() {
+    // Boundary: exactly MAX_ROLLBACK_CELLS floor records with no
+    // COMPLETE/STAGE — no truncation, no overflow, honest AmbiguousStage
+    // (floor records without group structure).
+    let mut bank = Bank::new();
+    for _ in 0..MAX_ROLLBACK_CELLS {
+        bank.clean(encode_floor_record(5, 1));
+    }
+    bank.route1(false);
+    let cells = bank.cells_auto();
+    let s = FloorSnapshot {
+        cells: &cells,
+        route1: bank.route1_cells(),
+        completion_fence: FENCE_OK,
+        stage_binding: None,
+    };
+    match decode_floor(&s) {
+        FloorView::Unknown(FloorFault::AmbiguousStage) => {}
+        other => panic!("expected AmbiguousStage, got {}", view_name(&other)),
     }
 }

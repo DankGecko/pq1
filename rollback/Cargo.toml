@@ -31,5 +31,15 @@ fw-manifest       = { path = "../fw-manifest" }
 sha2              = { version = "0.10", default-features = false }
 subtle            = { version = "2", default-features = false }
 
+# Self dev-dependency: activates `test-backend` for this crate's own
+# integration tests (the library builds WITHOUT the fake backend).
+[dev-dependencies]
+pqsigner-rollback = { path = ".", features = ["test-backend"] }
+
+[features]
+# Compile the fake/scripted storage backend (ScriptedBackend). TEST
+# BUILDS ONLY — the library proper never ships it.
+test-backend = []
+
 [lints]
 workspace = true

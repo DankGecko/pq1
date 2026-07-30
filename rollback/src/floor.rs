@@ -28,6 +28,30 @@ pub const DEGRADED_THRESHOLD: u32 = 1;
 /// Finite plan size: three initial replicas plus one replacement.
 pub const PLAN_CELLS: u32 = 4;
 
+/// Maximum reserved rollback QWs the decoder scans (the model bank
+/// size). A larger snapshot fails CLOSED, never silently truncates.
+pub const MAX_ROLLBACK_CELLS: usize = 32;
+/// Maximum tracked floor records (one per cell).
+pub const MAX_FLOOR_RECORDS: usize = 32;
+/// Maximum tracked COMPLETE records.
+pub const MAX_COMPLETE_RECORDS: usize = 8;
+/// Maximum tracked stage records.
+pub const MAX_STAGE_RECORDS: usize = 8;
+
+/// Which accountancy array overflowed (see
+/// [`FloorFault::RecordOverflow`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RecordKind {
+    /// The bank snapshot itself exceeded [`MAX_ROLLBACK_CELLS`].
+    Cell,
+    /// More than [`MAX_FLOOR_RECORDS`] floor records.
+    Floor,
+    /// More than [`MAX_COMPLETE_RECORDS`] COMPLETE records.
+    Complete,
+    /// More than [`MAX_STAGE_RECORDS`] stage records.
+    Stage,
+}
+
 /// MODEL-ONLY Route-1 BASE0 marker codeword (the synchronized active
 /// factory `BASE0` Route-1 pair). Erased-looking Route-1 pages never
 /// prove the base (§7.1 L2574–2576).
@@ -45,6 +69,7 @@ pub enum CompletionLaunchEvidence {
 }
 
 /// One reserved rollback QW's attributed read.
+#[derive(Clone, Copy)]
 pub struct FloorCell<'a> {
     pub read: &'a FreshQwRead,
     pub durability: Durability,
@@ -244,6 +269,10 @@ pub enum FloorFault {
     MissingBaseProof,
     /// A dead plan whose completion may have launched.
     CompletionMayHaveLaunched,
+    /// An accountancy array overflowed. Fail CLOSED: overflowing records
+    /// are never silently dropped (a truncated view could admit a lower
+    /// committed floor than the bank actually proves).
+    RecordOverflow { kind: RecordKind, index: u16 },
 }
 
 /// The four mutually exclusive decoder classes (FROZEN-OTP-API-3
@@ -407,14 +436,22 @@ pub fn route1_marker_is_exact(cell: &FloorCell<'_>) -> bool {
 /// uncorrectable/may-have-launched QW outside the authenticated map
 /// forces `Unknown`; no aliasing; no mutable head oracle.
 pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
+    // Bound the bank BEFORE scanning: a larger snapshot is never
+    // silently truncated (accountancy overflow fails closed).
+    if snapshot.cells.len() > MAX_ROLLBACK_CELLS {
+        return FloorView::Unknown(FloorFault::RecordOverflow {
+            kind: RecordKind::Cell,
+            index: snapshot.cells.len() as u16,
+        });
+    }
     let digest = snapshot_digest(snapshot.cells, &snapshot.route1);
 
     // ---- accountancy pass -------------------------------------------------
-    let mut floor_records: [(u32, u32); 32] = [(0, 0); 32]; // (g, t)
+    let mut floor_records: [(u32, u32); MAX_FLOOR_RECORDS] = [(0, 0); MAX_FLOOR_RECORDS];
     let mut n_floor = 0usize;
-    let mut completes: [u32; 8] = [0; 8];
+    let mut completes: [u32; MAX_COMPLETE_RECORDS] = [0; MAX_COMPLETE_RECORDS];
     let mut n_complete = 0usize;
-    let mut stages: [u32; 8] = [0; 8];
+    let mut stages: [u32; MAX_STAGE_RECORDS] = [0; MAX_STAGE_RECORDS];
     let mut n_stage = 0usize;
     let mut n_virgin = 0u32;
     let mut n_uncertain = 0u32;
@@ -435,22 +472,34 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
                 return FloorView::Unknown(FloorFault::OrphanQw { index });
             }
             CellClass::Role(Record::Floor { t, g }) => {
-                if n_floor < 32 {
-                    floor_records[n_floor] = (g, t);
-                    n_floor += 1;
+                if n_floor == MAX_FLOOR_RECORDS {
+                    return FloorView::Unknown(FloorFault::RecordOverflow {
+                        kind: RecordKind::Floor,
+                        index: i as u16,
+                    });
                 }
+                floor_records[n_floor] = (g, t);
+                n_floor += 1;
             }
             CellClass::Role(Record::Complete { g }) => {
-                if n_complete < 8 {
-                    completes[n_complete] = g;
-                    n_complete += 1;
+                if n_complete == MAX_COMPLETE_RECORDS {
+                    return FloorView::Unknown(FloorFault::RecordOverflow {
+                        kind: RecordKind::Complete,
+                        index: i as u16,
+                    });
                 }
+                completes[n_complete] = g;
+                n_complete += 1;
             }
             CellClass::Role(Record::Stage { g }) => {
-                if n_stage < 8 {
-                    stages[n_stage] = g;
-                    n_stage += 1;
+                if n_stage == MAX_STAGE_RECORDS {
+                    return FloorView::Unknown(FloorFault::RecordOverflow {
+                        kind: RecordKind::Stage,
+                        index: i as u16,
+                    });
                 }
+                stages[n_stage] = g;
+                n_stage += 1;
             }
         }
     }
@@ -681,12 +730,12 @@ pub struct EpochBumpReceipt {
 }
 
 /// Snapshot-bound read-only preflight. Returns `None` unless `T > F` and
-/// the bank can still fund one full initial threshold.
+/// the bank can still fund one full initial threshold. The receipt binds
+/// the proof's own snapshot digest (currency proof for the recheck).
 pub fn preflight(
     steady: &SteadyProof,
     target: u32,
     virgin_cells: u32,
-    snapshot_digest: [u8; 32],
 ) -> Option<EpochBumpReceipt> {
     let floor = steady.floor();
     if target <= floor || target > crate::arm_token::T_MAX {
@@ -704,6 +753,6 @@ pub fn preflight(
         target,
         group,
         margin: virgin_cells,
-        snapshot_digest,
+        snapshot_digest: *steady.snapshot_digest(),
     })
 }

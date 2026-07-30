@@ -1250,6 +1250,7 @@ version = "0.1.0"
 dependencies = [
  "fw-manifest",
  "pqsigner-geometry",
+ "pqsigner-rollback",
  "sha2",
  "subtle",
 ]

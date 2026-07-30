@@ -71,6 +71,7 @@ pub fn pass() -> VerificationPass {
 /// A verified golden artifact for `slot` under `pass`.
 pub fn artifact(pass: &VerificationPass, slot: PhysicalSlot) -> VerifiedArtifact {
     pass.verify_artifact(&manifest(slot, GOLDEN_R, GOLDEN_E), INSTALL_ID)
+        .expect("golden manifest is in range")
 }
 
 /// Script a clean read and probe it.
@@ -115,6 +116,53 @@ pub fn binding_of(artifact: &VerifiedArtifact) -> pqsigner_rollback::arm_token::
         secure_hash: id.secure_hash,
         nonsecure_hash: id.nonsecure_hash,
     }
+}
+
+// ---------------------------------------------------------------------------
+// FloorScript helpers for the frozen recheck (backend redecode)
+// ---------------------------------------------------------------------------
+
+use pqsigner_rollback::backend::{
+    FloorScript, FloorCellScript, ProbeScript as PS,
+};
+use pqsigner_rollback::floor::{
+    encode_complete_record, encode_floor_record, encode_stage_record,
+};
+
+fn cell(bytes: [u8; 16]) -> FloorCellScript {
+    FloorCellScript {
+        outcome: PS::Clean(bytes),
+        durability: CLEAN,
+        launch: MAY_LAUNCH,
+    }
+}
+
+/// The floor script mirroring `steady_proof_at(t)`: three clean floor
+/// records + COMPLETE for group 1, erased Route-1 markers.
+pub fn steady_floor_script(t: u32) -> FloorScript {
+    let mut s = FloorScript::empty();
+    for _ in 0..3 {
+        assert!(s.push(cell(encode_floor_record(t, 1))));
+    }
+    assert!(s.push(cell(encode_complete_record(1))));
+    s
+}
+
+/// The floor script mirroring `dead_proof(t, binding)`: committed group 1
+/// plus the dead stage (one clean record, three ambiguous cells).
+pub fn dead_floor_script(t: u32, binding: StageBinding) -> FloorScript {
+    let mut s = steady_floor_script(t);
+    assert!(s.push(cell(encode_stage_record(2))));
+    assert!(s.push(cell(encode_floor_record(t + 1, 2))));
+    for _ in 0..3 {
+        assert!(s.push(FloorCellScript {
+            outcome: PS::AmbiguousOrFault,
+            durability: CLEAN,
+            launch: MAY_LAUNCH,
+        }));
+    }
+    s.stage_binding = Some(binding);
+    s
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +297,9 @@ pub fn accepted_artifact(
 ) -> pqsigner_rollback::evidence::AcceptedArtifact {
     use fw_manifest::v6::{QW_CONFIRMED_0, QW_CONFIRMED_1};
     let m = manifest(slot, r, e);
-    let art = pass.verify_artifact(&m, INSTALL_ID);
+    let art = pass
+        .verify_artifact(&m, INSTALL_ID)
+        .expect("test manifest is in range");
     let c0 = probe_clean(b, 10, QW_CONFIRMED_0);
     let c1 = probe_clean(b, 11, QW_CONFIRMED_1);
     let pd = probe_clean(b, 12, ERASED);

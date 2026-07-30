@@ -50,9 +50,17 @@ impl ArtifactIdentity {
     }
 
     /// Derive the identity for a verified manifest + install identity.
-    pub fn derive(manifest: &ManifestV6, install_id: [u8; 16]) -> ArtifactIdentity {
+    /// Returns `None` when `R`/`E` are outside `1..=0xFFFF_FFFE` (a
+    /// struct-literal or mutated `ManifestV6` can carry out-of-range
+    /// fields even though the parser never produces them — the decoder
+    /// must fail closed, never panic).
+    pub fn derive(manifest: &ManifestV6, install_id: [u8; 16]) -> Option<ArtifactIdentity> {
+        let valid = |v: u32| (v6::VERSION_MIN..=v6::VERSION_MAX).contains(&v);
+        if !valid(manifest.release_version) || !valid(manifest.security_epoch) {
+            return None;
+        }
         let page_start = ArtifactIdentity::manifest_page_start(manifest.slot);
-        ArtifactIdentity {
+        Some(ArtifactIdentity {
             slot: manifest.slot,
             manifest_page_start: page_start,
             pending_qw_address: page_start + v6::OFF_QW_PENDING as u32,
@@ -61,14 +69,11 @@ impl ArtifactIdentity {
             install_id,
             r: manifest.release_version,
             e: manifest.security_epoch,
-            t: manifest
-                .security_epoch
-                .checked_sub(1)
-                .expect("VerifiedArtifact requires E >= 1 (v6 range check)"),
+            t: manifest.security_epoch - 1, // checked: E >= 1 above
             manifest_digest: manifest.stored_digest,
             secure_hash: manifest.secure_hash,
             nonsecure_hash: manifest.nonsecure_hash,
-        }
+        })
     }
 }
 
@@ -142,16 +147,18 @@ impl VerificationPass {
     }
 
     /// Wrap a verified manifest + install identity into a
-    /// `VerifiedArtifact` joined to this pass.
+    /// `VerifiedArtifact` joined to this pass. Returns `None` for
+    /// out-of-range `R`/`E` (fail-closed; see
+    /// [`ArtifactIdentity::derive`]).
     pub fn verify_artifact(
         &self,
         manifest: &ManifestV6,
         install_id: [u8; 16],
-    ) -> VerifiedArtifact {
-        let identity = ArtifactIdentity::derive(manifest, install_id);
-        VerifiedArtifact {
+    ) -> Option<VerifiedArtifact> {
+        let identity = ArtifactIdentity::derive(manifest, install_id)?;
+        Some(VerifiedArtifact {
             key: self.mint_key(identity),
-        }
+        })
     }
 }
 

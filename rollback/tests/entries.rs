@@ -89,7 +89,9 @@ fn pending_row(
     state: ArmState,
 ) -> LifecycleState {
     let m = manifest(slot, r, e);
-    let art = pass.verify_artifact(&m, INSTALL_ID);
+    let art = pass
+        .verify_artifact(&m, INSTALL_ID)
+        .expect("test manifest is in range");
     let binding = binding_of(&art);
     backend.set_arm_token(Some(ArmToken::encode(state, &binding)));
     let tok = ArmToken::decode_and_bind(
@@ -134,7 +136,7 @@ fn start_epoch_bump_invokes_begin_exactly_once() {
     let mut b = TestBackend::new(7);
     let steady = steady_proof_at(GOLDEN_T);
     let artifact = accepted_artifact(&p, &mut b, PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1);
-    let receipt: EpochBumpReceipt = floor::preflight(&steady, GOLDEN_T + 1, 4, [0x11; 32]).unwrap();
+    let receipt: EpochBumpReceipt = floor::preflight(&steady, GOLDEN_T + 1, 4).unwrap();
     let intent = CheckedSteadyIntent::new(steady, artifact, Some(receipt)).expect("intent");
     let mut backend = TestBackend::new(7);
     let out = start_from_steady(&mut backend, intent).expect("start");
@@ -180,6 +182,8 @@ fn probation_arm_attempted_once_never_retries() {
     let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
     let intent =
         CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent");
+    // The recheck requires the backend to re-decode the same floor state.
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
     let handoff = arm_probation_from_steady(&mut backend, intent).expect("handoff");
     assert_eq!(
         (handoff.slot, handoff.r, handoff.e, handoff.t),
@@ -280,7 +284,7 @@ fn probation_epoch_bump_receipt_rules() {
     ));
 
     // T > F with a mismatched receipt → MissingPreflight.
-    let receipt = floor::preflight(&steady, GOLDEN_T + 5, 4, [0x11; 32]).unwrap();
+    let receipt = floor::preflight(&steady, GOLDEN_T + 5, 4).unwrap();
     assert!(matches!(
         CheckedSteadyProbationIntent::new(
             steady_proof_at(floor_val),
@@ -292,7 +296,7 @@ fn probation_epoch_bump_receipt_rules() {
     ));
 
     // T > F with the correct receipt → intent builds and arms.
-    let good = floor::preflight(&steady, GOLDEN_T, 4, [0x11; 32]).unwrap();
+    let good = floor::preflight(&steady, GOLDEN_T, 4).unwrap();
     let intent = CheckedSteadyProbationIntent::new(
         steady,
         fallback,
@@ -300,12 +304,13 @@ fn probation_epoch_bump_receipt_rules() {
         Some(good),
     )
     .expect("intent");
+    backend.set_floor_script(steady_floor_script(floor_val));
     assert!(arm_probation_from_steady(&mut backend, intent).is_ok());
 
     // Same-epoch with a receipt → UnexpectedPreflight.
     let steady_se = steady_proof_at(GOLDEN_T);
     let fb_se = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
-    let stray = floor::preflight(&steady_proof_at(GOLDEN_T - 1), GOLDEN_T, 4, [0x11; 32]).unwrap();
+    let stray = floor::preflight(&steady_proof_at(GOLDEN_T - 1), GOLDEN_T, 4).unwrap();
     assert!(matches!(
         CheckedSteadyProbationIntent::new(
             steady_se,
@@ -369,6 +374,7 @@ fn aborted_boots_only_exact_f_artifact_with_zero_writes() {
     let boot = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1);
     let intent = CheckedAbortedAcceptedIntent::new(proof, boot).expect("intent");
     let mut backend = TestBackend::new(7);
+    backend.set_floor_script(dead_floor_script(GOLDEN_T - 1, binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E)));
     let handoff = boot_accepted_from_aborted(&mut backend, intent).expect("handoff");
     assert_eq!(handoff.t, GOLDEN_T - 1);
     assert!(backend.is_pristine(), "boot_accepted_from_aborted writes nothing");
@@ -404,6 +410,7 @@ fn peer_repair_equal_release_set_arms_and_writes_no_backend() {
     let twin_row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
     let intent = CheckedPeerRepairIntent::new(FreshFloorProof::Steady(steady), source, twin_row)
         .expect("intent");
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
     let handoff = arm_peer_repair(&mut backend, intent).expect("handoff");
     assert_eq!(handoff.slot, PhysicalSlot::B);
     assert_eq!(backend.floor_mutation_count(), 0, "repair: zero rollback-backend writes");
@@ -444,6 +451,7 @@ fn degraded_repair_under_aborted_requires_exact_f() {
     let row_ok = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1, ArmState::ArmReady);
     let intent = CheckedDegradedRepairIntent::new(FreshFloorProof::Aborted(proof), source, row_ok)
         .expect("intent");
+    backend.set_floor_script(dead_floor_script(GOLDEN_T - 1, binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E)));
     assert!(arm_degraded_artifact_repair(&mut backend, intent).is_ok());
     assert_eq!(backend.floor_mutation_count(), 0);
 
@@ -456,4 +464,70 @@ fn degraded_repair_under_aborted_requires_exact_f() {
         CheckedDegradedRepairIntent::new(FreshFloorProof::Aborted(proof2), source2, row_bad),
         Err(IntentError::FloorRegression)
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Frozen recheck-immediately-before-handoff (drift rejection)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn probation_floor_drift_rejects_handoff() {
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let steady = steady_proof_at(GOLDEN_T);
+    let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
+
+    let mut backend = TestBackend::new(7);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let intent =
+        CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent");
+    // The backend's floor state MATCHES the intent's proof at this point…
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
+    // …then mutates before the entry runs (different floor content →
+    // different class AND digest).
+    backend.set_floor_script(steady_floor_script(GOLDEN_T - 1));
+    assert_eq!(
+        arm_probation_from_steady(&mut backend, intent).unwrap_err(),
+        IntentError::FloorDrift
+    );
+}
+
+#[test]
+fn aborted_boot_rejects_floor_drift() {
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let proof = dead_proof(GOLDEN_T - 1, failed);
+    let boot = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1);
+    let intent = CheckedAbortedAcceptedIntent::new(proof, boot).expect("intent");
+
+    let mut backend = TestBackend::new(7);
+    // Backend state no longer shows the same terminal dead plan (class
+    // changed Aborted → Steady, digest differs).
+    backend.set_floor_script(steady_floor_script(GOLDEN_T - 1));
+    assert_eq!(
+        boot_accepted_from_aborted(&mut backend, intent).unwrap_err(),
+        IntentError::FloorDrift
+    );
+}
+
+#[test]
+fn peer_repair_floor_drift_rejects_handoff() {
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let steady = steady_proof_at(GOLDEN_T);
+    let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let mut backend = TestBackend::new(7);
+    let twin_row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R, GOLDEN_E, ArmState::ArmReady);
+    let intent = CheckedPeerRepairIntent::new(FreshFloorProof::Steady(steady), source, twin_row)
+        .expect("intent");
+    // Drift: the floor moved since intent construction.
+    backend.set_floor_script(dead_floor_script(
+        GOLDEN_T - 1,
+        binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E),
+    ));
+    assert_eq!(
+        arm_peer_repair(&mut backend, intent).unwrap_err(),
+        IntentError::FloorDrift
+    );
 }

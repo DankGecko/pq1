@@ -20,7 +20,7 @@
 use fw_manifest::v6::PhysicalSlot;
 
 use crate::arm_token::{ArmState, ArmToken};
-use crate::backend::{Mutation, RollbackBackend};
+use crate::backend::RollbackBackend;
 use crate::evidence::{AcceptedArtifact, VerifiedArtifact};
 use crate::floor::{
     DeadStageProof, EpochBumpReceipt, RecoveryProof, SteadyProof, TClassification,
@@ -58,6 +58,11 @@ pub enum IntentError {
     PeerRepairMismatch,
     /// Lifecycle row is not the one the intent requires.
     WrongLifecycleRow,
+    /// The frozen recheck-immediately-before-handoff found the
+    /// floor/stage state CHANGED since intent construction (fresh
+    /// re-decode disagrees on class, floor, or snapshot digest). The
+    /// intent is consumed and no authority is granted.
+    FloorDrift,
 }
 
 /// Nonwritable recovery-join failure (FROZEN-OTP-API-3 L986–989):
@@ -110,12 +115,68 @@ pub struct BootHandoff {
 // Shared probation arm-and-handoff helper
 // ---------------------------------------------------------------------------
 
-/// Perform only the TAMP `ARM_READY -> ATTEMPTED` transition for `slot`,
-/// then re-read and require exact `ATTEMPTED` (FROZEN-OTP-API-3 L991–997).
-/// No rollback-state mutation.
+/// What the frozen recheck-immediately-before-handoff expects of the
+/// floor/stage state when the entry runs (FROZEN-OTP-API-3 L898–900,
+/// L991–997, §10 L3589–3591, L3603–3608).
+struct RecheckContext {
+    /// Required decoder class.
+    class: RecheckClass,
+    /// The floor the intent was constructed against.
+    floor: u32,
+    /// Digest of the complete physical snapshot the intent's proof
+    /// decoded from.
+    snapshot_digest: [u8; 32],
+}
+
+/// The floor class a recheck must reproduce.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RecheckClass {
+    /// Exact `Steady(F)` (same floor, same snapshot digest).
+    Steady,
+    /// Exact `Aborted(F)` — the same terminal dead plan and quarantine
+    /// remain fully proved.
+    Aborted,
+    /// Either `Steady(F)` or `Aborted(F)` (repair entries).
+    SteadyOrAborted,
+}
+
+/// Run the frozen recheck: a FRESH complete floor/stage decode against
+/// current backend state must return the expected class at the same
+/// floor with a byte-equal snapshot digest. Any drift consumes the
+/// intent and grants no authority.
+fn run_recheck<B: RollbackBackend>(backend: &mut B, ctx: &RecheckContext) -> Result<(), IntentError> {
+    use crate::floor::FloorView;
+    let view = backend.redecode_floor();
+    let (floor, digest, class_ok) = match &view {
+        FloorView::Steady(p) => (
+            p.floor(),
+            *p.snapshot_digest(),
+            matches!(ctx.class, RecheckClass::Steady | RecheckClass::SteadyOrAborted),
+        ),
+        FloorView::Aborted(p) => (
+            p.floor(),
+            *p.snapshot_digest(),
+            matches!(ctx.class, RecheckClass::Aborted | RecheckClass::SteadyOrAborted),
+        ),
+        _ => (0, [0u8; 32], false),
+    };
+    if class_ok && floor == ctx.floor && digest == ctx.snapshot_digest {
+        Ok(())
+    } else {
+        Err(IntentError::FloorDrift)
+    }
+}
+
+/// Perform only the TAMP `ARM_READY -> ATTEMPTED` transition, then run
+/// the frozen recheck (fresh complete floor/stage decode with
+/// class/floor/snapshot-digest equality) and re-read/re-bind the token
+/// to exact `ATTEMPTED` immediately before handoff (FROZEN-OTP-API-3
+/// L991–997, L898–900). Any drift or token anomaly consumes the intent
+/// and grants no authority. No rollback-state mutation.
 fn arm_and_handoff<B: RollbackBackend>(
     backend: &mut B,
     artifact: &VerifiedArtifact,
+    recheck: &RecheckContext,
 ) -> Result<ProbationHandoff, IntentError> {
     let id = artifact.identity();
     let words = backend.read_arm_token().ok_or(IntentError::TokenNotArmReady)?;
@@ -132,7 +193,10 @@ fn arm_and_handoff<B: RollbackBackend>(
         return Err(IntentError::TokenNotArmReady);
     }
     backend.transition_arm_token(ArmState::Attempted);
-    // Fresh decode + reverification immediately before handoff.
+    // Frozen recheck: fresh complete floor/stage decode must agree with
+    // the intent's proof snapshot (no drift since construction).
+    run_recheck(backend, recheck)?;
+    // Fresh token decode + binding immediately before handoff.
     let words = backend.read_arm_token().ok_or(IntentError::TokenNotArmReady)?;
     let token = ArmToken::decode_and_bind(
         &words,
@@ -161,7 +225,6 @@ fn arm_and_handoff<B: RollbackBackend>(
 /// Owns `SteadyProof`, an independently verified `RobustAccepted`
 /// exact-`F` fallback, and the qualified PENDING/`ARM_READY` candidate.
 pub struct CheckedSteadyProbationIntent {
-    #[allow(dead_code)]
     steady: SteadyProof,
     #[allow(dead_code)]
     fallback: AcceptedArtifact,
@@ -213,7 +276,11 @@ impl CheckedSteadyProbationIntent {
             }
             TClassification::EpochBump => {
                 let receipt = receipt.ok_or(IntentError::MissingPreflight)?;
-                if receipt.floor != floor || receipt.target != t {
+                // The receipt must be current for THIS proof's snapshot.
+                if receipt.floor != floor
+                    || receipt.target != t
+                    || receipt.snapshot_digest != *steady.snapshot_digest()
+                {
                     return Err(IntentError::MissingPreflight);
                 }
                 ProbationClass::EpochBump(receipt)
@@ -232,7 +299,11 @@ impl CheckedSteadyProbationIntent {
 /// The sole ordinary entry that may perform `ARM_READY -> ATTEMPTED` and
 /// hand off a candidate (FROZEN-OTP-API-3 L991–997). It makes NO
 /// rollback-state mutation (no begin, recovery, compaction, or OTP/stage
-/// writer — §10 L3592). Consumes the intent by value.
+/// writer — §10 L3592). After the TAMP transition it runs the frozen
+/// recheck: a fresh complete floor/stage decode must reproduce exact
+/// `Steady(F)` with the intent proof's snapshot digest, and the token is
+/// re-read/re-bound to exact `ATTEMPTED` immediately before handoff.
+/// Any drift or error consumes the intent by value.
 pub fn arm_probation_from_steady<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedSteadyProbationIntent,
@@ -247,7 +318,12 @@ pub fn arm_probation_from_steady<B: RollbackBackend>(
             debug_assert_eq!(receipt.target, intent.candidate.t());
         }
     }
-    arm_and_handoff(backend, &intent.candidate)
+    let recheck = RecheckContext {
+        class: RecheckClass::Steady,
+        floor: intent.steady.floor(),
+        snapshot_digest: *intent.steady.snapshot_digest(),
+    };
+    arm_and_handoff(backend, &intent.candidate, &recheck)
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +362,10 @@ impl CheckedSteadyIntent {
             }
             TClassification::EpochBump => {
                 let receipt = receipt.ok_or(IntentError::MissingPreflight)?;
-                if receipt.floor != floor || receipt.target != t {
+                if receipt.floor != floor
+                    || receipt.target != t
+                    || receipt.snapshot_digest != *steady.snapshot_digest()
+                {
                     return Err(IntentError::MissingPreflight);
                 }
                 Ok(CheckedSteadyIntent {
@@ -395,23 +474,32 @@ impl CheckedAbortedAcceptedIntent {
 }
 
 /// `boot_accepted_from_aborted` (FROZEN-OTP-API-3 L1020–1027, §10
-/// L3603–3608): performs NO persistent mutation, then repeats the
-/// decode/verification immediately before handoff. `Aborted` persists;
-/// only stable comparison data crosses as the handoff ticket.
+/// L3603–3608): performs NO persistent mutation, then immediately before
+/// handoff repeats the complete floor/stage decode — it must reproduce
+/// exact `Aborted(F)` with the proof's snapshot digest (any drift
+/// consumes the intent and grants no authority) — and re-verifies the
+/// artifact's exact `T == F` and failed-release exclusion.
+/// `Aborted` persists; only stable comparison data crosses as the
+/// handoff ticket.
 pub fn boot_accepted_from_aborted<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedAbortedAcceptedIntent,
 ) -> Result<BootHandoff, IntentError> {
     let art = intent.artifact.artifact();
-    let id = art.identity();
-    // The complete decode/verification was performed at intent
-    // construction; the backend records no mutation for this entry.
-    debug_assert!(backend.mutation_log().iter().all(|m| {
-        !matches!(
-            m,
-            Some(Mutation::FloorBegin { .. }) | Some(Mutation::FloorResume { .. })
-        )
-    }));
+    let id = *art.identity();
+    // Re-verify the artifact predicates immediately before handoff.
+    let (fr, fe) = intent.proof.failed_release();
+    if id.t != intent.proof.floor() || (id.r == fr && id.e == fe) {
+        return Err(IntentError::NotAbortedBootEligible);
+    }
+    // Frozen recheck: the complete fresh decode must reproduce the same
+    // terminal dead plan (same floor, same snapshot digest).
+    let recheck = RecheckContext {
+        class: RecheckClass::Aborted,
+        floor: intent.proof.floor(),
+        snapshot_digest: *intent.proof.snapshot_digest(),
+    };
+    run_recheck(backend, &recheck)?;
     Ok(BootHandoff {
         slot: id.slot,
         r: id.r,
@@ -439,12 +527,19 @@ impl FreshFloorProof {
             FreshFloorProof::Aborted(p) => p.floor(),
         }
     }
+
+    /// Digest of the complete physical snapshot the proof decodes from.
+    pub fn snapshot_digest(&self) -> &[u8; 32] {
+        match self {
+            FreshFloorProof::Steady(p) => p.snapshot_digest(),
+            FreshFloorProof::Aborted(p) => p.snapshot_digest(),
+        }
+    }
 }
 
 /// Owns the floor proof, the `RobustAccepted` source, and the restaged
 /// opposite-slot A/B twin (PENDING with exact `ARM_READY`).
 pub struct CheckedPeerRepairIntent {
-    #[allow(dead_code)]
     floor_proof: FreshFloorProof,
     #[allow(dead_code)]
     source: AcceptedArtifact,
@@ -486,14 +581,20 @@ impl CheckedPeerRepairIntent {
 }
 
 /// `arm_peer_repair` (§10 L3609–3614): performs only the TAMP transition,
-/// fresh decode/reverification, and probation handoff. Zero
-/// rollback-backend writes; never directly confirms the copied peer.
+/// the frozen recheck (fresh decode must reproduce the intent's floor
+/// class/floor/digest), token re-read/re-bind, and probation handoff.
+/// Zero rollback-backend writes; never directly confirms the copied peer.
 pub fn arm_peer_repair<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedPeerRepairIntent,
 ) -> Result<ProbationHandoff, IntentError> {
     let _token = intent.token;
-    arm_and_handoff(backend, &intent.twin)
+    let recheck = RecheckContext {
+        class: RecheckClass::SteadyOrAborted,
+        floor: intent.floor_proof.floor(),
+        snapshot_digest: *intent.floor_proof.snapshot_digest(),
+    };
+    arm_and_handoff(backend, &intent.twin, &recheck)
 }
 
 /// Owns the floor proof, the `RobustAccepted` source, and the exact
@@ -536,13 +637,17 @@ impl CheckedDegradedRepairIntent {
 }
 
 /// `arm_degraded_artifact_repair` (§10 L3615–3621): only the TAMP
-/// transition + fresh decode/reverification + handoff. No in-place
-/// replica patch, no repair-time rollback write.
+/// transition + the frozen recheck + token re-read/re-bind + handoff. No
+/// in-place replica patch, no repair-time rollback write.
 pub fn arm_degraded_artifact_repair<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedDegradedRepairIntent,
 ) -> Result<ProbationHandoff, IntentError> {
     let _token = intent.token;
-    let _ = &intent.floor_proof;
-    arm_and_handoff(backend, &intent.target)
+    let recheck = RecheckContext {
+        class: RecheckClass::SteadyOrAborted,
+        floor: intent.floor_proof.floor(),
+        snapshot_digest: *intent.floor_proof.snapshot_digest(),
+    };
+    arm_and_handoff(backend, &intent.target, &recheck)
 }
