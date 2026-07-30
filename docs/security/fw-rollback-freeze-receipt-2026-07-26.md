@@ -47,15 +47,18 @@ not carry to the new pair.
   (`ee982785…`) while this receipt bound `57b7e359…`. Remediated: Base
   re-pinned; Draft 1.1 digest unchanged since. (Run 6 also recorded a
   pre-freeze evidence GAP: BENCH-4/A3/A4 completion evidence is owed
-  before the Option-B/A freeze review — tracked as #398/#387/#388, not a
+  before the Option-B/A freeze review — tracked as #401/#387/#388, not a
   blocker for this architecture freeze.)
 - **Run 7 (2026-07-26):** **APPROVE** — no stage-blocking defect found.
   §18: 28 RESOLVED / 12 GAP (the 12 are Draft 1.1's declared later-stage
   production/silicon gates — OPEN-JRN-HW-1, JRN-DUR-1, ECC-1, FLASH-HW-1,
   RAM-1, OTP-1..3, REL-1, C10-1, §12.3 capacity/EOL, VBAT retention,
-  ES0499 envelope). BENCH-4/A3/A4 completion (#398/#387/#388) recorded
+  ES0499 envelope). BENCH-4/A3/A4 completion (#401/#387/#388) recorded
   as a pre-FSBL-freeze evidence gap, non-blocking for this architecture
-  freeze. Model-identity honesty: runs 1–4 invoked and self-attested
+  freeze. (Tracker correction 2026-07-26: BENCH-4 is issue #401; #398 is
+  BENCH-1. Draft 1.2's frozen text carries the harmless "#398" mislabel
+  in its BENCH-4 row and receipt — corrected here, not in the frozen
+  text.) Model-identity honesty: runs 1–4 invoked and self-attested
   `gpt-5.6-sol` at `ultra`; runs 5–7 invoked identically but the runtime
   exposed only "Codex, GPT-5 family" — recorded as GAP, not hidden.
 - **Second-leg run 1 (2026-07-26, Claude Opus 5 — runtime
