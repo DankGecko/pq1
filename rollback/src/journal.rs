@@ -10,6 +10,7 @@
 
 use fw_manifest::v6::{LaterLifecycleEvidence, QW_CONFIRMED_0, QW_CONFIRMED_1, QW_PENDING};
 
+use crate::evidence::ArtifactEvidenceKey;
 use crate::qw_read::{BlankVirgin, Durability, FreshQwRead, LaunchAttribution};
 
 // ---------------------------------------------------------------------------
@@ -317,8 +318,12 @@ pub enum TerminalSetOutcome {
 /// PENDING/TAMP evidence is considered (hard design rule 4; §6.2
 /// L2183–2186) — this function is the only terminal-set constructor.
 ///
-/// `evidence_key` is the digest of the artifact's `ArtifactEvidenceKey`
-/// for the current verification pass (see `evidence.rs`).
+/// The evidence key is DERIVED from the artifact's sealed
+/// [`ArtifactEvidenceKey`] for the current verification pass — never
+/// accepted as a raw parameter (R3-2). The CALLER must additionally
+/// have established that the presented reads are the artifact's
+/// canonical terminal QWs (see `lifecycle::decode_lifecycle`, which
+/// enforces canonical addresses and one common probe epoch).
 pub fn decode_terminal_set(
     c0: &FreshQwRead,
     c0_durability: Durability,
@@ -326,8 +331,9 @@ pub fn decode_terminal_set(
     c1: &FreshQwRead,
     c1_durability: Durability,
     c1_launch: LaunchAttribution,
-    evidence_key: [u8; 32],
+    key: &ArtifactEvidenceKey,
 ) -> TerminalSetOutcome {
+    let evidence_key = key.digest();
     let o0 = observe_marker(c0, &QW_CONFIRMED_0, c0_durability, c0_launch);
     let o1 = observe_marker(c1, &QW_CONFIRMED_1, c1_durability, c1_launch);
     match (o0, o1) {

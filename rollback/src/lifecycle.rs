@@ -53,6 +53,10 @@ pub enum MalformedReason {
     BadInstallGeneration,
     /// Token binding does not match the artifact identity.
     TokenBindingMismatch,
+    /// A presented journal read is not the artifact's canonical QW for
+    /// its role (wrong address), or the presented reads do not share
+    /// one probe epoch (R3-2: A's QWs can never construct B's evidence).
+    NonCanonicalJournalQw,
 }
 
 /// The six accepted lifecycle rows plus `Malformed` (§6.2 L2165–2172).
@@ -105,7 +109,16 @@ pub fn decode_lifecycle(
     token: Option<ArmToken>,
     floor: u32,
 ) -> LifecycleState {
-    let key_digest = artifact.key().digest();
+    // R3-2: the presented journal reads must be THIS artifact's
+    // canonical QWs (identity addresses), under one common probe epoch.
+    if !canonical_journal_reads(
+        artifact.identity(),
+        terminal_c0.read,
+        terminal_c1.read,
+        pending.read,
+    ) {
+        return LifecycleState::Malformed(MalformedReason::NonCanonicalJournalQw);
+    }
     let terminal = decode_terminal_set(
         terminal_c0.read,
         terminal_c0.durability,
@@ -113,7 +126,7 @@ pub fn decode_lifecycle(
         terminal_c1.read,
         terminal_c1.durability,
         terminal_c1.launch,
-        key_digest,
+        artifact.key(),
     );
     let t = artifact.t();
 
@@ -241,6 +254,37 @@ fn generation_matches(
         }
         None => false,
     }
+}
+
+/// R3-2 canonical journal-QW check: every presented Clean journal read
+/// must sit at the artifact identity's canonical address for its role
+/// (terminal 0, terminal 1, PENDING), and all presented reads must
+/// share one probe epoch (one common pass). Non-Clean reads fail closed
+/// elsewhere and are not address-checkable here.
+fn canonical_journal_reads(
+    id: &crate::evidence::ArtifactIdentity,
+    c0: &crate::qw_read::FreshQwRead,
+    c1: &crate::qw_read::FreshQwRead,
+    pending: &crate::qw_read::FreshQwRead,
+) -> bool {
+    let mut epoch: Option<u32> = None;
+    for (read, expected_addr) in [
+        (c0, id.confirmed_0_qw_address),
+        (c1, id.confirmed_1_qw_address),
+        (pending, id.pending_qw_address),
+    ] {
+        if let crate::qw_read::FreshQwRead::Clean(qw) = read {
+            if qw.addr() != expected_addr {
+                return false;
+            }
+            match epoch {
+                None => epoch = Some(qw.probe_epoch()),
+                Some(e) if e != qw.probe_epoch() => return false,
+                _ => {}
+            }
+        }
+    }
+    true
 }
 
 /// The bound token must carry exactly the artifact's tuple and identity.

@@ -58,6 +58,11 @@ pub enum IntentError {
     PeerRepairMismatch,
     /// Lifecycle row is not the one the intent requires.
     WrongLifecycleRow,
+    /// The repair target does not bind to the supplied degraded-history
+    /// evidence (wrong slot/tuple, stale install identity, or the source
+    /// shares the target's slot) — a fresh no-history target is not a
+    /// degraded-artifact repair.
+    MissingDegradedHistory,
     /// The frozen recheck-immediately-before-handoff found the
     /// floor/stage state CHANGED since intent construction (fresh
     /// re-decode disagrees on class, floor, or snapshot digest). The
@@ -126,6 +131,9 @@ struct RecheckContext {
     /// Digest of the complete physical snapshot the intent's proof
     /// decoded from.
     snapshot_digest: [u8; 32],
+    /// When set, the fresh decode's floor must ALSO equal this value
+    /// (the exact-`F` fallback's target re-verified at entry, R3-7).
+    fallback_t: Option<u32>,
 }
 
 /// The floor class a recheck must reproduce.
@@ -173,6 +181,16 @@ fn run_recheck<B: RollbackBackend>(backend: &mut B, ctx: &RecheckContext) -> Res
         }
         _ => Err(IntentError::FloorDrift),
     }
+    .and_then(|()| {
+        // R3-7: re-verify the exact-`F` fallback binding against the
+        // FRESH floor (post-recheck), not just the construction-time one.
+        if let Some(fallback_t) = ctx.fallback_t {
+            if fallback_t != ctx.floor {
+                return Err(IntentError::FloorDrift);
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Perform only the TAMP `ARM_READY -> ATTEMPTED` transition, then run
@@ -235,6 +253,22 @@ fn arm_and_handoff<B: RollbackBackend>(
     })
 }
 
+/// Re-validate a preflight receipt against the proof it must be bound
+/// to (R3-5): floor, target, snapshot digest, allocation sequence
+/// (group), and capacity (margin). The receipt is comparison data; this
+/// is the only validation path.
+fn receipt_matches(steady: &SteadyProof, receipt: &EpochBumpReceipt, t: u32) -> bool {
+    let expected_group = match steady.group() {
+        crate::floor::GroupIdentity::Base0 => Some(1),
+        crate::floor::GroupIdentity::Group(g) => g.checked_add(1),
+    };
+    receipt.floor() == steady.floor()
+        && receipt.target() == t
+        && receipt.snapshot_digest() == steady.snapshot_digest()
+        && Some(receipt.group()) == expected_group
+        && receipt.margin() >= crate::floor::INITIAL_THRESHOLD
+}
+
 // ---------------------------------------------------------------------------
 // CheckedSteadyProbationIntent + arm_probation_from_steady
 // ---------------------------------------------------------------------------
@@ -243,7 +277,6 @@ fn arm_and_handoff<B: RollbackBackend>(
 /// exact-`F` fallback, and the qualified PENDING/`ARM_READY` candidate.
 pub struct CheckedSteadyProbationIntent {
     steady: SteadyProof,
-    #[allow(dead_code)]
     fallback: AcceptedArtifact,
     candidate: VerifiedArtifact,
     token: ArmToken,
@@ -293,11 +326,9 @@ impl CheckedSteadyProbationIntent {
             }
             TClassification::EpochBump => {
                 let receipt = receipt.ok_or(IntentError::MissingPreflight)?;
-                // The receipt must be current for THIS proof's snapshot.
-                if receipt.floor != floor
-                    || receipt.target != t
-                    || receipt.snapshot_digest != *steady.snapshot_digest()
-                {
+                // The receipt must be current for THIS proof: floor,
+                // target, digest, allocation sequence, and capacity.
+                if !receipt_matches(&steady, &receipt, t) {
                     return Err(IntentError::MissingPreflight);
                 }
                 ProbationClass::EpochBump(receipt)
@@ -328,17 +359,21 @@ pub fn arm_probation_from_steady<B: RollbackBackend>(
     let _token = intent.token;
     // Same-epoch arming bypasses all capacity preflight; an epoch bump
     // carries only the read-only receipt — comparison data that grants no
-    // persistent authority (FROZEN-OTP-API-3 L951–953).
+    // persistent authority (FROZEN-OTP-API-3 L951–953). The receipt is
+    // re-verified at entry (R3-7: no debug-only assertions here).
     match &intent.class {
         ProbationClass::SameEpoch => {}
         ProbationClass::EpochBump(receipt) => {
-            debug_assert_eq!(receipt.target, intent.candidate.t());
+            if receipt.target() != intent.candidate.t() {
+                return Err(IntentError::MissingPreflight);
+            }
         }
     }
     let recheck = RecheckContext {
         class: RecheckClass::Steady,
         floor: intent.steady.floor(),
         snapshot_digest: *intent.steady.snapshot_digest(),
+        fallback_t: Some(intent.fallback.artifact().t()),
     };
     arm_and_handoff(backend, &intent.candidate, &recheck)
 }
@@ -378,10 +413,7 @@ impl CheckedSteadyIntent {
             }
             TClassification::EpochBump => {
                 let receipt = receipt.ok_or(IntentError::MissingPreflight)?;
-                if receipt.floor != floor
-                    || receipt.target != t
-                    || receipt.snapshot_digest != *steady.snapshot_digest()
-                {
+                if !receipt_matches(&steady, &receipt, t) {
                     return Err(IntentError::MissingPreflight);
                 }
                 Ok(CheckedSteadyIntent {
@@ -414,12 +446,13 @@ pub fn start_from_steady<B: RollbackBackend>(
                 class: RecheckClass::Steady,
                 floor: intent.steady.floor(),
                 snapshot_digest: *intent.steady.snapshot_digest(),
+                fallback_t: None,
             };
             run_recheck(backend, &recheck)?;
             backend.begin_floor_plan(&receipt);
             Ok(StartOutcome::Began {
                 target: t,
-                group: receipt.group,
+                group: receipt.group(),
             })
         }
     }
@@ -475,6 +508,7 @@ pub fn resume_from_recovery<B: RollbackBackend>(
         class: RecheckClass::Recovering { target, group },
         floor: target,
         snapshot_digest: *intent.proof.snapshot_digest(),
+        fallback_t: None,
     };
     run_recheck(backend, &recheck)?;
     backend.resume_floor_plan(target);
@@ -534,6 +568,7 @@ pub fn boot_accepted_from_aborted<B: RollbackBackend>(
         class: RecheckClass::Aborted,
         floor: intent.proof.floor(),
         snapshot_digest: *intent.proof.snapshot_digest(),
+        fallback_t: None,
     };
     run_recheck(backend, &recheck)?;
     Ok(BootHandoff {
@@ -629,12 +664,72 @@ pub fn arm_peer_repair<B: RollbackBackend>(
         class: RecheckClass::SteadyOrAborted,
         floor: intent.floor_proof.floor(),
         snapshot_digest: *intent.floor_proof.snapshot_digest(),
+        fallback_t: None,
     };
     arm_and_handoff(backend, &intent.twin, &recheck)
 }
 
+/// Receipt for a complete inactive-range erase/restage of one physical
+/// slot (§10 item 10: "full erase/restage evidence"). The physical
+/// writer is out of scope; this HOST-MODEL constructor stands in for
+/// the writer's receipt.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EraseRestageReceipt {
+    slot: PhysicalSlot,
+    prior_manifest_digest: [u8; 32],
+}
+
+impl EraseRestageReceipt {
+    /// HOST-MODEL constructor (the writer is out of scope).
+    pub fn new(slot: PhysicalSlot, prior_manifest_digest: [u8; 32]) -> Self {
+        EraseRestageReceipt {
+            slot,
+            prior_manifest_digest,
+        }
+    }
+
+    pub fn slot(&self) -> PhysicalSlot {
+        self.slot
+    }
+
+    pub fn prior_manifest_digest(&self) -> &[u8; 32] {
+        &self.prior_manifest_digest
+    }
+}
+
+/// The typed degraded-history evidence §10 item 10 requires: proof that
+/// the repair target previously existed as a DEGRADED artifact (its
+/// prior [`ArtifactIdentity`]) plus a full erase/restage receipt binding
+/// that same slot and manifest digest. Consumed linearly by
+/// [`CheckedDegradedRepairIntent::new`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DegradedHistoryEvidence {
+    prior_identity: crate::evidence::ArtifactIdentity,
+    restage: EraseRestageReceipt,
+}
+
+impl DegradedHistoryEvidence {
+    /// Join the prior degraded identity to its erase/restage receipt.
+    /// `None` when the receipt binds a different slot or digest.
+    pub fn new(
+        prior_identity: crate::evidence::ArtifactIdentity,
+        restage: EraseRestageReceipt,
+    ) -> Option<DegradedHistoryEvidence> {
+        if restage.slot() != prior_identity.slot
+            || restage.prior_manifest_digest() != &prior_identity.manifest_digest
+        {
+            return None;
+        }
+        Some(DegradedHistoryEvidence {
+            prior_identity,
+            restage,
+        })
+    }
+}
+
 /// Owns the floor proof, the `RobustAccepted` source, and the exact
-/// restaged degraded-target artifact (PENDING with exact `ARM_READY`).
+/// restaged degraded-target artifact (PENDING with exact `ARM_READY`)
+/// — admitted only with the full degraded-history evidence set.
 pub struct CheckedDegradedRepairIntent {
     floor_proof: FreshFloorProof,
     #[allow(dead_code)]
@@ -644,22 +739,39 @@ pub struct CheckedDegradedRepairIntent {
 }
 
 impl CheckedDegradedRepairIntent {
+    /// §10 item 10 (L3615–3621): requires the `RobustAccepted` source,
+    /// the exact archived package for the PREVIOUSLY DEGRADED target
+    /// (same slot, same `(R,E)` as `history`'s prior identity), a full
+    /// erase/restage receipt, and a FRESH install identity (the new
+    /// row's install id must differ from the degraded generation's).
     /// Under `Aborted`, exact `T == F` is mandatory and the backend
     /// remains untouched. Under `Steady`, the repair itself grants no
-    /// floor authority, and §10 item 10 (L3615–3621) permits the
-    /// candidate to later earn robust terminal evidence through
-    /// probation — so the Steady arm requires `target.t() > floor`
-    /// STRICTLY (a `T <= F` target is dead weight the repair path must
-    /// not carry).
+    /// floor authority and the target must satisfy `T > F` STRICTLY.
     pub fn new(
         floor_proof: FreshFloorProof,
         source: AcceptedArtifact,
         target_row: LifecycleState,
+        history: DegradedHistoryEvidence,
     ) -> Result<Self, IntentError> {
         let (target, token) = match target_row {
             LifecycleState::Pending { artifact, token } => (artifact, token),
             _ => return Err(IntentError::WrongLifecycleRow),
         };
+        // Degraded-history binding: the repair target must be the
+        // restaged PRIOR DEGRADED artifact, not a fresh no-history one.
+        let prior = &history.prior_identity;
+        if target.slot() != prior.slot
+            || target.r() != prior.r
+            || target.e() != prior.e
+            || target.slot() == source.artifact().slot()
+        {
+            return Err(IntentError::MissingDegradedHistory);
+        }
+        if target.install_id() == prior.install_id {
+            // The install identity must be FRESH (never the degraded
+            // generation's id).
+            return Err(IntentError::MissingDegradedHistory);
+        }
         match &floor_proof {
             FreshFloorProof::Aborted(proof) => {
                 if target.t() != proof.floor() {
@@ -693,6 +805,7 @@ pub fn arm_degraded_artifact_repair<B: RollbackBackend>(
         class: RecheckClass::SteadyOrAborted,
         floor: intent.floor_proof.floor(),
         snapshot_digest: *intent.floor_proof.snapshot_digest(),
+        fallback_t: None,
     };
     arm_and_handoff(backend, &intent.target, &recheck)
 }

@@ -6,66 +6,36 @@ mod common;
 use common::*;
 use fw_manifest::v6::{LaterLifecycleEvidence, PhysicalSlot, QW_CONFIRMED_0, QW_CONFIRMED_1, QW_PENDING};
 use pqsigner_rollback::arm_token::{ArmState, ArmToken};
-use pqsigner_rollback::backend::{ProbeScript, ScriptedBackend};
+use pqsigner_rollback::backend::ProbeScript;
 use pqsigner_rollback::journal::{
     surviving_install_generation, InstallGenerationEvidence, InstallHalfEvidence,
 };
-use pqsigner_rollback::lifecycle::{decode_lifecycle, AttributedRead, LifecycleState, MalformedReason};
+use pqsigner_rollback::lifecycle::{decode_lifecycle, LifecycleState, MalformedReason};
 
 const F: u32 = GOLDEN_T; // floor == golden T for the passing rows
 
-fn atr(read: &pqsigner_rollback::qw_read::FreshQwRead) -> AttributedRead<'_> {
-    AttributedRead {
-        read,
-        durability: CLEAN,
-        launch: MAY_LAUNCH,
-    }
-}
-
-fn atr_no_launch(read: &pqsigner_rollback::qw_read::FreshQwRead) -> AttributedRead<'_> {
-    AttributedRead {
-        read,
-        durability: CLEAN,
-        launch: NO_LAUNCH,
-    }
-}
-
-struct Fixture {
-    b: ScriptedBackend,
-}
-
-impl Fixture {
-    fn new() -> Self {
-        Fixture {
-            b: TestBackend::new(7),
-        }
-    }
-
-    fn token(&self, art: &pqsigner_rollback::evidence::VerifiedArtifact, state: ArmState) -> ArmToken {
-        let binding = binding_of(art);
-        let words = ArmToken::encode(state, &binding);
-        ArmToken::decode_and_bind(
-            &words,
-            binding.slot,
-            &INSTALL_ID,
-            &binding.manifest_digest,
-            &binding.secure_hash,
-            &binding.nonsecure_hash,
-        )
-        .expect("token binds")
-    }
+fn token_for(art: &pqsigner_rollback::evidence::VerifiedArtifact, state: ArmState) -> ArmToken {
+    let binding = binding_of(art);
+    let words = ArmToken::encode(state, &binding);
+    ArmToken::decode_and_bind(
+        &words,
+        binding.slot,
+        &binding.install_id,
+        &binding.manifest_digest,
+        &binding.secure_hash,
+        &binding.nonsecure_hash,
+    )
+    .expect("token binds")
 }
 
 #[test]
 fn row_uninstalled() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let c0 = probe_clean(&mut fx.b, 0, ERASED);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, ERASED);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
-    match decode_lifecycle(art, gen, atr_no_launch(&c0), atr_no_launch(&c1), atr_no_launch(&pd), None, F)
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr_nl(&pd), None, F)
     {
         LifecycleState::Uninstalled { artifact } => {
             assert_eq!(artifact.r(), GOLDEN_R);
@@ -76,12 +46,10 @@ fn row_uninstalled() {
 
 #[test]
 fn row_uninstalled_requires_full_generation() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let c0 = probe_clean(&mut fx.b, 0, ERASED);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, ERASED);
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
     // A surviving (one-half) generation before activation is incomplete.
     let surviving = surviving_install_generation(
         InstallHalfEvidence::Exact(INSTALL_ID),
@@ -90,7 +58,7 @@ fn row_uninstalled_requires_full_generation() {
     )
     .unwrap();
     let gen = Some(InstallGenerationEvidence::Surviving(surviving));
-    match decode_lifecycle(art, gen, atr_no_launch(&c0), atr_no_launch(&c1), atr_no_launch(&pd), None, F)
+    match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr_nl(&pd), None, F)
     {
         LifecycleState::Malformed(MalformedReason::BadInstallGeneration) => {}
         _ => panic!("expected Malformed(BadInstallGeneration)"),
@@ -99,15 +67,13 @@ fn row_uninstalled_requires_full_generation() {
 
 #[test]
 fn row_pending() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let tok = fx.token(&art, ArmState::ArmReady);
-    let c0 = probe_clean(&mut fx.b, 0, ERASED);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, QW_PENDING);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
-    match decode_lifecycle(art, gen, atr_no_launch(&c0), atr_no_launch(&c1), atr(&pd), Some(tok), F) {
+    let tok = token_for(&art, ArmState::ArmReady);
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), F) {
         LifecycleState::Pending { artifact, token } => {
             assert_eq!(artifact.e(), GOLDEN_E);
             assert_eq!(token.state, ArmState::ArmReady);
@@ -118,15 +84,13 @@ fn row_pending() {
 
 #[test]
 fn row_attempted() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let tok = fx.token(&art, ArmState::Attempted);
-    let c0 = probe_clean(&mut fx.b, 0, ERASED);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, QW_PENDING);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
-    match decode_lifecycle(art, gen, atr_no_launch(&c0), atr_no_launch(&c1), atr(&pd), Some(tok), F) {
+    let tok = token_for(&art, ArmState::Attempted);
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), F) {
         LifecycleState::Attempted { token, .. } => assert_eq!(token.state, ArmState::Attempted),
         _ => panic!("expected Attempted"),
     }
@@ -134,15 +98,13 @@ fn row_attempted() {
 
 #[test]
 fn row_confirmed_robust() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let c0 = probe_clean(&mut fx.b, 0, QW_CONFIRMED_0);
-    let c1 = probe_clean(&mut fx.b, 1, QW_CONFIRMED_1);
-    let pd = probe_clean(&mut fx.b, 2, ERASED);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(QW_CONFIRMED_0), ProbeScript::Clean(QW_CONFIRMED_1), ProbeScript::Clean(ERASED));
+    let gen = Some(full_generation(&mut b, 3, 4));
     // F <= T admitted (F == T here); PENDING/token not consulted.
-    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_no_launch(&pd), None, F) {
+    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, F) {
         LifecycleState::ConfirmedRobust(a) => assert_eq!(a.artifact().t(), GOLDEN_T),
         _ => panic!("expected ConfirmedRobust"),
     }
@@ -150,14 +112,12 @@ fn row_confirmed_robust() {
 
 #[test]
 fn row_confirmed_robust_rejects_f_greater_than_t() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let c0 = probe_clean(&mut fx.b, 0, QW_CONFIRMED_0);
-    let c1 = probe_clean(&mut fx.b, 1, QW_CONFIRMED_1);
-    let pd = probe_clean(&mut fx.b, 2, ERASED);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
-    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_no_launch(&pd), None, F + 1) {
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(QW_CONFIRMED_0), ProbeScript::Clean(QW_CONFIRMED_1), ProbeScript::Clean(ERASED));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, F + 1) {
         LifecycleState::Malformed(MalformedReason::FloorRelationViolation) => {}
         _ => panic!("expected Malformed(FloorRelationViolation) for F > T"),
     }
@@ -165,15 +125,13 @@ fn row_confirmed_robust_rejects_f_greater_than_t() {
 
 #[test]
 fn row_degraded_confirmed_repair_target_only() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
     // One exact replica (C0), the other indeterminate; F == T.
-    let c0 = probe_clean(&mut fx.b, 0, QW_CONFIRMED_0);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, ERASED);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
-    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_no_launch(&pd), None, F) {
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(QW_CONFIRMED_0), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, F) {
         LifecycleState::DegradedConfirmed(_) => {}
         _ => panic!("expected DegradedConfirmed"),
     }
@@ -181,15 +139,13 @@ fn row_degraded_confirmed_repair_target_only() {
 
 #[test]
 fn row_degraded_epoch_candidate_repair_target_only() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let c0 = probe_clean(&mut fx.b, 0, QW_CONFIRMED_0);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, ERASED);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(QW_CONFIRMED_0), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
+    let gen = Some(full_generation(&mut b, 3, 4));
     // F < T → degraded epoch candidate (repair target only).
-    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_no_launch(&pd), None, F - 1) {
+    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, F - 1) {
         LifecycleState::DegradedEpochCandidate(_) => {}
         _ => panic!("expected DegradedEpochCandidate"),
     }
@@ -201,19 +157,14 @@ fn row_degraded_epoch_candidate_repair_target_only() {
 
 #[test]
 fn malformed_impossible_writer_order_terminal() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
+    let tok = token_for(&art, ArmState::ArmReady);
     // CONFIRMED_1 exact with CONFIRMED_0 proven BlankVirgin.
-    let c0 = probe_clean(&mut fx.b, 0, ERASED);
-    let c1 = probe_clean(&mut fx.b, 1, QW_CONFIRMED_1);
-    let pd = probe_clean(&mut fx.b, 2, QW_PENDING);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
-    let tok = {
-        let a = artifact(&pass(), PhysicalSlot::A);
-        fx.token(&a, ArmState::ArmReady)
-    };
-    match decode_lifecycle(art, gen, atr_no_launch(&c0), atr(&c1), atr(&pd), Some(tok), F) {
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_CONFIRMED_1), ProbeScript::Clean(QW_PENDING));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art, gen, atr_nl(&c0), atr(&c1), atr(&pd), Some(tok), F) {
         LifecycleState::Malformed(MalformedReason::TerminalRejected(_)) => {}
         other => panic!("expected Malformed(TerminalRejected), got {}", row_name(&other)),
     }
@@ -221,15 +172,13 @@ fn malformed_impossible_writer_order_terminal() {
 
 #[test]
 fn malformed_torn_terminal_never_falls_through_to_pending() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let tok = fx.token(&art, ArmState::ArmReady);
-    let c0 = probe(&mut fx.b, 0, ProbeScript::AmbiguousOrFault);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, QW_PENDING);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
-    match decode_lifecycle(art, gen, atr(&c0), atr_no_launch(&c1), atr(&pd), Some(tok), F) {
+    let tok = token_for(&art, ArmState::ArmReady);
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::AmbiguousOrFault, ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art, gen, atr(&c0), atr_nl(&c1), atr(&pd), Some(tok), F) {
         LifecycleState::Malformed(_) => {}
         _ => panic!("a torn terminal must never fall through to PENDING"),
     }
@@ -237,14 +186,12 @@ fn malformed_torn_terminal_never_falls_through_to_pending() {
 
 #[test]
 fn malformed_missing_token_on_probation_branch() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let c0 = probe_clean(&mut fx.b, 0, ERASED);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, QW_PENDING);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
-    match decode_lifecycle(art, gen, atr_no_launch(&c0), atr_no_launch(&c1), atr(&pd), None, F) {
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), None, F) {
         LifecycleState::Malformed(MalformedReason::MissingOrMalformedToken) => {}
         _ => panic!("expected Malformed(MissingOrMalformedToken)"),
     }
@@ -252,7 +199,7 @@ fn malformed_missing_token_on_probation_branch() {
 
 #[test]
 fn malformed_binding_mismatched_token() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
     // Token for a DIFFERENT install id.
@@ -260,10 +207,6 @@ fn malformed_binding_mismatched_token() {
         let mut binding = binding_of(&art);
         binding.install_id = [0x11; 16];
         let words = ArmToken::encode(ArmState::ArmReady, &binding);
-        // Decoding against the artifact fails, so the caller models a
-        // binding-mismatched token as None… but a structurally valid
-        // token for another artifact must ALSO be rejected here. Build a
-        // token that decodes against the OTHER binding and present it.
         ArmToken::decode_and_bind(
             &words,
             binding.slot,
@@ -274,11 +217,9 @@ fn malformed_binding_mismatched_token() {
         )
         .unwrap()
     };
-    let c0 = probe_clean(&mut fx.b, 0, ERASED);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, QW_PENDING);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
-    match decode_lifecycle(art, gen, atr_no_launch(&c0), atr_no_launch(&c1), atr(&pd), Some(bad_token), F)
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(bad_token), F)
     {
         LifecycleState::Malformed(MalformedReason::TokenBindingMismatch) => {}
         other => panic!("expected Malformed(TokenBindingMismatch), got {}", row_name(&other)),
@@ -287,14 +228,12 @@ fn malformed_binding_mismatched_token() {
 
 #[test]
 fn malformed_conflicting_install_halves() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let c0 = probe_clean(&mut fx.b, 0, ERASED);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, ERASED);
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
     // No valid generation (conflicting halves → None).
-    match decode_lifecycle(art, None, atr_no_launch(&c0), atr_no_launch(&c1), atr_no_launch(&pd), None, F)
+    match decode_lifecycle(art, None, atr_nl(&c0), atr_nl(&c1), atr_nl(&pd), None, F)
     {
         LifecycleState::Malformed(MalformedReason::BadInstallGeneration) => {}
         _ => panic!("expected Malformed(BadInstallGeneration)"),
@@ -303,16 +242,14 @@ fn malformed_conflicting_install_halves() {
 
 #[test]
 fn malformed_floor_relation_on_probation() {
-    let mut fx = Fixture::new();
+    let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let tok = fx.token(&art, ArmState::ArmReady);
-    let c0 = probe_clean(&mut fx.b, 0, ERASED);
-    let c1 = probe_clean(&mut fx.b, 1, ERASED);
-    let pd = probe_clean(&mut fx.b, 2, QW_PENDING);
-    let gen = Some(full_generation(&mut fx.b, 3, 4));
+    let tok = token_for(&art, ArmState::ArmReady);
+    let (c0, c1, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let gen = Some(full_generation(&mut b, 3, 4));
     // E <= F on the probation branch.
-    match decode_lifecycle(art, gen, atr_no_launch(&c0), atr_no_launch(&c1), atr(&pd), Some(tok), GOLDEN_E)
+    match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), GOLDEN_E)
     {
         LifecycleState::Malformed(MalformedReason::FloorRelationViolation) => {}
         other => panic!("expected Malformed(FloorRelationViolation), got {}", row_name(&other)),
@@ -336,6 +273,48 @@ fn out_of_range_version_is_caught_at_manifest_layer() {
         signature: &[0xAA; fw_manifest::SIGNATURE_LEN],
     })
     .is_err());
+}
+
+// ---------------------------------------------------------------------------
+// R3-2: cross-artifact journal QWs and cross-epoch reads
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cross_slot_terminal_qws_are_rejected() {
+    // A's terminal codewords presented for B: the reads sit at A's
+    // canonical addresses, not B's — rejected before any authority.
+    let mut b = TestBackend::new(7);
+    let p = pass();
+    let art_b = artifact(&p, PhysicalSlot::B);
+    let art_a = artifact(&p, PhysicalSlot::A);
+    let id_a = art_a.identity();
+    let c0 = probe_at(&mut b, 10, id_a.confirmed_0_qw_address, ProbeScript::Clean(QW_CONFIRMED_0));
+    let c1 = probe_at(&mut b, 11, id_a.confirmed_1_qw_address, ProbeScript::Clean(QW_CONFIRMED_1));
+    let pd = probe_at(&mut b, 12, id_a.pending_qw_address, ProbeScript::Clean(ERASED));
+    let gen = Some(full_generation(&mut b, 3, 4));
+    match decode_lifecycle(art_b, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, F) {
+        LifecycleState::Malformed(MalformedReason::NonCanonicalJournalQw) => {}
+        other => panic!("expected Malformed(NonCanonicalJournalQw), got {}", row_name(&other)),
+    }
+}
+
+#[test]
+fn cross_epoch_terminal_reads_are_rejected() {
+    // Terminal reads from two different probe epochs (two passes) can
+    // never join one lifecycle proof.
+    let mut b7 = TestBackend::new(7);
+    let mut b8 = TestBackend::new(8);
+    let p = pass();
+    let art = artifact(&p, PhysicalSlot::A);
+    let id = art.identity();
+    let c0 = probe_at(&mut b7, 10, id.confirmed_0_qw_address, ProbeScript::Clean(QW_CONFIRMED_0));
+    let c1 = probe_at(&mut b8, 11, id.confirmed_1_qw_address, ProbeScript::Clean(QW_CONFIRMED_1));
+    let pd = probe_at(&mut b8, 12, id.pending_qw_address, ProbeScript::Clean(ERASED));
+    let gen = Some(full_generation(&mut b7, 3, 4));
+    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, F) {
+        LifecycleState::Malformed(MalformedReason::NonCanonicalJournalQw) => {}
+        other => panic!("expected Malformed(NonCanonicalJournalQw), got {}", row_name(&other)),
+    }
 }
 
 fn row_name(s: &LifecycleState) -> &'static str {

@@ -5,7 +5,7 @@
 mod common;
 
 use common::*;
-use fw_manifest::v6::{LaterLifecycleEvidence, QW_CONFIRMED_0, QW_CONFIRMED_1, QW_PENDING};
+use fw_manifest::v6::{LaterLifecycleEvidence, PhysicalSlot, QW_CONFIRMED_0, QW_CONFIRMED_1, QW_PENDING};
 use pqsigner_rollback::backend::ProbeScript;
 use pqsigner_rollback::journal::*;
 use pqsigner_rollback::qw_read::{Durability, FreshQwRead, LaunchAttribution};
@@ -150,13 +150,15 @@ fn blank_virgin_requires_clean_erased_and_no_launch() {
 #[test]
 fn terminal_set_full_surviving_and_rejections() {
     let mut b = TestBackend::new(7);
-    let key = [0x77; 32];
+    let p = pass();
+    let art = artifact(&p, PhysicalSlot::A);
+    let key = art.key();
 
     // Full: both exact.
     let c0 = probe_clean(&mut b, 0, QW_CONFIRMED_0);
     let c1 = probe_clean(&mut b, 1, QW_CONFIRMED_1);
     match decode_terminal_set(&c0, CLEAN, MAY_LAUNCH, &c1, CLEAN, MAY_LAUNCH, key) {
-        TerminalSetOutcome::Full(set) => assert_eq!(set.evidence_key(), &key),
+        TerminalSetOutcome::Full(set) => assert_eq!(set.evidence_key(), &key.digest()),
         _ => panic!("expected Full"),
     }
 

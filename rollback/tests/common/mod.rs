@@ -206,30 +206,36 @@ pub fn recovering_floor_script(t: u32, binding: StageBinding) -> FloorScript {
 // ---------------------------------------------------------------------------
 
 use pqsigner_rollback::floor::{
-    decode_floor, CompletionLaunchEvidence, FloorCell, FloorSnapshot, FloorView, StageBinding,
+    decode_floor, CompletionLaunchEvidence, FloorSnapshot, FloorView, StageBinding,
     ROUTE1_BASE0_CODEWORD,
 };
 use pqsigner_rollback::lifecycle::{decode_lifecycle, AttributedRead, LifecycleState};
 
-/// A scripted OTP/floor bank.
+/// A scripted OTP/floor bank: scripts are accumulated, then every
+/// canonical index is probed through `FloorSnapshot::probe` (the
+/// decoder's canonical constructor). Cells past the scripted prefix are
+/// canonical virgins.
 pub struct Bank {
-    pub b: ScriptedBackend,
-    reads: Vec<FreshQwRead>,
-    r1: Vec<FreshQwRead>,
+    pub b: TestBackend,
+    scripts: Vec<ProbeScript>,
+    r1_exact: bool,
 }
 
 impl Bank {
     pub fn new() -> Self {
         Bank {
             b: TestBackend::new(7),
-            reads: Vec::new(),
-            r1: Vec::new(),
+            scripts: Vec::new(),
+            r1_exact: false,
         }
     }
 
     pub fn add(&mut self, outcome: ProbeScript) {
-        let idx = self.reads.len() as u16;
-        self.reads.push(probe(&mut self.b, idx, outcome));
+        assert!(
+            self.scripts.len() < pqsigner_rollback::floor::RESERVED_ROLLBACK_QWS,
+            "bank capacity"
+        );
+        self.scripts.push(outcome);
     }
 
     pub fn clean(&mut self, bytes: [u8; 16]) {
@@ -241,65 +247,51 @@ impl Bank {
     }
 
     pub fn route1(&mut self, exact: bool) {
-        let codeword = if exact {
+        self.r1_exact = exact;
+    }
+
+    /// Load the scripts and probe a full exact-cardinality snapshot.
+    /// Attribution: clean erased reads are scripted untouched
+    /// (NO_LAUNCH → claimable virgin), everything else
+    /// may-have-launched; the virgin tail is proven-untouched.
+    pub fn snapshot(
+        &mut self,
+        fence: CompletionLaunchEvidence,
+        binding: Option<StageBinding>,
+    ) -> FloorSnapshot {
+        use pqsigner_rollback::floor::{
+            canonical_cell_addr, canonical_route1_addr, RESERVED_ROLLBACK_QWS,
+        };
+        self.b.clear_probe_scripts();
+        for (i, s) in self.scripts.iter().enumerate() {
+            assert!(self.b.script(i as u16, canonical_cell_addr(i as u16), *s));
+        }
+        for i in self.scripts.len()..RESERVED_ROLLBACK_QWS {
+            assert!(self.b.script(i as u16, canonical_cell_addr(i as u16), ProbeScript::Clean(ERASED)));
+        }
+        let codeword = if self.r1_exact {
             ROUTE1_BASE0_CODEWORD
         } else {
             ERASED
         };
-        self.r1.push(probe_route1(&mut self.b, 0, codeword));
-        self.r1.push(probe_route1(&mut self.b, 1, codeword));
+        assert!(self.b.script(60, canonical_route1_addr(0), ProbeScript::Clean(codeword)));
+        assert!(self.b.script(61, canonical_route1_addr(1), ProbeScript::Clean(codeword)));
+        let mut attrs = [(CLEAN, NO_LAUNCH); RESERVED_ROLLBACK_QWS];
+        for (i, s) in self.scripts.iter().enumerate() {
+            if !matches!(s, ProbeScript::Clean(bytes) if *bytes == ERASED) {
+                attrs[i] = (CLEAN, MAY_LAUNCH);
+            }
+        }
+        FloorSnapshot::probe(&mut self.b, fence, binding, &attrs, [(CLEAN, NO_LAUNCH); 2])
     }
 
-    /// Attribute reads per cell: clean erased reads are scripted as
-    /// untouched (NO_LAUNCH → claimable virgin), everything else as
-    /// may-have-launched.
-    fn cells_auto(&self) -> Vec<FloorCell<'_>> {
-        self.reads
-            .iter()
-            .map(|read| {
-                let launch = match read {
-                    FreshQwRead::Clean(qw) if qw.is_erased() => NO_LAUNCH,
-                    _ => MAY_LAUNCH,
-                };
-                FloorCell {
-                    read,
-                    durability: CLEAN,
-                    launch,
-                }
-            })
-            .collect()
-    }
-
-    fn route1_cells(&self) -> [FloorCell<'_>; 2] {
-        [
-            FloorCell {
-                read: &self.r1[0],
-                durability: CLEAN,
-                launch: NO_LAUNCH,
-            },
-            FloorCell {
-                read: &self.r1[1],
-                durability: CLEAN,
-                launch: NO_LAUNCH,
-            },
-        ]
-    }
-
-    /// Decode the bank into a FloorView (per-cell attribution: clean
-    /// erased reads are scripted untouched, everything else
-    /// may-have-launched).
+    /// Decode the bank into a FloorView.
     pub fn decode(
-        &self,
+        &mut self,
         fence: CompletionLaunchEvidence,
         binding: Option<StageBinding>,
     ) -> FloorView {
-        let cells = self.cells_auto();
-        let snap = FloorSnapshot {
-            cells: &cells,
-            route1: self.route1_cells(),
-            completion_fence: fence,
-            stage_binding: binding,
-        };
+        let snap = self.snapshot(fence, binding);
         decode_floor(&snap)
     }
 }
@@ -336,13 +328,63 @@ pub fn accepted_artifact(
     let art = pass
         .verify_artifact(&m, INSTALL_ID)
         .expect("test manifest is in range");
-    let c0 = probe_clean(b, 10, QW_CONFIRMED_0);
-    let c1 = probe_clean(b, 11, QW_CONFIRMED_1);
-    let pd = probe_clean(b, 12, ERASED);
+    let (c0, c1, pd) = probe_journal(
+        b,
+        &art,
+        ProbeScript::Clean(QW_CONFIRMED_0),
+        ProbeScript::Clean(QW_CONFIRMED_1),
+        ProbeScript::Clean(ERASED),
+    );
     let gen = Some(full_generation(b, 13, 14));
     let t = m.security_epoch - 1;
     match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, t) {
         LifecycleState::ConfirmedRobust(a) => a,
         _ => panic!("expected ConfirmedRobust"),
     }
+}
+
+/// A second install identity (the degraded generation's id; the repair
+/// target's INSTALL_ID must differ from it).
+pub const OLD_INSTALL_ID: [u8; 16] = [
+    0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,
+];
+
+/// A stage binding with the golden R (model default digest).
+pub fn binding(slot: PhysicalSlot, e: u32) -> StageBinding {
+    StageBinding::new(slot, GOLDEN_R, e, seq(0x99)).expect("binding range")
+}
+
+/// Probe the three lifecycle journal QWs at the artifact's canonical
+/// identity addresses (R3-2).
+pub fn probe_journal(
+    b: &mut TestBackend,
+    art: &VerifiedArtifact,
+    c0: ProbeScript,
+    c1: ProbeScript,
+    pd: ProbeScript,
+) -> (FreshQwRead, FreshQwRead, FreshQwRead) {
+    let id = art.identity();
+    (
+        probe_at(b, 30, id.confirmed_0_qw_address, c0),
+        probe_at(b, 31, id.confirmed_1_qw_address, c1),
+        probe_at(b, 32, id.pending_qw_address, pd),
+    )
+}
+
+/// Full degraded-history evidence for a prior degraded artifact at
+/// `slot` with tuple `(r, e)` (the repair target's new generation uses
+/// [`INSTALL_ID`], which differs from [`OLD_INSTALL_ID`]).
+pub fn degraded_history(
+    slot: PhysicalSlot,
+    r: u32,
+    e: u32,
+) -> pqsigner_rollback::intents::DegradedHistoryEvidence {
+    use pqsigner_rollback::intents::{DegradedHistoryEvidence, EraseRestageReceipt};
+    let prior = pqsigner_rollback::evidence::ArtifactIdentity::derive(
+        &manifest(slot, r, e),
+        OLD_INSTALL_ID,
+    )
+    .expect("prior identity");
+    let restage = EraseRestageReceipt::new(slot, prior.manifest_digest);
+    DegradedHistoryEvidence::new(prior, restage).expect("history joins")
 }

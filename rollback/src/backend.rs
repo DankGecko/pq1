@@ -60,12 +60,9 @@ mod scripted {
     use super::{Mutation, RollbackBackend};
     use crate::arm_token::ArmState;
     use crate::floor::{
-        self, CompletionLaunchEvidence, EpochBumpReceipt, FloorCell, FloorSnapshot, FloorView,
-        StageBinding,
+        self, CompletionLaunchEvidence, EpochBumpReceipt, FloorView, StageBinding,
     };
-    use crate::qw_read::{
-        Durability, FreshArrayProbe, FreshQwRead, LaunchAttribution, ProbeStatus, RawProbeResult,
-    };
+    use crate::qw_read::{Durability, FreshArrayProbe, LaunchAttribution, ProbeStatus, RawProbeResult};
 
     /// Scriptable probe script for the fake backend (Copy data only).
     /// The script sets the raw STATUS (and bytes where meaningful); the
@@ -187,6 +184,12 @@ mod scripted {
             self.token = token;
         }
 
+        /// Clear every scripted probe outcome (used before loading a
+        /// floor script for `redecode_floor`).
+        pub fn clear_probe_scripts(&mut self) {
+            self.scripts = [None; CELLS];
+        }
+
         /// Set (or replace) the floor/stage script consumed by
         /// `redecode_floor`. Replacing it between intent construction and
         /// entry is how drift tests simulate backend mutation.
@@ -277,8 +280,8 @@ mod scripted {
 
         fn begin_floor_plan(&mut self, receipt: &EpochBumpReceipt) {
             self.record(Mutation::FloorBegin {
-                target: receipt.target,
-                group: receipt.group,
+                target: receipt.target(),
+                group: receipt.group(),
             });
         }
 
@@ -295,55 +298,43 @@ mod scripted {
                 // No scripted floor state: fail CLOSED.
                 return FloorView::Unknown(floor::FloorFault::AmbiguousStage);
             };
-            // Force a fresh attributed probe of every scripted cell,
-            // then run the REAL decoder over the results.
-            let mut reads: [Option<FreshQwRead>; 32] = [const { None }; 32];
+            // Load the scripted outcomes for EVERY canonical index
+            // (unscripted tail = canonical virgin), then run the REAL
+            // decoder over a freshly probed full scan.
+            self.clear_probe_scripts();
             for (i, cell) in script.cells[..script.cells_len].iter().enumerate() {
                 if let Some(scripted) = cell {
                     let addr = floor::canonical_cell_addr(i as u16);
                     self.script(i as u16, addr, scripted.outcome);
-                    reads[i] = Some(self.fresh_probe(i as u16, addr));
                 }
             }
-            let mut r1: [Option<FreshQwRead>; 2] = [None, None];
+            for i in script.cells_len..floor::RESERVED_ROLLBACK_QWS {
+                let addr = floor::canonical_cell_addr(i as u16);
+                self.script(i as u16, addr, ProbeScript::Clean([0xFF; 16]));
+            }
             for (j, cell) in script.route1.iter().enumerate() {
                 let addr = floor::canonical_route1_addr(j);
                 self.script(60 + j as u16, addr, cell.outcome);
-                r1[j] = Some(self.fresh_probe(60 + j as u16, addr));
             }
-            let route1 = [
-                FloorCell {
-                    read: r1[0].as_ref().expect("route1 read"),
-                    durability: script.route1[0].durability,
-                    launch: script.route1[0].launch,
-                },
-                FloorCell {
-                    read: r1[1].as_ref().expect("route1 read"),
-                    durability: script.route1[1].durability,
-                    launch: script.route1[1].launch,
-                },
-            ];
-            // Dense prefix of FloorCell borrows over the fresh reads
-            // (route1[0] is only the array-init placeholder; the prefix
-            // is fully overwritten).
-            let mut cells: [FloorCell<'_>; 32] = [route1[0]; 32];
-            let mut n = 0usize;
+            let mut attrs = [(
+                Durability::DurableClean,
+                LaunchAttribution::ProvenNoLaunch,
+            ); floor::RESERVED_ROLLBACK_QWS];
             for (i, cell) in script.cells[..script.cells_len].iter().enumerate() {
-                if let (Some(read), Some(scripted)) = (reads[i].as_ref(), cell) {
-                    cells[n] = FloorCell {
-                        read,
-                        durability: scripted.durability,
-                        launch: scripted.launch,
-                    };
-                    n += 1;
+                if let Some(c) = cell {
+                    attrs[i] = (c.durability, c.launch);
                 }
             }
-            let snapshot = FloorSnapshot {
-                cells: &cells[..n],
-                route1,
-                completion_fence: script.completion_fence,
-                stage_binding: script.stage_binding,
-            };
+            let snapshot = floor::FloorSnapshot::probe(
+                self,
+                script.completion_fence,
+                script.stage_binding,
+                &attrs,
+                [
+                    (script.route1[0].durability, script.route1[0].launch),
+                    (script.route1[1].durability, script.route1[1].launch),
+                ],
+            );
             floor::decode_floor(&snapshot)
         }
     }

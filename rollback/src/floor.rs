@@ -28,9 +28,14 @@ pub const DEGRADED_THRESHOLD: u32 = 1;
 /// Finite plan size: three initial replicas plus one replacement.
 pub const PLAN_CELLS: u32 = 4;
 
-/// Maximum reserved rollback QWs the decoder scans (the model bank
-/// size). A larger snapshot fails CLOSED, never silently truncates.
-pub const MAX_ROLLBACK_CELLS: usize = 32;
+/// Reserved rollback QW bank size: the decoder scans EXACTLY this many
+/// cells (a full scan is mandatory; a prefix or overflow map fails
+/// closed).
+pub const RESERVED_ROLLBACK_QWS: usize = 32;
+/// Maximum reserved rollback QWs the decoder scans (alias of
+/// [`RESERVED_ROLLBACK_QWS`]; a larger snapshot fails CLOSED, never
+/// silently truncates).
+pub const MAX_ROLLBACK_CELLS: usize = RESERVED_ROLLBACK_QWS;
 /// Maximum tracked floor records (one per cell).
 pub const MAX_FLOOR_RECORDS: usize = 32;
 /// Maximum tracked COMPLETE records.
@@ -108,10 +113,9 @@ pub enum CompletionLaunchEvidence {
     MayHaveLaunched,
 }
 
-/// One reserved rollback QW's attributed read.
-#[derive(Clone, Copy)]
-pub struct FloorCell<'a> {
-    pub read: &'a FreshQwRead,
+/// One reserved rollback QW's attributed read (owned).
+pub struct FloorCell {
+    pub read: FreshQwRead,
     pub durability: Durability,
     pub launch: LaunchAttribution,
 }
@@ -119,24 +123,110 @@ pub struct FloorCell<'a> {
 /// The durable stage's bound candidate/manifest identity (§7.1
 /// L2536–2538: the stage binds codec/domain, prior-group identity, target
 /// and active group, candidate/manifest identity). Required whenever a
-/// stage record exists.
+/// stage record exists. Private fields: constructible only through the
+/// range-checked constructor.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct StageBinding {
-    pub slot: fw_manifest::v6::PhysicalSlot,
-    pub r: u32,
-    pub e: u32,
-    pub manifest_digest: [u8; 32],
+    slot: fw_manifest::v6::PhysicalSlot,
+    r: u32,
+    e: u32,
+    manifest_digest: [u8; 32],
 }
 
-/// The complete decoder input: every reserved rollback QW, both Route-1
-/// journal-page markers, the completion-launch fence for the (at most
-/// one) active stage, and the stage's bound candidate identity.
-pub struct FloorSnapshot<'a> {
-    pub cells: &'a [FloorCell<'a>],
-    pub route1: [FloorCell<'a>; 2],
+impl StageBinding {
+    /// The only constructor. `R`/`E` must be in `1..=0xFFFF_FFFE`.
+    pub fn new(
+        slot: fw_manifest::v6::PhysicalSlot,
+        r: u32,
+        e: u32,
+        manifest_digest: [u8; 32],
+    ) -> Option<StageBinding> {
+        let valid = |v: u32| (fw_manifest::v6::VERSION_MIN..=fw_manifest::v6::VERSION_MAX).contains(&v);
+        if !valid(r) || !valid(e) {
+            return None;
+        }
+        Some(StageBinding {
+            slot,
+            r,
+            e,
+            manifest_digest,
+        })
+    }
+
+    pub fn slot(&self) -> fw_manifest::v6::PhysicalSlot {
+        self.slot
+    }
+
+    pub fn r(&self) -> u32 {
+        self.r
+    }
+
+    pub fn e(&self) -> u32 {
+        self.e
+    }
+
+    pub fn manifest_digest(&self) -> &[u8; 32] {
+        &self.manifest_digest
+    }
+}
+
+/// The complete decoder input: exactly [`RESERVED_ROLLBACK_QWS`] cells
+/// (one per canonical reserved index), both Route-1 journal-page
+/// markers, the completion-launch fence for the (at most one) active
+/// stage, and the stage's bound candidate identity.
+///
+/// FROZEN-OTP-API-3 requires a FULL scan of every reserved rollback QW
+/// and both Route-1 pages. [`decode_floor`] enforces exact cardinality
+/// and exact per-index enumeration (see [`FloorFault::IncompleteMap`]);
+/// [`FloorSnapshot::probe`] is the canonical constructor and enumerates
+/// every canonical index exactly once through the fresh-array probe.
+pub struct FloorSnapshot {
+    /// One cell per canonical reserved index; every slot must be filled.
+    pub cells: [Option<FloorCell>; RESERVED_ROLLBACK_QWS],
+    /// The two Route-1 markers (distinct physical QWs).
+    pub route1: [FloorCell; 2],
     pub completion_fence: CompletionLaunchEvidence,
     /// Required iff a stage record is present.
     pub stage_binding: Option<StageBinding>,
+}
+
+impl FloorSnapshot {
+    /// The canonical constructor: probe EVERY canonical reserved index
+    /// `0..RESERVED_ROLLBACK_QWS` and both Route-1 markers exactly once,
+    /// attaching the caller's explicit per-index attributions. A
+    /// caller-assembled incomplete or prefix snapshot is impossible on
+    /// this path (and rejected by [`decode_floor`] on any other path).
+    pub fn probe<P: crate::qw_read::FreshArrayProbe>(
+        backend: &mut P,
+        completion_fence: CompletionLaunchEvidence,
+        stage_binding: Option<StageBinding>,
+        cell_attributions: &[(Durability, LaunchAttribution); RESERVED_ROLLBACK_QWS],
+        route1_attributions: [(Durability, LaunchAttribution); 2],
+    ) -> FloorSnapshot {
+        let mut cells: [Option<FloorCell>; RESERVED_ROLLBACK_QWS] = [const { None }; RESERVED_ROLLBACK_QWS];
+        for (i, slot) in cells.iter_mut().enumerate() {
+            let (durability, launch) = cell_attributions[i];
+            *slot = Some(FloorCell {
+                read: backend.fresh_probe(i as u16, canonical_cell_addr(i as u16)),
+                durability,
+                launch,
+            });
+        }
+        let route1 = [0usize, 1].map(|j| {
+            let (durability, launch) = route1_attributions[j];
+            FloorCell {
+                read: backend.fresh_probe(60 + j as u16, canonical_route1_addr(j)),
+                durability,
+                launch,
+            }
+        });
+        FloorSnapshot {
+            cells,
+            route1,
+            completion_fence,
+            stage_binding,
+        }
+    }
 }
 
 /// The committed group's identity, or the canonical logical base.
@@ -317,6 +407,10 @@ pub enum FloorFault {
     /// index, index/address mismatch, probe-epoch inconsistency, or a
     /// non-disjoint Route-1 pair).
     NonCanonicalMap(MapFault),
+    /// The snapshot is not a full scan: fewer than
+    /// [`RESERVED_ROLLBACK_QWS`] cells were presented (a prefix snapshot
+    /// omitting newer records would otherwise lower the floor).
+    IncompleteMap { expected: usize, got: usize },
 }
 
 /// The four mutually exclusive decoder classes (FROZEN-OTP-API-3
@@ -406,11 +500,11 @@ enum CellClass {
     Uncertain,
 }
 
-fn classify_cell(cell: &FloorCell<'_>) -> CellClass {
-    if BlankVirgin::prove(cell.read, cell.launch).is_some() {
+fn classify_cell(cell: &FloorCell) -> CellClass {
+    if BlankVirgin::prove(&cell.read, cell.launch).is_some() {
         return CellClass::Virgin;
     }
-    match cell.read {
+    match &cell.read {
         FreshQwRead::Clean(qw) => {
             if !cell.durability.is_clean() {
                 return CellClass::Uncertain;
@@ -431,10 +525,41 @@ fn classify_cell(cell: &FloorCell<'_>) -> CellClass {
     }
 }
 
-fn snapshot_digest(cells: &[FloorCell<'_>], route1: &[FloorCell<'_>; 2]) -> [u8; 32] {
+/// Route-1 marker classification (R3-6): a Route-1 QW is in the
+/// authenticated map only as canonical virgin or the exact BASE0
+/// codeword. Anything else — garbage-but-clean, corrected,
+/// uncorrectable, may-have-launched — forces `Unknown` (FROZEN-OTP-API-3
+/// L926–932).
+enum Route1Class {
+    Virgin,
+    Base0Marker,
+    Orphan,
+    Uncertain,
+}
+
+fn classify_route1(cell: &FloorCell) -> Route1Class {
+    if BlankVirgin::prove(&cell.read, cell.launch).is_some() {
+        return Route1Class::Virgin;
+    }
+    if let FreshQwRead::Clean(qw) = &cell.read {
+        if !cell.durability.is_clean() {
+            return Route1Class::Uncertain;
+        }
+        if qw.bytes() == &ROUTE1_BASE0_CODEWORD {
+            return Route1Class::Base0Marker;
+        }
+        if qw.is_erased() {
+            return Route1Class::Uncertain;
+        }
+        return Route1Class::Orphan;
+    }
+    Route1Class::Uncertain
+}
+
+fn snapshot_digest(snapshot: &FloorSnapshot) -> [u8; 32] {
     let mut h = Sha256::new();
-    for cell in cells.iter().chain(route1.iter()) {
-        match cell.read {
+    for cell in snapshot.cells.iter().flatten().chain(snapshot.route1.iter()) {
+        match &cell.read {
             FreshQwRead::Clean(qw) => {
                 h.update([0x01]);
                 h.update(qw.bytes());
@@ -453,16 +578,23 @@ fn snapshot_digest(cells: &[FloorCell<'_>], route1: &[FloorCell<'_>; 2]) -> [u8;
             }
         }
     }
+    // The digest binds the COMPLETE floor/stage state: the completion
+    // fence discriminant and the stage's bound candidate identity
+    // (R3-4), not merely the raw cell bytes.
+    h.update([match snapshot.completion_fence {
+        CompletionLaunchEvidence::ProvenNoCompletionLaunch => 0xA0,
+        CompletionLaunchEvidence::MayHaveLaunched => 0xA1,
+    }]);
+    match &snapshot.stage_binding {
+        Some(b) => {
+            h.update([0xB1, b.slot().to_u8()]);
+            h.update(b.r().to_be_bytes());
+            h.update(b.e().to_be_bytes());
+            h.update(b.manifest_digest());
+        }
+        None => h.update([0xB0]),
+    }
     h.finalize().into()
-}
-
-/// Digest helper for Route-1 marker probing in model tests.
-pub fn route1_marker_is_exact(cell: &FloorCell<'_>) -> bool {
-    matches!(
-        cell.read,
-        FreshQwRead::Clean(qw) if cell.durability.is_clean()
-            && qw.bytes() == &ROUTE1_BASE0_CODEWORD
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -470,53 +602,84 @@ pub fn route1_marker_is_exact(cell: &FloorCell<'_>) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Validate the snapshot's canonical physical map BEFORE accountancy:
-/// every `Clean` read must sit at the canonical address for its index,
-/// indices must be unique across cells and the Route-1 pair, all `Clean`
-/// reads must share one probe epoch, and the Route-1 pair must be two
-/// distinct physical QWs at their canonical pages.
-fn validate_physical_map(snapshot: &FloorSnapshot<'_>) -> Result<(), FloorFault> {
-    let mut seen: [u16; MAX_ROLLBACK_CELLS + 2] = [0; MAX_ROLLBACK_CELLS + 2];
+/// every presented read must sit at its canonical position (index ==
+/// position, canonical address for its index), indices must be unique
+/// across cells and the Route-1 pair, all `Clean` reads must share one
+/// probe epoch, and the Route-1 pair must be two distinct physical QWs
+/// at their canonical pages.
+fn validate_physical_map(snapshot: &FloorSnapshot) -> Result<(), FloorFault> {
+    let mut seen: [u16; RESERVED_ROLLBACK_QWS + 2] = [0; RESERVED_ROLLBACK_QWS + 2];
     let mut n_seen = 0usize;
     let mut epoch: Option<u32> = None;
 
-    let mut check = |qw: &crate::qw_read::CleanQw, canonical_addr: u32| -> Result<(), FloorFault> {
-        if seen[..n_seen].contains(&qw.index()) {
+    fn check(
+        seen: &mut [u16],
+        n_seen: &mut usize,
+        epoch: &mut Option<u32>,
+        qw: &crate::qw_read::CleanQw,
+        canonical_addr: u32,
+    ) -> Result<(), FloorFault> {
+        if seen[..*n_seen].contains(&qw.index()) {
             return Err(FloorFault::NonCanonicalMap(MapFault::DuplicateIndex {
                 index: qw.index(),
             }));
         }
-        seen[n_seen] = qw.index();
-        n_seen += 1;
+        seen[*n_seen] = qw.index();
+        *n_seen += 1;
         if qw.addr() != canonical_addr {
             return Err(FloorFault::NonCanonicalMap(MapFault::AddressMismatch {
                 index: qw.index(),
             }));
         }
         match epoch {
-            None => epoch = Some(qw.probe_epoch()),
-            Some(e) if e != qw.probe_epoch() => {
+            None => *epoch = Some(qw.probe_epoch()),
+            Some(e) if *e != qw.probe_epoch() => {
                 return Err(FloorFault::NonCanonicalMap(MapFault::InconsistentProbeEpoch));
             }
             _ => {}
         }
         Ok(())
-    };
+    }
 
-    for cell in snapshot.cells {
-        if let FreshQwRead::Clean(qw) = cell.read {
-            check(qw, canonical_cell_addr(qw.index()))?;
+    for (i, cell) in snapshot.cells.iter().enumerate() {
+        let Some(cell) = cell else { continue };
+        match &cell.read {
+            FreshQwRead::Clean(qw) => {
+                // A QW presented twice anywhere in the map is a
+                // duplicate; a QW at the wrong position is an
+                // index/address inconsistency.
+                if seen[..n_seen].contains(&qw.index()) {
+                    return Err(FloorFault::NonCanonicalMap(MapFault::DuplicateIndex {
+                        index: qw.index(),
+                    }));
+                }
+                if qw.index() != i as u16 {
+                    return Err(FloorFault::NonCanonicalMap(MapFault::AddressMismatch {
+                        index: qw.index(),
+                    }));
+                }
+                check(&mut seen, &mut n_seen, &mut epoch, qw, canonical_cell_addr(i as u16))?;
+            }
+            FreshQwRead::Corrected { index, .. } | FreshQwRead::Uncorrectable { index } => {
+                if *index != i as u16 {
+                    return Err(FloorFault::NonCanonicalMap(MapFault::AddressMismatch {
+                        index: *index,
+                    }));
+                }
+            }
+            FreshQwRead::AmbiguousOrFault => {}
         }
     }
     for (j, cell) in snapshot.route1.iter().enumerate() {
-        if let FreshQwRead::Clean(qw) = cell.read {
-            check(qw, canonical_route1_addr(j))?;
+        if let FreshQwRead::Clean(qw) = &cell.read {
+            check(&mut seen, &mut n_seen, &mut epoch, qw, canonical_route1_addr(j))?;
         }
     }
     // Route-1 non-disjointness: both Clean reads must be distinct QWs at
     // their own canonical pages (a duplicate index already fired above;
     // identical (index, addr) pairs are caught the same way).
     if let (FreshQwRead::Clean(a), FreshQwRead::Clean(b)) =
-        (snapshot.route1[0].read, snapshot.route1[1].read)
+        (&snapshot.route1[0].read, &snapshot.route1[1].read)
     {
         if a.index() == b.index() || a.addr() == b.addr() {
             return Err(FloorFault::NonCanonicalMap(MapFault::NonDisjointRoute1));
@@ -535,13 +698,15 @@ fn validate_physical_map(snapshot: &FloorSnapshot<'_>) -> Result<(), FloorFault>
 /// `Aborted`. Accountancy (L926–932): any nonblank/corrected/
 /// uncorrectable/may-have-launched QW outside the authenticated map
 /// forces `Unknown`; no aliasing; no mutable head oracle.
-pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
-    // Bound the bank BEFORE anything else: a larger snapshot is never
-    // silently truncated (accountancy overflow fails closed).
-    if snapshot.cells.len() > MAX_ROLLBACK_CELLS {
-        return FloorView::Unknown(FloorFault::RecordOverflow {
-            kind: RecordKind::Cell,
-            index: snapshot.cells.len() as u16,
+pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
+    // FULL scan mandatory (FROZEN-OTP-API-3): every one of the
+    // RESERVED_ROLLBACK_QWS cells must be present — a prefix or
+    // caller-trimmed map fails closed, never a lower floor.
+    let present = snapshot.cells.iter().flatten().count();
+    if present != RESERVED_ROLLBACK_QWS {
+        return FloorView::Unknown(FloorFault::IncompleteMap {
+            expected: RESERVED_ROLLBACK_QWS,
+            got: present,
         });
     }
     // Canonical physical map next: no aliasing, no misaddressed reads,
@@ -549,7 +714,28 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
     if let Err(fault) = validate_physical_map(snapshot) {
         return FloorView::Unknown(fault);
     }
-    let digest = snapshot_digest(snapshot.cells, &snapshot.route1);
+    // Route-1 accountancy (R3-6): only virgin or exact BASE0 codeword is
+    // inside the authenticated map; anything else forces Unknown.
+    let mut base_proof_ok = true;
+    for (j, cell) in snapshot.route1.iter().enumerate() {
+        match classify_route1(cell) {
+            Route1Class::Virgin => base_proof_ok = false,
+            Route1Class::Base0Marker => {}
+            Route1Class::Orphan => {
+                let index = match &cell.read {
+                    FreshQwRead::Clean(qw) => qw.index(),
+                    _ => 60 + j as u16,
+                };
+                return FloorView::Unknown(FloorFault::OrphanQw { index });
+            }
+            Route1Class::Uncertain => {
+                return FloorView::Unknown(FloorFault::UncertainQw {
+                    index: 60 + j as u16,
+                });
+            }
+        }
+    }
+    let digest = snapshot_digest(snapshot);
 
     // ---- accountancy pass -------------------------------------------------
     let mut floor_records: [(u32, u32); MAX_FLOOR_RECORDS] = [(0, 0); MAX_FLOOR_RECORDS];
@@ -563,6 +749,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
     let mut uncertain_index: Option<u16> = None;
 
     for (i, cell) in snapshot.cells.iter().enumerate() {
+        let Some(cell) = cell else { continue };
         match classify_cell(cell) {
             CellClass::Virgin => n_virgin += 1,
             CellClass::Uncertain => {
@@ -570,7 +757,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
                 uncertain_index.get_or_insert(i as u16);
             }
             CellClass::Orphan => {
-                let index = match cell.read {
+                let index = match &cell.read {
                     FreshQwRead::Clean(qw) => qw.index(),
                     _ => i as u16,
                 };
@@ -673,8 +860,6 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
         });
     }
 
-    let base_proof_ok = route1_marker_is_exact(&snapshot.route1[0])
-        && route1_marker_is_exact(&snapshot.route1[1]);
 
     match active {
         None => {
@@ -689,13 +874,13 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
                     // proven no launch anywhere (classify_cell already
                     // forced any may-have-launched cell to Uncertain, which
                     // returns above).
-                    if n_floor == 0 && base_proof_ok && n_virgin as usize == snapshot.cells.len() {
+                    if n_floor == 0 && base_proof_ok && n_virgin as usize == RESERVED_ROLLBACK_QWS {
                         FloorView::Steady(SteadyProof {
                             floor: 0,
                             group: GroupIdentity::Base0,
                             snapshot_digest: digest,
                         })
-                    } else if n_floor == 0 && n_virgin as usize == snapshot.cells.len() {
+                    } else if n_floor == 0 && n_virgin as usize == RESERVED_ROLLBACK_QWS {
                         FloorView::Unknown(FloorFault::MissingBaseProof)
                     } else {
                         // Floor records with no group structure at all.
@@ -744,7 +929,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
                 None => 0,
             };
             // FROZEN-OTP-API-3 L1009: `T > F` and checked `T == E - 1`.
-            if t == 0 || t <= prior_f || t > crate::arm_token::T_MAX || binding.e.checked_sub(1) != Some(t) {
+            if t == 0 || t <= prior_f || t > crate::arm_token::T_MAX || binding.e().checked_sub(1) != Some(t) {
                 return FloorView::Unknown(FloorFault::AmbiguousStage);
             }
             // Finite plan: PLAN_CELLS total; touched = clean + uncertain;
@@ -761,8 +946,8 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
                     prior_group,
                     target: t,
                     group: g,
-                    candidate_slot: binding.slot,
-                    candidate_digest: binding.manifest_digest,
+                    candidate_slot: binding.slot(),
+                    candidate_digest: *binding.manifest_digest(),
                     clean_records,
                     snapshot_digest: digest,
                 })
@@ -776,11 +961,11 @@ pub fn decode_floor(snapshot: &FloorSnapshot<'_>) -> FloorView {
                             floor: prior_f,
                             failed_target: t,
                             failed_group: g,
-                            failed_slot: binding.slot,
-                            failed_digest: binding.manifest_digest,
-                            failed_r: binding.r,
-                            failed_e: binding.e,
-                            aborted_release_high_water: binding.r,
+                            failed_slot: binding.slot(),
+                            failed_digest: *binding.manifest_digest(),
+                            failed_r: binding.r(),
+                            failed_e: binding.e(),
+                            aborted_release_high_water: binding.r(),
                             snapshot_digest: digest,
                         })
                     }
@@ -825,22 +1010,48 @@ pub fn classify_t(floor: u32, t: u32) -> TClassification {
 /// The read-only `T > F` preflight receipt (FROZEN-OTP-API-3 L944–953).
 /// Comparison data, NOT durable authority: the private immutable writer
 /// reparses and reverifies all raw inputs before mutation. Carries no
-/// method that performs or authorizes a write.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// method that performs or authorizes a write. Private fields: only
+/// [`preflight`] can construct one (never struct-literal-forgeable, not
+/// `Copy`-replayable).
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct EpochBumpReceipt {
-    pub floor: u32,
-    pub target: u32,
+    floor: u32,
+    target: u32,
     /// Next allocation group (model: committed group index + 1, or 1
     /// after BASE0).
-    pub group: u32,
+    group: u32,
     /// Replacement margin: virgin cells available to the plan.
-    pub margin: u32,
-    pub snapshot_digest: [u8; 32],
+    margin: u32,
+    snapshot_digest: [u8; 32],
 }
 
-/// Snapshot-bound read-only preflight. Returns `None` unless `T > F` and
-/// the bank can still fund one full initial threshold. The receipt binds
-/// the proof's own snapshot digest (currency proof for the recheck).
+impl EpochBumpReceipt {
+    pub fn floor(&self) -> u32 {
+        self.floor
+    }
+
+    pub fn target(&self) -> u32 {
+        self.target
+    }
+
+    pub fn group(&self) -> u32 {
+        self.group
+    }
+
+    pub fn margin(&self) -> u32 {
+        self.margin
+    }
+
+    pub fn snapshot_digest(&self) -> &[u8; 32] {
+        &self.snapshot_digest
+    }
+}
+
+/// Snapshot-bound read-only preflight. Returns `None` unless `T > F`,
+/// the allocation sequence can advance (fail-closed at
+/// `u32::MAX`), and the bank can still fund one full initial threshold.
+/// The receipt binds the proof's own snapshot digest (currency proof
+/// for the recheck).
 pub fn preflight(
     steady: &SteadyProof,
     target: u32,
@@ -855,7 +1066,7 @@ pub fn preflight(
     }
     let group = match steady.group() {
         GroupIdentity::Base0 => 1,
-        GroupIdentity::Group(g) => g + 1,
+        GroupIdentity::Group(g) => g.checked_add(1)?,
     };
     Some(EpochBumpReceipt {
         floor,
