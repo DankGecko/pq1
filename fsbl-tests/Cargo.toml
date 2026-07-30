@@ -21,3 +21,7 @@ publish = false
 
 [dev-dependencies]
 tempfile = "3"
+# Frozen §5 flash-geometry registry: the draft09 envelope constants that
+# agree with it (BANK1_BASE, FSBL_SPAN, FSBL_MAX_LOAD_SPAN) are consumed
+# from here (Foundation A slice FA-1.1, issue #540).
+pqsigner-geometry = { path = "../geometry" }

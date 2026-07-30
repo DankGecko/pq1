@@ -60,7 +60,7 @@ const FLASH_SECBOOTADD0R_OFF: u32 = 0x4C;
 /// option-byte authority remain open until their reviewed ceremony and silicon
 /// receipts close.
 #[allow(dead_code)]
-pub const FSBL_BASE_ADDR: u32 = flash_policy::BANK1_BASE;
+pub const FSBL_BASE_ADDR: u32 = pqsigner_geometry::BANK1_BASE;
 
 // The pure RDP/SECBOOTADD0 decode + its host unit tests live in the
 // host-compiled `sphincs_tz_shared::lockdown` (this whole `hw` module is
@@ -582,7 +582,8 @@ unsafe fn obl_launch() -> ! {
 //                  "unprovisioned" from this page's perspective.
 
 /// Base address of the SE050 admin-state page (page 125).
-pub const ADMIN_PAGE_ADDR: u32 = 0x0C0F_A000;
+pub const ADMIN_PAGE_ADDR: u32 =
+    pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, ADMIN_PAGE_NUM as u8);
 const ADMIN_PAGE_NUM: u32 = 125;
 
 // Page-125 layout: QW0 (offset 0) is unused on v6 chips (the former
@@ -756,7 +757,8 @@ pub fn is_duress_wipe_mode() -> bool {
 // writes without drama. If future chips exhibit the same issue
 // at page 124, we have page 123 still in reserve.
 
-const PIN_ATTEMPTS_PAGE_ADDR: u32 = 0x0C0F_8000;
+const PIN_ATTEMPTS_PAGE_ADDR: u32 =
+    pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, PIN_ATTEMPTS_PAGE_NUM as u8);
 const PIN_ATTEMPTS_PAGE_NUM: u32 = 124;
 
 /// Maximum counter capacity supported by the current layout. Bigger
@@ -1140,6 +1142,13 @@ pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {
     })
 }
 
+/// First byte after flash bank 2 (NS alias `0x0810_0000`, 128 × 8 KiB).
+const BANK2_END: u32 = pqsigner_geometry::BANK2_BASE
+    + pqsigner_geometry::PAGES_PER_BANK as u32 * pqsigner_geometry::PAGE_SIZE;
+/// First byte after flash bank 1 (secure alias `0x0C00_0000`).
+const BANK1_END: u32 = pqsigner_geometry::BANK1_BASE
+    + pqsigner_geometry::PAGES_PER_BANK as u32 * pqsigner_geometry::PAGE_SIZE;
+
 /// Program one quad-word to bank 2 at `addr`. Unlike
 /// `write_quadword`, this routes through NSCR so the NS watermark is
 /// honoured. `addr` must be inside bank-2 (`0x0810_0000..0x0820_0000`)
@@ -1153,7 +1162,7 @@ pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {
 /// # Safety
 /// Same shape as [`write_quadword`] but targets bank 2.
 unsafe fn write_ns_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    debug_assert!(addr >= 0x0810_0000 && addr < 0x0820_0000);
+    debug_assert!(addr >= pqsigner_geometry::BANK2_BASE && addr < BANK2_END);
     debug_assert_eq!(addr & 0xF, 0);
 
     cortex_m::interrupt::free(|_| {
@@ -1312,10 +1321,10 @@ pub unsafe fn erase_slot(slot: Slot) -> Result<(), ()> {
 /// Commits 16 bytes to flash at `addr`. Caller must ensure the address
 /// is inside the inactive A/B slot and currently erased.
 pub unsafe fn write_slot_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    if (0x0810_0000..0x0820_0000).contains(&addr) {
+    if (pqsigner_geometry::BANK2_BASE..BANK2_END).contains(&addr) {
         // SAFETY: forwarded contract; bank-2 dispatch.
         unsafe { write_ns_quadword_verified(addr, data) }
-    } else if (0x0C00_0000..0x0C10_0000).contains(&addr) {
+    } else if (pqsigner_geometry::BANK1_BASE..BANK1_END).contains(&addr) {
         // SAFETY: forwarded contract; bank-1 dispatch.
         unsafe { write_quadword_verified(addr, data) }
     } else {
@@ -1358,7 +1367,8 @@ pub unsafe fn write_slot_quadword_verified(addr: u32, data: &[u8; 16]) -> Result
 // device lifetime, ÷ 512 per cycle = ~6500 erase cycles — within the
 // 10,000-cycle minimum endurance the STM32U585 datasheet specifies.
 
-const OFFCHAIN_PAGE_ADDR: u32 = 0x0C0F_6000;
+const OFFCHAIN_PAGE_ADDR: u32 =
+    pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, OFFCHAIN_PAGE_NUM as u8);
 const OFFCHAIN_PAGE_NUM: u32 = 123;
 const OFFCHAIN_QW_SIZE: u32 = 16;
 const OFFCHAIN_CAPACITY: u32 = 512; // 8 KB / 16

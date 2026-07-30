@@ -124,8 +124,16 @@ fn positive_otp_layout_constants() {
 
 #[test]
 fn positive_bhk_page_addresses() {
-    assert!(BHK_SRC.contains("const BHK_PAGE_ADDR: u32 = 0x0C0F_C000;"));
-    assert!(BHK_SRC.contains("const BHK_PAGE_NUM: u32 = 126;"));
+    // The address is registry-derived (Foundation A slice FA-1.1); pin both
+    // the new source form AND the value it must keep computing.
+    assert!(BHK_SRC.contains(
+        "pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, BHK_PAGE_NUM as u8);"
+    ));
+    assert_eq!(
+        pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, 126),
+        0x0C0F_C000
+    );
+    assert!(BHK_SRC.contains("pub(crate) const BHK_PAGE_NUM: u32 = 126;"));
     assert!(BHK_SRC.contains("const TAMP_BHKLOCK: u32 = 1 << 30;"));
 }
 

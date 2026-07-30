@@ -97,6 +97,9 @@ pub use sphincs_c10::params::{SIGNATURE_LEN, VERIFYING_KEY_LEN};
 /// Total manifest size in bytes — one STM32U585 flash page.
 pub const MANIFEST_SIZE: usize = 8192;
 
+// The manifest spans exactly one flash page; the frozen §5 registry agrees.
+const _: () = assert!(MANIFEST_SIZE == pqsigner_geometry::PAGE_SIZE as usize);
+
 /// Secure A/B image capacity: 58 STM32U585 flash pages.
 ///
 /// This is shared by the device admission checks and host release tooling so

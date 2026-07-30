@@ -13,6 +13,12 @@ description = "PQSigner firmware-update manifest format — shared by FSBL, secu
 [dependencies]
 sha2 = { version = "0.10", default-features = false }
 sphincs-c10 = { workspace = true }
+# Frozen §5 flash-geometry registry (Draft 1.1, post-errata-4). no_std,
+# zero-dependency — compatible with the FSBL's 32 KB budget. Consumed only
+# for the compile-time MANIFEST_SIZE == PAGE_SIZE agreement check (Foundation
+# A slice FA-1.1, issue #540); the legacy 58/64-page slot capacities below
+# stay literal until the cutover slice.
+pqsigner-geometry = { path = "../geometry" }
 # Constant-time byte comparisons for the vendor-fingerprint check
 # (`verify_vendor_fpr`). The compared value is itself public, so the
 # leak is hygiene-only, but a security-critical verify path has no

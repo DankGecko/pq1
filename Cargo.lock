@@ -662,6 +662,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 name = "fw-manifest"
 version = "0.1.0"
 dependencies = [
+ "pqsigner-geometry",
  "pqsigner-tx-core",
  "proptest",
  "sha2",
@@ -1208,6 +1209,7 @@ dependencies = [
 name = "pqsigner-fsbl-tests"
 version = "0.1.0"
 dependencies = [
+ "pqsigner-geometry",
  "tempfile",
 ]
 
@@ -1679,6 +1681,7 @@ dependencies = [
  "pqsigner-domain",
  "pqsigner-erc7730",
  "pqsigner-fi",
+ "pqsigner-geometry",
  "pqsigner-pq-seal",
  "pqsigner-tx",
  "pqsigner-tx-core",

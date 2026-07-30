@@ -7,6 +7,12 @@ edition.workspace = true
 sphincs-tz-shared = { workspace = true }
 sphincs-tz-bip39  = { workspace = true, features = ["full-wordlist"] }
 fw-manifest       = { workspace = true }
+# Frozen §5 flash-geometry registry (Draft 1.1, post-errata-4): the single
+# source of truth for bank bases, page size, and page ownership. Only
+# constants whose values AGREE with the live legacy bench layout are
+# re-pointed at it (Foundation A slice FA-1.1, issue #540); the legacy A/B
+# slot/manifest constants stay literal until the cutover slice.
+pqsigner-geometry = { path = "../geometry" }
 # FI hardening primitives shared with FSBL — `secure/src/fi.rs` is a thin
 # shim over this crate, supplying the secure-world's TRNG-backed RNG.
 pqsigner-fi       = { workspace = true }

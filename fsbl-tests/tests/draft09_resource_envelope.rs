@@ -9,10 +9,10 @@
 
 #![forbid(unsafe_code)]
 
-const FSBL_ORIGIN: u64 = 0x0c00_0000;
+const FSBL_ORIGIN: u64 = pqsigner_geometry::BANK1_BASE as u64;
 const LEGACY_LINKER_CEILING: u64 = 32 * 1024;
-const FSBL_IMMUTABLE_CEILING: u64 = 40 * 1024;
-const FSBL_WARNING_LIMIT: u64 = 38_912;
+const FSBL_IMMUTABLE_CEILING: u64 = pqsigner_geometry::FSBL_SPAN as u64;
+const FSBL_WARNING_LIMIT: u64 = pqsigner_geometry::FSBL_MAX_LOAD_SPAN as u64;
 const SRAM_ORIGIN: u64 = 0x3000_0000;
 const STACK_START: u64 = 0x3000_4000;
 

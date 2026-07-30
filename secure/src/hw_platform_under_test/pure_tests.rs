@@ -76,7 +76,15 @@ fn positive_flash_key_page_127() {
 
 #[test]
 fn positive_flash_admin_page_125() {
-    assert!(FLASH_SRC.contains("pub const ADMIN_PAGE_ADDR: u32 = 0x0C0F_A000;"));
+    // The address is registry-derived (Foundation A slice FA-1.1); pin both
+    // the new source form AND the value it must keep computing.
+    assert!(FLASH_SRC.contains(
+        "pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, ADMIN_PAGE_NUM as u8);"
+    ));
+    assert_eq!(
+        pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, 125),
+        0x0C0F_A000
+    );
     assert!(FLASH_SRC.contains("const ADMIN_PAGE_NUM: u32 = 125;"));
     assert!(FLASH_SRC.contains("const WIPE_FLAG_OFFSET: u32 = 16;"));
     assert!(FLASH_SRC.contains("const WIPE_FLAG_ARMED: u8 = 0x00;"));
@@ -84,7 +92,13 @@ fn positive_flash_admin_page_125() {
 
 #[test]
 fn positive_flash_pin_attempts_page_124() {
-    assert!(FLASH_SRC.contains("const PIN_ATTEMPTS_PAGE_ADDR: u32 = 0x0C0F_8000;"));
+    assert!(FLASH_SRC.contains(
+        "pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, PIN_ATTEMPTS_PAGE_NUM as u8);"
+    ));
+    assert_eq!(
+        pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, 124),
+        0x0C0F_8000
+    );
     assert!(FLASH_SRC.contains("const PIN_ATTEMPTS_PAGE_NUM: u32 = 124;"));
     assert!(FLASH_SRC.contains("const PIN_ATTEMPTS_CAPACITY: u32 = 32;"));
     assert!(FLASH_SRC.contains("const PIN_ATTEMPTS_QW_SIZE: u32 = 16;"));
@@ -92,7 +106,13 @@ fn positive_flash_pin_attempts_page_124() {
 
 #[test]
 fn positive_flash_offchain_journal_page_123() {
-    assert!(FLASH_SRC.contains("const OFFCHAIN_PAGE_ADDR: u32 = 0x0C0F_6000;"));
+    assert!(FLASH_SRC.contains(
+        "pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, OFFCHAIN_PAGE_NUM as u8);"
+    ));
+    assert_eq!(
+        pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, 123),
+        0x0C0F_6000
+    );
     assert!(FLASH_SRC.contains("const OFFCHAIN_PAGE_NUM: u32 = 123;"));
     assert!(FLASH_SRC.contains("const OFFCHAIN_QW_SIZE: u32 = 16;"));
     assert!(FLASH_SRC.contains("const OFFCHAIN_CAPACITY: u32 = 512;"));
@@ -1106,8 +1126,17 @@ fn negative_flash_write_slot_quadword_bank_dispatch_rejects_out_of_range() {
         "pub unsafe fn write_slot_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {",
     );
     assert!(body.contains("Err(())"));
-    assert!(body.contains("(0x0810_0000..0x0820_0000)"));
-    assert!(body.contains("(0x0C00_0000..0x0C10_0000)"));
+    // The dispatch windows are registry-derived (Foundation A slice FA-1.1);
+    // pin the new source form AND the exact legacy window values the
+    // registry must keep computing.
+    assert!(body.contains("(pqsigner_geometry::BANK2_BASE..BANK2_END)"));
+    assert!(body.contains("(pqsigner_geometry::BANK1_BASE..BANK1_END)"));
+    assert_eq!(pqsigner_geometry::BANK2_BASE, 0x0810_0000);
+    assert_eq!(pqsigner_geometry::BANK1_BASE, 0x0C00_0000);
+    assert_eq!(
+        pqsigner_geometry::PAGES_PER_BANK as u32 * pqsigner_geometry::PAGE_SIZE,
+        0x0010_0000
+    );
 }
 
 #[test]

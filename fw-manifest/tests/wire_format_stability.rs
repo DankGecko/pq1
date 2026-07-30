@@ -34,7 +34,12 @@ fn negative_manifest_size_must_be_one_stm32u585_flash_page() {
 }
 
 #[test]
-fn positive_slot_capacities_match_frozen_flash_geometry() {
+fn positive_slot_capacities_match_legacy_bench_geometry() {
+    // These are the deliberate legacy bench capacities (production-fenced,
+    // serving already-signed legacy artifacts), NOT the frozen §5 spans
+    // (SECURE_SLOT_SPAN 0x72000 / NS_SLOT_SPAN 0x7A000 = 57/61 pages with
+    // the Route-1 journal pages 64/122 carved out). Cutover to the frozen
+    // geometry is tracked in issue #540.
     assert_eq!(SLOT_SECURE_CAPACITY, 58 * 8 * 1024);
     assert_eq!(SLOT_SECURE_CAPACITY, 475_136);
     assert_eq!(SLOT_NS_CAPACITY, 64 * 8 * 1024);
