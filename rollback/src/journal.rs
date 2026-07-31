@@ -275,6 +275,7 @@ pub(crate) fn surviving_install_generation(
 /// `FullTerminalSet` — two independently attributed durably-clean exact
 /// terminal replicas. The only robust terminal authority. Boot-scoped
 /// linear proof; carries the artifact's `ArtifactEvidenceKey` digest.
+#[derive(Debug)]
 pub struct FullTerminalSet {
     evidence_key: [u8; 32],
 }
@@ -299,6 +300,7 @@ pub enum TerminalReplica {
 /// replica; the other has zero authority. Repair-target evidence ONLY:
 /// never boot authority, never floor authority, never an older floor
 /// (hard design rule 4; §6.2 L2171–2172).
+#[derive(Debug)]
 pub struct SurvivingTerminalSet {
     evidence_key: [u8; 32],
     replica: TerminalReplica,

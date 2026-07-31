@@ -431,20 +431,40 @@ pub fn probe_journal(
 
 /// Full degraded-history evidence for a prior degraded artifact at
 /// `slot` with tuple `(r, e)` (the repair target's new generation uses
-/// [`INSTALL_ID`], which differs from [`OLD_INSTALL_ID`]).
+/// [`INSTALL_ID`], which differs from [`OLD_INSTALL_ID`]). The
+/// surviving-terminal degradation proof is decoded through the real
+/// lifecycle decoder (R8-4).
 pub fn degraded_history(
     slot: PhysicalSlot,
     r: u32,
     e: u32,
 ) -> pqsigner_rollback::intents::DegradedHistoryEvidence {
     use pqsigner_rollback::intents::{DegradedHistoryEvidence, EraseRestageReceipt};
-    let prior = pqsigner_rollback::evidence::ArtifactIdentity::derive(
-        &manifest(slot, r, e),
-        OLD_INSTALL_ID,
-    )
-    .expect("prior identity");
+    let p = pass();
+    let (pk_seed, pk_root) = test_key_material();
+    let m = manifest(slot, r, e);
+    let prior_art = p
+        .verify_artifact(&m, OLD_INSTALL_ID, &pk_seed, &pk_root)
+        .expect("prior artifact verifies");
+    let prior = *prior_art.identity();
+    let prior_key_digest = prior_art.key().digest();
+    // Decode the degradation proof: one exact terminal replica, the
+    // other indeterminate, at the canonical journal addresses.
+    let mut b = TestBackend::new(7);
+    let (c0, c1, pd) = probe_journal(
+        &mut b,
+        &prior_art,
+        ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_0),
+        ProbeScript::Clean(ERASED),
+        ProbeScript::Clean(ERASED),
+    );
+    let gen = Some(full_generation(&mut b, &prior_art, 3, 4));
+    let set = match decode_lifecycle(prior_art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, e - 1) {
+        LifecycleState::DegradedConfirmed(row) => row.into_set(),
+        _ => panic!("expected DegradedConfirmed for the prior artifact"),
+    };
     let restage = EraseRestageReceipt::new(slot, prior.manifest_digest);
-    DegradedHistoryEvidence::new(prior, restage).expect("history joins")
+    DegradedHistoryEvidence::new(prior, restage, set, &prior_key_digest).expect("history joins")
 }
 
 // ---------------------------------------------------------------------------

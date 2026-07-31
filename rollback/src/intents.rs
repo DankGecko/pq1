@@ -275,12 +275,31 @@ fn reverify_artifact<B: RollbackBackend>(
                 artifact.key(),
             ) {
                 crate::journal::TerminalSetOutcome::Full(set)
-                    if set.evidence_key() == &key_digest =>
-                {
-                    Ok(())
-                }
-                _ => Err(IntentError::ArtifactDrift),
+                    if set.evidence_key() == &key_digest => {}
+                _ => return Err(IntentError::ArtifactDrift),
             }
+            // R8-3: a robust row also requires state-appropriate
+            // InstallGenerationEvidence (§6.2 L2174–2178). Re-run the
+            // generation decode with terminal evidence (full or
+            // qualified surviving), bound to the artifact's key.
+            let gen = crate::lifecycle::decode_install_generation(
+                artifact,
+                crate::lifecycle::AttributedRead {
+                    read: &recheck.install_id.0,
+                    durability: recheck.install_id.1,
+                    launch: recheck.install_id.2,
+                },
+                crate::lifecycle::AttributedRead {
+                    read: &recheck.install_id_inv.0,
+                    durability: recheck.install_id_inv.1,
+                    launch: recheck.install_id_inv.2,
+                },
+                Some(fw_manifest::v6::LaterLifecycleEvidence::Terminal),
+            );
+            if gen.is_none() {
+                return Err(IntentError::ArtifactDrift);
+            }
+            Ok(())
         }
     }
 }
@@ -367,9 +386,11 @@ fn receipt_matches(steady: &SteadyProof, receipt: &EpochBumpReceipt, t: u32) -> 
         && receipt.snapshot_digest() == steady.snapshot_digest()
         && Some(receipt.group()) == expected_group
         // The margin is proof-bound: it must equal THIS proof's decoded
-        // virgin-cell count (and fund the initial threshold).
+        // virgin-cell count, and it must fund the COMPLETE frozen plan
+        // (PLAN_CELLS = three initial witnesses plus one replacement;
+        // R8-1).
         && receipt.margin() == steady.virgin_cells()
-        && receipt.margin() >= crate::floor::INITIAL_THRESHOLD
+        && receipt.margin() >= crate::floor::PLAN_CELLS
 }
 
 // ---------------------------------------------------------------------------
@@ -880,31 +901,45 @@ impl EraseRestageReceipt {
 }
 
 /// The typed degraded-history evidence §10 item 10 requires: proof that
-/// the repair target previously existed as a DEGRADED artifact (its
-/// prior [`ArtifactIdentity`]) plus a full erase/restage receipt binding
-/// that same slot and manifest digest. Consumed linearly by
-/// [`CheckedDegradedRepairIntent::new`].
-#[derive(PartialEq, Eq, Debug)]
+/// the repair target previously existed as a DEGRADED artifact — its
+/// prior [`ArtifactIdentity`] AND a surviving terminal set bound to it
+/// (R8-4: evidence of actual degradation, not a caller claim) — plus a
+/// full erase/restage receipt binding that same slot and manifest
+/// digest. Consumed linearly by [`CheckedDegradedRepairIntent::new`].
+#[derive(Debug)]
 pub struct DegradedHistoryEvidence {
     prior_identity: crate::evidence::ArtifactIdentity,
+    #[allow(dead_code)]
     restage: EraseRestageReceipt,
+    #[allow(dead_code)]
+    degradation: crate::journal::SurvivingTerminalSet,
 }
 
 impl DegradedHistoryEvidence {
-    /// Join the prior degraded identity to its erase/restage receipt.
-    /// `None` when the receipt binds a different slot or digest.
+    /// Join the prior degraded identity, its erase/restage receipt, and
+    /// the surviving terminal proof. `None` when the receipt binds a
+    /// different slot or digest, or when the surviving set's sealed key
+    /// digest does not match `prior_key_digest` (a set minted for some
+    /// other identity — or a full, non-degraded set, which cannot even
+    /// be presented in this position).
     pub fn new(
         prior_identity: crate::evidence::ArtifactIdentity,
         restage: EraseRestageReceipt,
+        degradation: crate::journal::SurvivingTerminalSet,
+        prior_key_digest: &[u8; 32],
     ) -> Option<DegradedHistoryEvidence> {
         if restage.slot() != prior_identity.slot
             || restage.prior_manifest_digest() != &prior_identity.manifest_digest
         {
             return None;
         }
+        if degradation.evidence_key() != prior_key_digest {
+            return None;
+        }
         Some(DegradedHistoryEvidence {
             prior_identity,
             restage,
+            degradation,
         })
     }
 }
@@ -914,7 +949,6 @@ impl DegradedHistoryEvidence {
 /// — admitted only with the full degraded-history evidence set.
 pub struct CheckedDegradedRepairIntent {
     floor_proof: FreshFloorProof,
-    #[allow(dead_code)]
     source: AcceptedArtifact,
     target: VerifiedArtifact,
     token: ArmToken,
@@ -988,6 +1022,9 @@ pub fn arm_degraded_artifact_repair<B: RollbackBackend>(
     intent: CheckedDegradedRepairIntent,
 ) -> Result<ProbationHandoff, IntentError> {
     let _token = intent.token;
+    // R8-4(b): the load-bearing robust source is reverified at entry,
+    // same discipline as R7-1.
+    reverify_artifact(backend, intent.source.artifact(), ArtifactExpectation::Robust)?;
     let recheck = RecheckContext {
         class: RecheckClass::SteadyOrAborted,
         floor: intent.floor_proof.floor(),

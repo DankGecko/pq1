@@ -808,3 +808,92 @@ fn non_adjacent_duplicate_group_is_unknown() {
         other => panic!("expected NonMonotoneAllocation, got {}", view_name(&other)),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Plan capacity (R8-1) and allocation cursor (R8-2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn preflight_requires_plan_cells_of_virgins() {
+    // Exactly INITIAL_THRESHOLD (3) virgins: the 4-cell plan is born
+    // dead (the 4th Reserved role could never map) → no receipt.
+    let mut bank = Bank::new();
+    for _ in 0..(RESERVED_ROLLBACK_QWS - 4) {
+        bank.clean(encode_floor_record(5, 1));
+    }
+    bank.clean(encode_complete_record(1));
+    // 28 records + complete = 29 role cells → exactly 3 virgins.
+    bank.route1(false);
+    let FloorView::Steady(proof3) = bank.decode(FENCE_OK, None) else {
+        panic!("steady")
+    };
+    assert_eq!(proof3.virgin_cells(), INITIAL_THRESHOLD);
+    assert!(preflight(&proof3, 6).is_none(), "3 virgins must not fund a 4-cell plan");
+
+    // 4 virgins → receipt mints.
+    let mut bank = Bank::new();
+    for _ in 0..(RESERVED_ROLLBACK_QWS - 5) {
+        bank.clean(encode_floor_record(5, 1));
+    }
+    bank.clean(encode_complete_record(1));
+    bank.route1(false);
+    let FloorView::Steady(proof4) = bank.decode(FENCE_OK, None) else {
+        panic!("steady")
+    };
+    assert_eq!(proof4.virgin_cells(), PLAN_CELLS);
+    let receipt = preflight(&proof4, 6).expect("4 virgins fund the plan");
+    assert_eq!(receipt.margin(), PLAN_CELLS);
+}
+
+#[test]
+fn stage_for_committed_group_is_conflicting_completion() {
+    // R8-2: a stage record for an already-committed group.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(1));
+    bank.route1(false);
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 6, COMPLETABLE_ROLES))) {
+        FloorView::Unknown(FloorFault::ConflictingCompletion) => {}
+        other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn generation_skipping_stage_is_unknown() {
+    // R8-2: committed g1 (t=5), stage g3 (skips the validated cursor g2).
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(3));
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(6, 3));
+    }
+    bank.virgin();
+    bank.route1(false);
+    let roles = [
+        (5, PlanRole::Witness),
+        (6, PlanRole::Witness),
+        (7, PlanRole::Witness),
+        (8, PlanRole::Reserved),
+    ];
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, roles))) {
+        FloorView::Unknown(FloorFault::WrongAllocationCursor { expected: 2, got: 3 }) => {}
+        other => panic!("expected WrongAllocationCursor, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn next_generation_stage_still_recovers() {
+    // R8-2: committed g1, stage g2 = the validated next generation.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(2));
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(6, 2));
+    }
+    bank.virgin();
+    bank.route1(false);
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, RECOVERING_ROLES))) {
+        FloorView::Recovering(p) => {
+            assert_eq!(p.allocation_cursor(), 2);
+            assert_eq!(p.target(), 6);
+        }
+        other => panic!("expected Recovering, got {}", view_name(&other)),
+    }
+}

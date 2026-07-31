@@ -35,8 +35,8 @@ fn row_uninstalled() {
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     match decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr_nl(&pd), None, F)
     {
-        LifecycleState::Uninstalled { artifact } => {
-            assert_eq!(artifact.r(), GOLDEN_R);
+        LifecycleState::Uninstalled(row) => {
+            assert_eq!(row.artifact().r(), GOLDEN_R);
         }
         _ => panic!("expected Uninstalled"),
     }
@@ -328,7 +328,7 @@ fn cross_epoch_terminal_reads_are_rejected() {
 
 fn row_name(s: &LifecycleState) -> &'static str {
     match s {
-        LifecycleState::Uninstalled { .. } => "Uninstalled",
+        LifecycleState::Uninstalled(_) => "Uninstalled",
         LifecycleState::Pending { .. } => "Pending",
         LifecycleState::Attempted { .. } => "Attempted",
         LifecycleState::ConfirmedRobust(_) => "ConfirmedRobust",

@@ -390,6 +390,14 @@ impl RecoveryProof {
         self.group
     }
 
+    /// The validated allocation cursor this stage was admitted under
+    /// (R8-2: the decoder admitted the stage only because its group
+    /// equals the validated next allocation generation — the committed
+    /// max group + 1, or 1 under canonical BASE0).
+    pub fn allocation_cursor(&self) -> u32 {
+        self.group
+    }
+
     /// The bound candidate's physical slot.
     pub fn candidate_slot(&self) -> fw_manifest::v6::PhysicalSlot {
         self.candidate_slot
@@ -514,6 +522,11 @@ pub enum FloorFault {
     /// group order. The allocation cursor is only ever the max
     /// VALIDATED group — never reissued.
     NonMonotoneAllocation,
+    /// The active stage's group is not the validated NEXT allocation
+    /// generation (committed max group + 1, or 1 under canonical
+    /// BASE0): a stale, already-committed, or generation-skipping stage
+    /// is never Recovering/Aborted.
+    WrongAllocationCursor { expected: u32, got: u32 },
 }
 
 /// The four mutually exclusive decoder classes (FROZEN-OTP-API-3
@@ -662,6 +675,17 @@ fn classify_route1(cell: &FloorCell) -> Route1Class {
 fn snapshot_digest(snapshot: &FloorSnapshot) -> [u8; 32] {
     let mut h = Sha256::new();
     for cell in snapshot.cells().iter().flatten().chain(snapshot.route1().iter()) {
+        // R8-5: the explicit attributions are part of the bound state —
+        // an attribution drift with identical bytes must change the
+        // digest.
+        h.update([match cell.durability {
+            Durability::DurableClean => 0xD1,
+            Durability::Ambiguous => 0xD2,
+        }]);
+        h.update([match cell.launch {
+            LaunchAttribution::ProvenNoLaunch => 0xE1,
+            LaunchAttribution::MayHaveLaunched => 0xE2,
+        }]);
         match &cell.read {
             FreshQwRead::Clean(qw) => {
                 h.update([0x01]);
@@ -1036,6 +1060,28 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                 Some(b) => b,
                 None => return FloorView::Unknown(FloorFault::AmbiguousStage),
             };
+            // R8-2: the active stage's group must equal the validated
+            // NEXT allocation generation — a stale, already-committed,
+            // or generation-skipping stage is Unknown, never
+            // Recovering/Aborted.
+            let expected_cursor = match committed {
+                Some((cg, _)) => match cg.checked_add(1) {
+                    Some(c) => c,
+                    None => {
+                        return FloorView::Unknown(FloorFault::WrongAllocationCursor {
+                            expected: u32::MAX,
+                            got: g,
+                        })
+                    }
+                },
+                None => 1,
+            };
+            if g != expected_cursor {
+                return FloorView::Unknown(FloorFault::WrongAllocationCursor {
+                    expected: expected_cursor,
+                    got: g,
+                });
+            }
             // Gather the stage's floor records; they must agree on one
             // target t > F (or > 0 with a BASE0 predecessor).
             let (prior_f, prior_group) = match committed {
@@ -1223,8 +1269,12 @@ impl EpochBumpReceipt {
 
 /// Snapshot-bound read-only preflight. Returns `None` unless `T > F`,
 /// the allocation sequence can advance (fail-closed at
-/// `u32::MAX`), and the proof's own virgin-cell count still funds one
-/// full initial threshold. The margin is PROOF-BOUND (counted by the
+/// `u32::MAX`), and the proof's own virgin-cell count still funds the
+/// COMPLETE frozen plan: [`PLAN_CELLS`] cells — three initial replica
+/// witnesses plus one replacement — because every `Reserved` role in
+/// the issued plan must map to a distinct canonically-virgin QW at
+/// decode (R8-1: at INITIAL_THRESHOLD virgins the 4-cell plan is born
+/// dead and OTP is one-way). The margin is PROOF-BOUND (counted by the
 /// decode, never caller-asserted), and the receipt binds the proof's
 /// snapshot digest (currency proof for the recheck).
 pub fn preflight(steady: &SteadyProof, target: u32) -> Option<EpochBumpReceipt> {
@@ -1232,7 +1282,7 @@ pub fn preflight(steady: &SteadyProof, target: u32) -> Option<EpochBumpReceipt> 
     if target <= floor || target > crate::arm_token::T_MAX {
         return None;
     }
-    if steady.virgin_cells() < INITIAL_THRESHOLD {
+    if steady.virgin_cells() < PLAN_CELLS {
         return None;
     }
     let group = match steady.group() {

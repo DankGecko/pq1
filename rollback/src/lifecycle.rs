@@ -91,14 +91,58 @@ impl PendingRow {
     }
 }
 
+/// A sealed artifact-only row payload (R8-6): crate-private
+/// constructor, `decode_lifecycle` is the sole producer.
+pub struct ArtifactRow {
+    artifact: VerifiedArtifact,
+}
+
+impl ArtifactRow {
+    pub(crate) fn new(artifact: VerifiedArtifact) -> ArtifactRow {
+        ArtifactRow { artifact }
+    }
+
+    /// The row's verified artifact.
+    pub fn artifact(&self) -> &VerifiedArtifact {
+        &self.artifact
+    }
+
+    /// Consume the row into the artifact.
+    pub fn into_artifact(self) -> VerifiedArtifact {
+        self.artifact
+    }
+}
+
+/// A sealed surviving-terminal-set row payload (R8-6): crate-private
+/// constructor — the floor-relation label (`F == T` vs `F < T`) cannot
+/// be forged or relabeled outside `decode_lifecycle`.
+pub struct DegradedRow {
+    set: SurvivingTerminalSet,
+}
+
+impl DegradedRow {
+    pub(crate) fn new(set: SurvivingTerminalSet) -> DegradedRow {
+        DegradedRow { set }
+    }
+
+    /// The surviving terminal set (repair-target evidence only).
+    pub fn set(&self) -> &SurvivingTerminalSet {
+        &self.set
+    }
+
+    /// Consume the row into its surviving terminal set (linear proof
+    /// consumption for the degraded-history evidence set).
+    pub fn into_set(self) -> SurvivingTerminalSet {
+        self.set
+    }
+}
+
 /// The six accepted lifecycle rows plus `Malformed` (§6.2 L2165–2172).
 pub enum LifecycleState {
     /// Verified newly installed body/full identity before activation:
     /// both terminals `BlankVirgin`, PENDING `BlankVirgin`, token
-    /// ignored. Requires `FullInstallGeneration`. (`VerifiedArtifact`
-    /// itself is only minted through `VerificationPass::verify_artifact`
-    /// — the real §7.1 check set — and this row grants no authority.)
-    Uninstalled { artifact: VerifiedArtifact },
+    /// ignored. Requires `FullInstallGeneration`. Grants no authority.
+    Uninstalled(ArtifactRow),
     /// Both terminals `BlankVirgin`; PENDING exact; token exact
     /// `ARM_READY`; `E > F`.
     Pending(PendingRow),
@@ -109,10 +153,10 @@ pub enum LifecycleState {
     ConfirmedRobust(AcceptedArtifact),
     /// `SurvivingTerminalSet`, `F == T` — degraded `CONFIRMED`.
     /// Repair-target evidence ONLY: never boot/floor authority.
-    DegradedConfirmed(SurvivingTerminalSet),
+    DegradedConfirmed(DegradedRow),
     /// `SurvivingTerminalSet`, `F < T` — degraded epoch candidate.
     /// Repair-target evidence ONLY: never boot/floor authority.
-    DegradedEpochCandidate(SurvivingTerminalSet),
+    DegradedEpochCandidate(DegradedRow),
     /// Every other combination (§6.2 L2191–2193). Ineligible; has no
     /// marker-only outgoing transition.
     Malformed(MalformedReason),
@@ -229,9 +273,9 @@ pub fn decode_lifecycle(
                 return LifecycleState::Malformed(MalformedReason::BadInstallGeneration);
             }
             return if floor == t {
-                LifecycleState::DegradedConfirmed(set)
+                LifecycleState::DegradedConfirmed(DegradedRow::new(set))
             } else if floor < t {
-                LifecycleState::DegradedEpochCandidate(set)
+                LifecycleState::DegradedEpochCandidate(DegradedRow::new(set))
             } else {
                 LifecycleState::Malformed(MalformedReason::FloorRelationViolation)
             };
@@ -281,7 +325,7 @@ pub fn decode_lifecycle(
             if !generation_matches(&generation, &artifact, false) {
                 return LifecycleState::Malformed(MalformedReason::BadInstallGeneration);
             }
-            LifecycleState::Uninstalled { artifact }
+            LifecycleState::Uninstalled(ArtifactRow::new(artifact))
         }
         MarkerObservation::Exact => {
             // Probation rows require E > F and an exact, state-matching
