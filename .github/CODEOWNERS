@@ -1,0 +1,65 @@
+# Review ownership for the files where an unreviewed change is a security event.
+#
+# WHY (external security research 2026-07-31): two distinct threats converge on
+# this file.
+#
+#   1. **CI/gate tampering.** The workflows hold `ANTHROPIC_API_KEY` and drive
+#      release artefacts, and the gate-configuration files (`.semgrep/`,
+#      `deny.toml`, `scripts/gate_enforcement.json`, `supply-chain/`) decide
+#      what CI is even allowed to fail on. A PR that quietly weakens a gate is
+#      indistinguishable from one that fixes it unless a human who owns the
+#      gate reads it.
+#
+#   2. **AI-instruction-file poisoning.** `CLAUDE.md`, `AGENTS.md`, `.claude/`
+#      and `.cursorrules` are executed-as-instructions by every coding agent
+#      that touches this repo. The May-2026 TrapDoor campaign shipped poisoned
+#      `CLAUDE.md`/`.cursorrules` files through ordinary pull requests to major
+#      projects: the payload is not code, so it survives code review that only
+#      looks at diffs of `.rs`/`.sol`. Treat a diff to these files as a change
+#      to the build system, because for an agent it is one.
+#
+# LIMITATION, stated so nobody over-reads this file: CODEOWNERS is ADVISORY
+# until "Require review from Code Owners" is enabled in branch-protection
+# settings, which needs repo-admin. Landed here so the mapping is reviewed and
+# in place; flipping the branch-protection switch is tracked separately.
+#
+# Syntax note: last matching pattern wins, so keep the broad default first.
+
+# ---------------------------------------------------------------- default ---
+*                                       @Nicola-Ceornea
+
+# --------------------------------------------- CI, gates, release integrity ---
+/.github/                               @Nicola-Ceornea
+/.github/workflows/                     @Nicola-Ceornea
+/.github/dependabot.yml                 @Nicola-Ceornea
+/.github/CODEOWNERS                     @Nicola-Ceornea
+/.gitleaks.toml                         @Nicola-Ceornea
+/.semgrep/                              @Nicola-Ceornea
+/deny.toml                              @Nicola-Ceornea
+/supply-chain/                          @Nicola-Ceornea
+/scripts/gate_enforcement.json          @Nicola-Ceornea
+/.clusterfuzzlite/                      @Nicola-Ceornea
+/rust-toolchain.toml                    @Nicola-Ceornea
+/flake.nix                              @Nicola-Ceornea
+/flake.lock                             @Nicola-Ceornea
+
+# ------------------------------------- AI-instruction files (TrapDoor class) ---
+/CLAUDE.md                              @Nicola-Ceornea
+/AGENTS.md                              @Nicola-Ceornea
+/.claude/                               @Nicola-Ceornea
+/.cursorrules                           @Nicola-Ceornea
+
+# --------------------------------------------- on-chain: addresses are final ---
+# A change under src/ moves the deployed codehash, and via CREATE2 the wallet
+# address of every user — invariant #6.
+/contracts/smart-wallet/src/            @Nicola-Ceornea
+
+# ------------------------------------------- clear-signing trust boundaries ---
+# The refused/eligible sets and pinned Merkle roots decide what the device is
+# willing to sign. Adding an entry is a security decision, not data entry.
+/secure/src/db_roots.rs                 @Nicola-Ceornea
+/secure/data/                           @Nicola-Ceornea
+
+# ---------------------------------------------- security policy + threat model ---
+/SECURITY.md                            @Nicola-Ceornea
+/docs/security/threat-model.md          @Nicola-Ceornea

@@ -1,0 +1,120 @@
+version: 2
+
+# Update automation for the four ecosystems this repo actually pins.
+#
+# WHY this exists (external security research 2026-07-31, P0):
+# `cargo-deny` (advisories + bans + sources) and `cargo-vet` already FAIL THE
+# BUILD on a known-vulnerable or unaudited dependency — that is the hard gate
+# and it stays the hard gate. What neither of them does is *propose the fix*:
+# nothing in this repo ever opens the PR that moves a SHA-pinned action or a
+# crate off a vulnerable version. That gap is why a repo can sit on a stale
+# pin for months while its policy files correctly scream about it in CI.
+# Dependabot is the proposer; cargo-deny/cargo-vet remain the deciders.
+#
+# READ THIS BEFORE MERGING A DEPENDABOT PR:
+#   * `github-actions` PRs rewrite SHA pins. The pin comment (`# v4`) on the
+#     same line is what lets Dependabot resolve the version — do not remove it.
+#     Treat every action bump as a supply-chain change: read the upstream diff,
+#     not just the tag. The tj-actions/changed-files compromise (2025) shipped
+#     through a re-pointed tag.
+#   * `cargo` PRs must still pass `cargo vet` — a new/updated crate with no
+#     audit lands in `supply-chain/config.toml` exemptions or gets audited.
+#     A green Dependabot PR is NOT a vetted dependency.
+#   * `nix` PRs move `flake.lock`, which IS the reproducible-build toolchain
+#     closure. Such a PR invalidates the byte-diff baseline by construction —
+#     review-only, land together with a re-baseline, never auto-merge.
+#
+# NOT configurable, so it stays manual: `rust-toolchain.toml`. Dependabot has
+# no `rust-toolchain` ecosystem (checked against GitHub's supported-ecosystems
+# doc on 2026-07-31 — the external research report asserted otherwise, and an
+# invalid `package-ecosystem` value errors the WHOLE config, silently
+# disabling the valid entries below). The pinned compiler moves by hand, with
+# a reproducible-build byte-diff re-baseline, because it changes codegen under
+# the FI-hardened signing path.
+#
+# Deliberately NOT configured: the vendored `contracts/smart-wallet/lib/**`
+# forge dependencies (git-pinned by `contracts/smart-wallet/foundry.lock` and
+# restored lib-exact by CI — Dependabot has no Foundry ecosystem, and letting
+# it near that tree would break the codehash-freeze tests), and
+# `contracts/smart-wallet/.github/workflows/**` (that subtree is inert — GitHub
+# only executes workflows under the repository-root `.github/workflows/`; the
+# unpinned actions there are tracked as their own issue, not auto-bumped).
+
+updates:
+  # ---------------------------------------------------------------- cargo ---
+  # Root workspace: ~40 members (secure/, nonsecure/, sphincs-c10/, the
+  # pure-logic crates, xtask, fsbl, fwsign, …). Grouped so a routine patch
+  # sweep is one reviewable PR instead of forty.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels:
+      - "priority:low"
+      - "surface:release"
+    commit-message:
+      prefix: "deps"
+      include: scope
+    groups:
+      cargo-patch:
+        patterns: ["*"]
+        update-types: ["patch"]
+      cargo-minor:
+        patterns: ["*"]
+        update-types: ["minor"]
+    ignore:
+      # Bumping these silently changes the bytes we sign with. They move on a
+      # deliberate, reviewed, repro-baselined change — never on a robot PR.
+      - dependency-name: "sha2"
+      - dependency-name: "hmac"
+      - dependency-name: "zeroize"
+      - dependency-name: "subtle"
+
+  # The fuzz workspace is intentionally EXCLUDED from the root workspace
+  # (it builds with `overflow-checks = true` in release and its own nightly
+  # toolchain), so it needs its own Dependabot entry or it never gets updates.
+  - package-ecosystem: cargo
+    directory: "/fuzz"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    labels:
+      - "priority:low"
+      - "surface:fv"
+    commit-message:
+      prefix: "deps(fuzz)"
+
+  # ------------------------------------------------------- github-actions ---
+  # Every action in `.github/workflows/` is SHA-pinned by policy. This entry
+  # is what keeps those pins from silently rotting; zizmor's `unpinned-uses`
+  # audit (workflow-security.yml) is what keeps them pinned in the first place.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels:
+      - "priority:medium"
+      - "surface:release"
+    commit-message:
+      prefix: "ci(deps)"
+
+  # ------------------------------------------------------------------ nix ---
+  # flake.lock pins the reproducible-build toolchain closure. A bump here
+  # invalidates the reproducible-build byte-diff baseline by construction, so
+  # these PRs are review-only and must be landed together with a re-baseline.
+  - package-ecosystem: nix
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    labels:
+      - "priority:medium"
+      - "surface:release"
+    commit-message:
+      prefix: "nix(deps)"

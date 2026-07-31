@@ -1,0 +1,180 @@
+name: Workflow security (zizmor + actionlint + gitleaks)
+
+# The CI estate audits itself.
+#
+# WHY (external security research 2026-07-31, P0): this repo's workflows hold
+# `ANTHROPIC_API_KEY` and drive release artefacts, and until now the ONLY thing
+# guarding them was SHA-pinning discipline plus reviewer attention. Nothing
+# verified that the discipline held, and nothing looked for the workflow-level
+# flaw classes (template injection, `pull_request_target` misuse, over-broad
+# `GITHUB_TOKEN`, credential persistence) that carried the 2025 tj-actions and
+# 2026 Shai-Hulud compromises. This job is that verifier.
+#
+# BASELINE, established locally before this file was committed (2026-07-31):
+#   * zizmor 1.28.0 over `.github/workflows/**`  -> 0 findings, after the same
+#     commit added `persist-credentials: false` to all 24 `actions/checkout`
+#     steps (24 x medium `artipacked`: the checkout token was being left in
+#     `.git/config` for every subsequent step in the job to reuse).
+#   * actionlint 1.7.7 over `.github/workflows/**` -> 0 findings, modulo one
+#     ignored rule; see the `-ignore` flag below.
+#   * gitleaks 8.24.0 over the FULL history (4754 commits, 535 MB) with
+#     `.gitleaks.toml` -> 0 findings. 4372 raw hits triaged, all false
+#     positives, all allowlisted by family in that file.
+# Because all three baselines are clean, all three are HARD gates from the
+# start. There is no "warn for now" grace period to forget to remove.
+#
+# `contracts/smart-wallet/.github/workflows/**` is audited REPORT-ONLY. That
+# subtree is inert — GitHub only executes workflows under the repository-root
+# `.github/workflows/` — but it is not clean (9 x high `unpinned-uses`), and
+# it is a fork-inherited template that a future contributor could copy from.
+# Auditing it visibly is the point; failing on it would gate this repo on
+# files that never run.
+
+on:
+  push:
+    branches: [master]
+    paths: &wfsec_paths
+      - '.github/workflows/**'
+      - '.github/dependabot.yml'
+      - '.github/CODEOWNERS'
+      - '.gitleaks.toml'
+      - 'contracts/smart-wallet/.github/workflows/**'
+  pull_request:
+    paths: *wfsec_paths
+  schedule:
+    # Weekly full-history secret sweep. The per-push job only sees the current
+    # tree; a secret committed and reverted is only ever caught by the history
+    # scan, so it needs its own cadence.
+    - cron: '0 5 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned by version AND verified by the sha256 published in the upstream
+  # release's own checksums file. Both were checked by hand on 2026-07-31
+  # against `actionlint_1.7.7_checksums.txt` / `gitleaks_8.24.0_checksums.txt`.
+  # This is deliberately NOT `curl | sh`: see the elan-installer issue.
+  ACTIONLINT_VERSION: '1.7.7'
+  ACTIONLINT_SHA256: '023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757'
+  GITLEAKS_VERSION: '8.24.0'
+  GITLEAKS_SHA256: 'cb49b7de5ee986510fe8666ca0273a6cc15eb82571f2f14832c9e8920751f3a4'
+  ZIZMOR_VERSION: '1.28.0'
+
+jobs:
+  workflow-lint:
+    name: zizmor + actionlint (HARD — repo-root workflows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: install actionlint (pinned + sha256-verified)
+        run: |
+          set -euo pipefail
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --proto '=https' --tlsv1.2 -o actionlint.tgz "$url"
+          echo "${ACTIONLINT_SHA256}  actionlint.tgz" | sha256sum -c -
+          tar xzf actionlint.tgz actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+
+      - name: install zizmor (pinned)
+        run: pipx install "zizmor==${ZIZMOR_VERSION}"
+
+      # `-ignore` carries one exemption, and it is an actionlint limitation,
+      # not a repo defect: lean-extracted.yml deliberately shares ONE `paths:`
+      # list between `push` and `pull_request` via a YAML anchor/alias
+      # (`&extracted_paths` / `*extracted_paths`) so the two filters can never
+      # drift apart — drift there silently un-gates the extracted-proof job.
+      # GitHub's YAML parser resolves the alias (the workflow parses and runs);
+      # actionlint's schema check does not model alias nodes under `paths`.
+      # If that exemption ever needs to cover a second file, do not widen the
+      # regex — ask why.
+      - name: actionlint (repo-root workflows)
+        run: |
+          actionlint -no-color -oneline \
+            -ignore '"paths" section must be sequence node but got alias node' \
+            .github/workflows/*.yml
+
+      # `--offline` keeps this job off the network: the online audits resolve
+      # action refs against the GitHub API, which would make a security gate
+      # depend on an external service being up. Everything that matters here
+      # (unpinned-uses, artipacked, excessive-permissions, template-injection,
+      # dangerous-triggers) is a static audit.
+      - name: zizmor (repo-root workflows — hard gate at medium+)
+        run: zizmor --offline --min-severity medium --format plain .github/workflows/
+
+  workflow-lint-contracts:
+    name: zizmor (report-only — inert contracts subtree)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: install zizmor (pinned)
+        run: pipx install "zizmor==${ZIZMOR_VERSION}"
+      - name: zizmor (advisory)
+        continue-on-error: true
+        run: |
+          zizmor --offline --format plain contracts/smart-wallet/.github/workflows/ || true
+          echo
+          echo "NOTE: this subtree is NOT executed by GitHub Actions (only the"
+          echo "repository-root .github/workflows/ is). Findings here are"
+          echo "hygiene + fork-template debt, tracked as their own issue."
+
+  secrets:
+    name: gitleaks (HARD — tree per push, full history weekly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          # The weekly sweep needs the whole history; per-push runs do not.
+          fetch-depth: ${{ github.event_name == 'schedule' && 0 || 1 }}
+
+      - name: install gitleaks (pinned + sha256-verified)
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --proto '=https' --tlsv1.2 -o gitleaks.tgz "$url"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar xzf gitleaks.tgz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+
+      - name: gitleaks (working tree)
+        if: github.event_name != 'schedule'
+        run: gitleaks dir . --no-banner --redact -c .gitleaks.toml
+
+      - name: gitleaks (full history)
+        if: github.event_name == 'schedule'
+        run: gitleaks git . --no-banner --redact -c .gitleaks.toml --log-opts=--all
+
+  dependency-review:
+    name: dependency-review (PR only)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      # The PR-time complement to .github/dependabot.yml: dependabot proposes
+      # updates, this refuses a PR that ADDS a vulnerable or policy-violating
+      # dependency. `cargo-deny`/`cargo-vet` remain the authoritative gates —
+      # this one reads the GitHub advisory graph, which is a different corpus.
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure

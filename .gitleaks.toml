@@ -1,0 +1,71 @@
+# gitleaks configuration for PQ1.
+#
+# WHY: GitHub's native secret scanning + push protection cover a limited set of
+# provider token formats and never scan history. This repo is key-adjacent (SE
+# transport credentials, a firmware signing key, CI API keys), so a leaked
+# secret is an existential event, not an inconvenience. gitleaks is the
+# history-capable, format-agnostic second layer.
+#
+# BASELINE (established 2026-07-31 — full `--log-opts=--all` scan of 4754
+# commits / 535 MB): 4372 raw hits, ZERO real secrets. Every hit fell into the
+# four families allowlisted below, and with this config the same scan reports
+# 0. That is the contract: **this file is tuned so that a clean scan means
+# clean.** If a scan ever reports a hit, treat it as real until proven
+# otherwise — rotate first, triage second — and only then decide whether it
+# belongs in an allowlist.
+#
+# The allowlists are deliberately narrow. Note in particular that bare 64-hex
+# strings are NOT globally allowlisted: an Ethereum private key and a seed are
+# both 64 hex, so that detection stays live everywhere except the three
+# enumerated test-vector files.
+#
+# Run it:
+#   gitleaks git . -c .gitleaks.toml --log-opts=--all     # full history
+#   gitleaks dir . -c .gitleaks.toml                      # working tree
+# CI runs this from .github/workflows/workflow-security.yml.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "PQ1 baseline: vendor sample credentials, public on-chain constants, checked-in crypto test vectors"
+
+paths = [
+  # ---- family 1: NXP SE050 Plug&Trust SDK, vendored under docs/ ----------
+  # Ships mbedTLS / FreeRTOS / AWS-IoT sample TLS credentials (tls_*_key.pem,
+  # test_certs.h, aws_clientcredential_keys.h, …). These are PUBLISHED DEMO
+  # KEYS from the vendor SDK; they are not ours and authenticate nothing in
+  # this project. 61 `private-key` hits, all here.
+  '''docs/SE050/.*''',
+
+  # ---- family 2: ERC-7730 clear-signing corpora --------------------------
+  # Upstream registry fixtures, Aave/Midas deployment address tables, chain
+  # RPC dumps. `generic-api-key` and `sourcegraph-access-token` fire on
+  # 0x-prefixed addresses and base64-looking chain data. All public.
+  '''tests/erc7730-upstream-fixtures/.*''',
+  '''tests/erc7730-semantic-evidence/.*''',
+  '''secure/data/erc7730.*''',
+
+  # ---- family 3: checked-in cryptographic test vectors -------------------
+  # 0x-prefixed 32-byte digests / SPHINCS+C10 and manifest KAT values. These
+  # are the ONLY places a bare 64-hex string is tolerated.
+  '''contracts/smart-wallet/test/test_vectors\.json''',
+  '''contracts/smart-wallet/test/jardin_test_vectors\.json''',
+  '''scripts/check_draft09_v4_vectors\.py''',
+
+  # ---- family 4: vendored / generated trees that are not ours to scan ----
+  '''contracts/smart-wallet/lib/.*''',
+  '''contracts/verification/extracted/\.lake/.*''',
+  '''target/.*''',
+]
+
+regexes = [
+  # An EVM address is public by construction — it is a hash of a public key,
+  # published on-chain, and cannot be a credential. Safe to allowlist
+  # globally; keeps USDC/WETH/router constants in firmware, tests and the
+  # WebHID companion from drowning the report.
+  '''0x[0-9a-fA-F]{40}''',
+  # Identifier literals that the generic-api-key heuristic mistakes for keys.
+  '''^ByteVec\.pad16$''',
+  '''^jardin_sub_v1$''',
+]
