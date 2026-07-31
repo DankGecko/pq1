@@ -548,7 +548,7 @@ A novel attack on the SPHINCS+ family — beyond the well-understood single-faul
 Out of scope of the wallet. The wallet signs what the user confirms on the trusted UI; chain-level ordering / sandwiching is a dapp / chain-level concern. Mitigation lives in dapp UX (slippage limits in calldata that the trusted UI displays correctly via §7.6), not in the wallet.
 
 ### 10.8 Privacy / deanonymisation (S7)
-A passive on-chain observer can correlate a wallet's deterministic CREATE2 address across chains. The same 24 words → same address on every chain is a *feature* (recovery UX); the privacy cost is acknowledged. Mitigation must come from off-device tooling (per-tx address rotation requires breaking Claim 6, which we explicitly do not do).
+**User-facing disclosure: [`docs/companion/companion-privacy-disclosure.md`](../companion/companion-privacy-disclosure.md)** (added 2026-07-31) — what the companion can and cannot see, stated plainly, plus the account-index mitigation. A passive on-chain observer can correlate a wallet's deterministic CREATE2 address across chains. The same 24 words → same address on every chain is a *feature* (recovery UX); the privacy cost is acknowledged. Mitigation must come from off-device tooling (per-tx address rotation requires breaking Claim 6, which we explicitly do not do).
 
 ### 10.9 Stuck-in-display-pipeline bugs
 If a future contract uses ABI patterns the typed-call parser doesn't handle, the user sees "⚠ BLIND SIGNING" and signs at their own risk. We do not ship a typed-call parser that decodes unfamiliar ABIs into friendly strings without a firmware-pinned descriptor / Merkle-verified binding (§7.6). This is a *feature* — refusing to invent a display is safer than inventing one wrongly.
