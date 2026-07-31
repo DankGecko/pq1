@@ -292,13 +292,21 @@ pub fn keys_are_factory_default(enc: &[u8; 16], mac: &[u8; 16], dek: &[u8; 16]) 
 /// the host can confirm the write landed. Catches a garbled / partially-torn
 /// write at write time (`HW-ASSUME-PUTKEY-ATOMIC`, #398/#386).
 ///
+/// This function is the implementation side of `HW-ASSUME-PUTKEY-KCV-RESP`:
+/// that the SE050 GP applet echoes the per-key KCVs in the PUT KEY
+/// (P1=0x0B, P2=0x81) response body at all. If the applet returns an empty
+/// body instead, this check degenerates to a status-only check and the
+/// torn-write detection it provides is not there. Unconfirmed on silicon —
+/// the falsifying test needs a sacrificial SE050 and a logic analyser on
+/// I2C2 (contracts/verification/docs/HW_ASSUMPTIONS.json).
+///
 /// Observed / spec layouts (GP 2.3.1 §11.8.2.4):
 /// - `10` bytes: `KVN(1) || KCV_enc(3) || KCV_mac(3) || KCV_dek(3)`
 /// - `9`  bytes:          `KCV_enc(3) || KCV_mac(3) || KCV_dek(3)`
 /// - `0`  bytes: the SE05x applet echoes **no** KCV — accepted here because the
 ///   `0x9000` already confirmed the chip took the write; the DEK-liveness bench
 ///   step (runbook) is the torn-DEK safety net for this case. Whether the SE050
-///   actually echoes KCVs is **`HW-CONFIRM-PUTKEY-KCV-RESP`** (the driver has
+///   actually echoes KCVs is **`HW-ASSUME-PUTKEY-KCV-RESP`** (the driver has
 ///   never exercised this path on silicon); once pinned, a `0`-length body may
 ///   become fail-closed.
 ///
@@ -1097,7 +1105,7 @@ mod tests {
         assert_eq!(verify_put_key_response(&b10, &enc, &mac, &dek), crate::fi::OK_SENTINEL);
         // 9-byte form: the three KCVs without the leading KVN.
         assert_eq!(verify_put_key_response(&b10[1..], &enc, &mac, &dek), crate::fi::OK_SENTINEL);
-        // 0-byte form: no KCV echoed → accepted (HW-CONFIRM-PUTKEY-KCV-RESP).
+        // 0-byte form: no KCV echoed → accepted (HW-ASSUME-PUTKEY-KCV-RESP).
         assert_eq!(verify_put_key_response(&[], &enc, &mac, &dek), crate::fi::OK_SENTINEL);
     }
 

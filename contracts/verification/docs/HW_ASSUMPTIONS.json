@@ -113,7 +113,7 @@
       "last_reviewed": "2026-07-17"
     },
     {
-      "id": "HW-CONFIRM-PUTKEY-KCV-RESP",
+      "id": "HW-ASSUME-PUTKEY-KCV-RESP",
       "surface": "e-se-blackbox",
       "statement": "The SE050 GP applet echoes the per-key KCVs in the PUT KEY (P1=0x0B, P2=0x81) response body, so a garbled/torn write is detectable at write time by comparing the returned KCVs against the expected key KCVs.",
       "status": "bare-tcb",
@@ -135,11 +135,11 @@
         "secure/src/se050/mod.rs (rotate_scp03_transport_to_final PUT KEY response check)",
         "secure/src/scp03_logic.rs (verify_put_key_response accepts {0,9,10})"
       ],
-      "note": "verify_put_key_response accepts a 0-length body as 'no KCV echoed' (accepted, since SW==0x9000 already confirmed the write) and verifies the {9,10}-byte KCV forms. If the bench shows KCVs ARE returned, the 0-length case becomes fail-closed. Until pinned, the KCV check catches torn/garbled writes only when the applet actually echoes KCVs; the DEK-liveness net (HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT) covers the no-echo case.",
+      "note": "verify_put_key_response accepts a 0-length body as 'no KCV echoed' (accepted, since SW==0x9000 already confirmed the write) and verifies the {9,10}-byte KCV forms. If the bench shows KCVs ARE returned, the 0-length case becomes fail-closed. Until pinned, the KCV check catches torn/garbled writes only when the applet actually echoes KCVs; the DEK-liveness net (HW-ASSUME-PUTKEY-REPUT-IDEMPOTENT) covers the no-echo case.",
       "last_reviewed": "2026-07-21"
     },
     {
-      "id": "HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT",
+      "id": "HW-ASSUME-PUTKEY-REPUT-IDEMPOTENT",
       "surface": "e-se-blackbox",
       "statement": "The SE050 accepts an in-place GP PUT KEY (KVN 0x0B) that re-installs the identical final keys, so a DEK-liveness confirm (re-PUT of the final keys wrapped under the FINAL DEK) is a safe, idempotent probe that fails closed iff the on-chip DEK is not the final DEK.",
       "status": "bare-tcb",
@@ -160,7 +160,7 @@
       "consumed_by": [
         "CLAUDE.md ship gate 'atomic durable old/new/KVN recovery proof'"
       ],
-      "note": "The DEK-liveness torn-write net is DELIBERATELY NOT shipped as live code until this confirms: it is a second in-place PUT KEY on every first boot, so if re-PUT-of-identical-keys is not accepted it would brick the flow. Pairs with HW-ASSUME-PUTKEY-ATOMIC (the irreducible atomicity question) and HW-CONFIRM-PUTKEY-KCV-RESP.",
+      "note": "The DEK-liveness torn-write net is DELIBERATELY NOT shipped as live code until this confirms: it is a second in-place PUT KEY on every first boot, so if re-PUT-of-identical-keys is not accepted it would brick the flow. Pairs with HW-ASSUME-PUTKEY-ATOMIC (the irreducible atomicity question) and HW-ASSUME-PUTKEY-KCV-RESP.",
       "last_reviewed": "2026-07-21"
     },
     {

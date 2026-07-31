@@ -441,7 +441,7 @@ impl Se050 {
             // Confirm: re-establish under FINAL. Only now is rotation "done".
             // (DEK-liveness — proving the FINAL DEK too, not just ENC/MAC — is
             // the bench-gated torn-DEK safety net for the no-KCV-echo case; see
-            // the #36 runbook / HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT.)
+            // the #36 runbook / HW-ASSUME-PUTKEY-REPUT-IDEMPOTENT.)
             self.link_bringup()?;
             self.scp03 = Scp03Session::new();
             scp03::establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac)

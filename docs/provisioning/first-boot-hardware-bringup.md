@@ -98,12 +98,12 @@ Until this phase completes, Phase-A silicon testing halts at `E0809`.
 
 ### SE050 SCP03 rotation
 
-- [ ] **`HW-CONFIRM-PUTKEY-KCV-RESP`** — drive a successful transport→final
+- [ ] **`HW-ASSUME-PUTKEY-KCV-RESP`** — drive a successful transport→final
       `PUT KEY` and capture the decrypted response body length. `{9,10}` ⇒ KCVs
       are echoed and `verify_put_key_response` checks them; `0` ⇒ no echo. **If
       KCVs ARE echoed, make the 0-length branch fail-closed**
       (`secure/src/scp03_logic.rs`).
-- [ ] **`HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT`** — on an already-rotated part,
+- [ ] **`HW-ASSUME-PUTKEY-REPUT-IDEMPOTENT`** — on an already-rotated part,
       re-`PUT KEY` the identical final keys wrapped under the FINAL DEK; a
       non-`0x9000` falsifies idempotency. **Only if accepted** may the
       DEK-liveness torn-write net be enabled as live code (it is deliberately
@@ -175,8 +175,8 @@ Until this phase completes, Phase-A silicon testing halts at `E0809`.
 |---|---|---|
 | `WRP1A_MASK_PINNED = true` | `shared/src/lockdown.rs` | Phase 1 — WRP1AR layout pin + readback |
 | `OEM_LOCK_MASK_PINNED = true` | `shared/src/lockdown.rs` | Phase 1 — OEM register pin + **positive OEM-key rejection** |
-| 0-length `verify_put_key_response` → fail-closed | `secure/src/scp03_logic.rs` | Phase 3 — `HW-CONFIRM-PUTKEY-KCV-RESP` shows KCVs echoed |
-| Enable DEK-liveness torn-write net | `secure/src/se050/mod.rs` | Phase 3 — `HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT` accepted **and** atomicity bench |
+| 0-length `verify_put_key_response` → fail-closed | `secure/src/scp03_logic.rs` | Phase 3 — `HW-ASSUME-PUTKEY-KCV-RESP` shows KCVs echoed |
+| Enable DEK-liveness torn-write net | `secure/src/se050/mod.rs` | Phase 3 — `HW-ASSUME-PUTKEY-REPUT-IDEMPOTENT` accepted **and** atomicity bench |
 | Claim invariant #10 (immutable FSBL trust root) | CLAUDE.md | Phases 1–2 + FSBL geometry/WRP ceremony/non-monolithic image gates |
 | Remove `HW-ASSUME-PUTKEY-ATOMIC` from bare-tcb | `HW_ASSUMPTIONS.json` | Phase 3 — atomicity bench (no torn DEK) |
 | Authorize any production ship | — | ALL phases + factory S-1/S-2/S-3 + the buildable-image owner sign-off |

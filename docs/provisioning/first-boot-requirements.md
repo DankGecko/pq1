@@ -156,8 +156,8 @@ Gaps between this document and the code are defects in one or the other. As of
 collapsed `ObField` codes) are **closed**; what remains OPEN is not device-side
 logic but the silicon/receipt/handoff/E140-ordering gates tracked in
 [`first-boot-provisioning.md`](first-boot-provisioning.md) (incl. the
-`OEM_LOCK_MASK_PINNED` fail-closed pin, `HW-CONFIRM-PUTKEY-KCV-RESP`, and the
-DEK-liveness `HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT` bench).
+`OEM_LOCK_MASK_PINNED` fail-closed pin, `HW-ASSUME-PUTKEY-KCV-RESP`, and the
+DEK-liveness `HW-ASSUME-PUTKEY-REPUT-IDEMPOTENT` bench).
 
 ## 8. Factory input state — exactly what the factory must have done
 

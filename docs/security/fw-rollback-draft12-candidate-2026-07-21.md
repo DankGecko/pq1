@@ -372,7 +372,7 @@ satisfied on every condition.
 3. **Their own OPEN gates** (recorded in `first-boot-provisioning.md`):
    handoff/receipt, authenticate-before-rotate, recovery-adequacy,
    E140-ordering, silicon receipts, `OEM_LOCK_MASK_PINNED` fail-closed
-   pin, `HW-CONFIRM-PUTKEY-KCV-RESP`, DEK-liveness bench. This draft's
+   pin, `HW-ASSUME-PUTKEY-KCV-RESP`, DEK-liveness bench. This draft's
    BENCH-4-before-freeze ordering constraint is compatible and stands.
 4. **OPEN-LOCK-2 shrinks** to companion-side copy: the on-device prompt
    exists; the companion text and the "post-lock genuineness =

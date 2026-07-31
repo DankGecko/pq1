@@ -313,12 +313,12 @@ remain OPEN.
 
 ### New bench items (fold into the runbook above)
 
-6. **`HW-CONFIRM-PUTKEY-KCV-RESP`** — does the SE050 GP applet echo the per-key
+6. **`HW-ASSUME-PUTKEY-KCV-RESP`** — does the SE050 GP applet echo the per-key
    KCVs in the `PUT KEY` response body? `verify_put_key_response` accepts body
    lengths `{9, 10}` (KCV forms, verified) and `0` (no echo → accepted, since
    `SW==0x9000` already confirmed the write). If the bench shows KCVs ARE
    returned, make the `0`-length case fail-closed.
-7. **DEK-liveness / `HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT`** — the resume/confirm
+7. **DEK-liveness / `HW-ASSUME-PUTKEY-REPUT-IDEMPOTENT`** — the resume/confirm
    re-establishes SCP03 under the FINAL **ENC/MAC only**, so a torn write that
    left the DEK at transport is invisible until the next re-rotation
    (`HW-ASSUME-PUTKEY-ATOMIC`, #398/#386). The firmware-side safety net (a
