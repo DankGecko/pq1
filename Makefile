@@ -3928,6 +3928,17 @@ optiga-oid-ceremony: ## Fail closed if a live doc carries a stale (destructive) 
 	python3 scripts/check_optiga_oid_ceremony.py
 
 SEMGREP ?= $(shell command -v semgrep 2>/dev/null || echo $(HOME)/.venvs/semgrep/bin/semgrep)
+prod-symbol-audit: ## Binary-level audit of a firmware ELF for never-ship symbols/strings (ELF=path)
+	@echo "==> prod-symbol-audit: self-test first (a detector nobody has watched"
+	@echo "    fire is not a detector), then the artifact itself"
+	scripts/prod_symbol_audit.sh --self-test
+	@test -n "$(ELF)" || { echo "ERROR: pass ELF=<path>. Example:"; \
+		echo "  make prod-symbol-audit ELF=target/pqsigner-release/secure.elf"; exit 2; }
+	scripts/prod_symbol_audit.sh "$(ELF)"
+
+prod-symbol-audit-selftest: ## Prove the binary audit can fail (two-sided control)
+	scripts/prod_symbol_audit.sh --self-test
+
 invisible-unicode: ## Refuse zero-width / bidi-override codepoints in tracked text files
 	@echo "==> invisible-unicode: zero-width + Trojan-Source bidi scan"
 	@echo "    (self-test first — a gate nobody has watched fail is a gate"
