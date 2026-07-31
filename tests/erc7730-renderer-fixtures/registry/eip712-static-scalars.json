@@ -1,0 +1,20 @@
+{
+  "context": {
+    "eip712": {
+      "deployments": [{ "chainId": 1, "address": "0xfe0000000000000000000000000000000000fe02" }],
+      "domain": { "name": "PQSignerRendererFixture" }
+    }
+  },
+  "metadata": { "owner": "PQSigner renderer fixtures" },
+  "display": {
+    "formats": {
+      "Ballot(uint256 proposalId,uint8 support)": {
+        "intent": "Fixture ballot",
+        "fields": [
+          { "path": "proposalId", "label": "Proposal", "format": "raw" },
+          { "path": "support", "label": "Support", "format": "raw" }
+        ]
+      }
+    }
+  }
+}

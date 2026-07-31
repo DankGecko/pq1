@@ -103,6 +103,46 @@ pub(super) fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
     })
 }
 
+/// Build a registry from the CHECKED-IN synthetic renderer fixtures in
+/// `tests/erc7730-renderer-fixtures/`.
+///
+/// WHY THIS EXISTS. Renderer tests must not be hosted on the production
+/// catalogue. They were, and it cost 84 commits of red CI: the #498 EIP-712
+/// reconciliation quarantined 24 descriptor sources (`reason_code`s recorded in
+/// `tests/erc7730-semantic-evidence/eip712-reconciliation/manifest.json`), five
+/// of which happened to be the fixtures these tests used. The renderer did not
+/// change; its test data was withdrawn from the catalogue by an unrelated and
+/// entirely correct policy decision.
+///
+/// Coupling renderer coverage to catalogue membership is the wrong dependency.
+/// These fixtures are ours, they are not shipped, they sit at addresses no
+/// deployment uses, and curation policy cannot take them away.
+///
+/// They are compiled by the SAME `dbgen` path as production descriptors, so
+/// they exercise real compiled IR rather than hand-assembled bytes.
+pub(super) fn build_fixture_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
+    static FIXTURES: std::sync::OnceLock<dbgen::erc7730::Erc7730BuildResult> =
+        std::sync::OnceLock::new();
+    FIXTURES.get_or_init(|| {
+        let root = workspace_root();
+        let dir = root.join("tests/erc7730-renderer-fixtures/registry");
+        let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+            .expect("build ERC-20 capability set");
+        let (res, _skips) = dbgen::erc7730::build_db_tolerant_with_erc20_capabilities(
+            &dir,
+            &root.join("secure/data/erc7730/policy.toml"),
+            None,
+            &erc20.capabilities,
+        )
+        .expect("build synthetic renderer-fixture corpus");
+        assert!(
+            !res.entries.is_empty(),
+            "fixture corpus compiled to nothing - the fixtures or the compiler moved"
+        );
+        res
+    })
+}
+
 /// Build a compiler-authenticated C1 `string` descriptor, then coherently
 /// change both its authenticated dynamic-kind and terminal-kind TLVs
 /// to `bytes`. Production dbgen refuses to emit arbitrary dynamic `bytes`; this
@@ -8131,13 +8171,16 @@ fn positive_lombard_lbtc_permit_binds_every_static_word_on_both_deployments() {
             "LBTC receipt must bind the complete trusted-display range for {source_name}"
         );
         assert_all_pages_printable(&rendered.pages);
+        // Both deployments now declare "Submit permit"; the mainnet/sepolia
+        // split this used to assert disappeared when the Lombard descriptors
+        // were refreshed (6d4fa6bb). The renderer renders what the
+        // authenticated descriptor says, so this assertion tracks
+        // `calldata-lbtc-{mainnet,sepolia}.json` and does not get to disagree
+        // with them.
         assert_eq!(
             page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
-            if chain_id == 1 {
-                "Submit permit"
-            } else {
-                "Permit"
-            }
+            "Submit permit",
+            "intent must match the authenticated descriptor for chain {chain_id}"
         );
         assert_full_address_field_page(&rendered.pages, "Owner", &owner);
         assert_full_address_field_page(&rendered.pages, "Spender", &spender);
@@ -8285,12 +8328,20 @@ fn positive_lombard_lbtc_mainnet_redeem_is_rendered_as_a_burn_request() {
         .exact_match(&mutated.transcript_receipt));
 }
 
+/// A narrow `uintN` EIP-712 word must reject dirty high-order padding.
+///
+/// REHOSTED 2026-07-31 from `eip712-tally-ethereum-bravo-governor.json`, which
+/// the #498 reconciliation quarantined (`missing-fixed-block-authority`) so it
+/// emits no leaf. The property is about the RENDERER's word decoding, not about
+/// Tally, so it now runs on a synthetic fixture that curation cannot withdraw.
+/// No production EIP-712 survivor declares a `uint8` — Permit2 covers dirty
+/// `uint160` only — so without the fixture this coverage would simply be gone.
 #[test]
-fn tally_ballot_uint8_support_rejects_dirty_eip712_padding() {
-    let res = build_registry();
-    let entry = find_leaf(res, "eip712-tally-ethereum-bravo-governor.json", 1);
+fn eip712_uint8_word_rejects_dirty_high_order_padding() {
+    let res = build_fixture_registry();
+    let entry = find_leaf(res, "eip712-static-scalars.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Tally Ballot leaf");
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify fixture Ballot leaf");
     let primary_type_hash = keccak256(b"Ballot(uint256 proposalId,uint8 support)");
 
     let mut encoded_data = std::vec![0u8; 64];
@@ -8612,7 +8663,7 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
 
 /// Constant-annotation field (path-less `{value, label}`): the registry
 /// yield.xyz USDe-vault `deposit(uint256,address)` descriptor carries
-/// `{ "label": "Share ticker", "format": "raw", "value":
+/// `{ "label": "Shares received", "format": "raw", "value":
 /// "$.metadata.constants.vaultTicker" }`, which the host resolves to the
 /// literal "stk-USDe" and the device renders verbatim under its label — no
 /// calldata binding. This is the construct the ERC-4626/7540 vault templates
@@ -8637,7 +8688,7 @@ fn positive_wsteth_wrap_renders_constant_annotation_field() {
     let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
     assert_all_pages_printable(&pages);
 
-    let page = find_page_by_label(&pages, "Share ticker");
+    let page = find_page_by_label(&pages, "Shares received");
     let rows = page_strs(&pages, page);
     assert!(
         rows.iter().any(|r| r.contains("stk-USDe")),
@@ -10144,10 +10195,18 @@ fn belt_rejects_all_hidden_contract_format() {
     }
 }
 
+/// The V2 two-pass EIP-712 transcript binds BOTH the authenticated static text
+/// (intent, and the dev-unattested warning) and every displayed field value.
+///
+/// REHOSTED 2026-07-31 from `eip712-tally-ethereum-pool-token.json`, quarantined
+/// by #498 (`missing-fixed-block-authority`). The property under test is the
+/// transcript mechanism, not PoolTogether, so it now runs on a synthetic
+/// flat-static EIP-712 fixture. That is strictly better than picking another
+/// production descriptor: the next curation pass cannot take this one away.
 #[test]
 fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
-    let res = build_registry();
-    let entry = find_leaf(res, "eip712-tally-ethereum-pool-token.json", 1);
+    let res = build_fixture_registry();
+    let entry = find_leaf(res, "eip712-static-scalars.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify EIP-712 leaf");
     assert!(matches!(verified.ir.context_kind, ContextKind::Eip712));
@@ -10158,10 +10217,11 @@ fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
         .expect("one format")
         .expect("valid format");
 
+    // Ballot(uint256 proposalId, uint8 support) - two static head words.
+    assert_eq!(format.static_head_words, 2, "fixture shape changed");
     let mut encoded_data = vec![0u8; format.static_head_words as usize * 32];
-    encoded_data[12..32].copy_from_slice(&[0x11; 20]);
-    encoded_data[32..64].copy_from_slice(&u256_from_u64(7).0);
-    encoded_data[64..96].copy_from_slice(&u256_from_u64(1_800_000_000).0);
+    encoded_data[..32].copy_from_slice(&u256_from_u64(7).0); // proposalId
+    encoded_data[63] = 1; // support: uint8
 
     let resolver = NameResolver::new();
     let (mut pages, proof) = super::erc7730_secure_shim::render_erc7730_eip712_pages_checked(
@@ -10175,8 +10235,8 @@ fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
     )
     .expect("checked V2 EIP-712 render");
     assert_all_pages_printable(&pages);
-    assert!(dump_pages(&pages).contains("POOL token"));
-    let field_page = find_page_by_label(&pages, "Delegatee");
+    assert!(dump_pages(&pages).contains("Fixture ballot"));
+    let field_page = find_page_by_label(&pages, "Proposal");
 
     append_fingerprint_for_test(&mut pages, Erc8213Kind::Eip712Final([0x77; 32]))
         .expect("handler fingerprint suffix fits");
@@ -10219,439 +10279,213 @@ fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// Schema-v6 exact EIP-712 string preimages — production catalogue evidence.
+// EIP-712 string-preimage authority: DORMANT, and pinned that way.
+//
+// This section used to be headed "production catalogue evidence" and asserted
+// an exact positive inventory of production EIP-712 string-preimage leaves. It
+// asserted the opposite of what this repo ships, and had done since the #498
+// reconciliation, 84 commits before anyone noticed:
+//
+//   * `dbgen/src/erc7730.rs`:
+//         const EIP712_STRING_PREIMAGE_ENROLLMENTS: [..; 0] = [];
+//         "Production string-preimage authority is intentionally empty."
+//     String-preimage authority is compiled-in and per-(descriptor, deployment,
+//     type, source). It is not descriptor-driven, so no catalogue edit can
+//     grant it — and today it grants nothing.
+//   * `dbgen/tests/erc7730_roundtrip.rs`
+//     `production_catalogue_has_no_eip712_string_preimage_authority()` asserts
+//     exactly that, and passes.
+//   * The five descriptors this section rendered (FlyingTulip SpotOrderCancel,
+//     Lens LensHub, Rarible 721/1155, Tally pool-token/bravo-governor) are
+//     quarantined with recorded `reason_code`s in
+//     `tests/erc7730-semantic-evidence/eip712-reconciliation/manifest.json`.
+//
+// So the V3 multi-page string-preimage renderer is real, compiled, and
+// UNREACHABLE from any shipped descriptor. What follows keeps that honest in
+// both directions: it pins the dormancy, and it fails loudly the moment the
+// dormancy ends without the render coverage coming back with it.
+//
+// WHY THE V3 COVERAGE IS NOT RE-HOSTED ON A SYNTHETIC FIXTURE. It cannot be,
+// without weakening the boundary that makes the dormancy true. Reaching
+// `render_erc7730_eip712_pages_v3`'s string path requires an entry in
+// `EIP712_STRING_PREIMAGE_ENROLLMENTS`, which is compiled into dbgen and
+// asserted empty. Serving these tests would mean either adding a fake
+// production enrollment, or threading a table override through the production
+// compile path — i.e. building a mechanism whose only purpose is to grant
+// string-preimage authority that production is designed never to grant. The
+// coverage is not worth the mechanism. dbgen keeps unit-level coverage of the
+// enrollment logic via its own `synthetic_eip712_string_enrollment()` and the
+// `..._for_in()` seam, which needs no such hole.
+//
+// Everything that CAN live on a synthetic fixture now does — see
+// `build_fixture_registry()` and `tests/erc7730-renderer-fixtures/`.
 // ───────────────────────────────────────────────────────────────────────
 
-const FT_CANCEL_SOURCE: &str = "eip712-SpotOrderCancel.json";
-const LENS_SOURCE: &str = "eip712-lens-lenshub.json";
-const RARIBLE_721_SOURCE: &str = "eip712-rarible-erc-721.json";
-const RARIBLE_1155_SOURCE: &str = "eip712-rarible-erc-1155.json";
-const CANCEL_ORDER_SIG: &str = "CancelOrder(string orderId)";
-const TPSL_CANCEL_SIG: &str =
-    "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)";
-const LENS_QUOTE_SIG: &str =
-    "Quote(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256 nonce,uint256 deadline)";
-const RARIBLE_721_SIG: &str =
-    "Mint721(uint256 tokenId,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)";
-const RARIBLE_1155_SIG: &str =
-    "Mint1155(uint256 tokenId,uint256 supply,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)";
-
-fn evidence_record(bytes: &[u8]) -> Vec<u8> {
-    let mut record = Vec::with_capacity(2 + bytes.len());
-    record.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
-    record.extend_from_slice(bytes);
-    record
-}
-
-fn append_struct_array_record(blob: &mut Vec<u8>, elements: &[Vec<u8>]) {
-    blob.extend_from_slice(&(elements.len() as u16).to_be_bytes());
-    for element in elements {
-        blob.extend_from_slice(&(element.len() as u16).to_be_bytes());
-        blob.extend_from_slice(element);
-    }
-}
-
-fn encoded_words(words: &[[u8; 32]]) -> Vec<u8> {
-    words.iter().flat_map(|word| word.iter().copied()).collect()
-}
-
-fn part_ed(account: [u8; 20], value: u64) -> Vec<u8> {
-    let mut encoded = vec![0u8; 64];
-    encoded[12..32].copy_from_slice(&account);
-    encoded[56..64].copy_from_slice(&value.to_be_bytes());
-    encoded
-}
-
-fn render_registry_eip712_v3(
-    entry: &dbgen::erc7730::Emitted,
-    type_hash: &[u8; 32],
-    encoded_data: &[u8],
-    evidence: &[u8],
-) -> Result<Pages, crate::tx::erc7730_render::RenderErr> {
-    let registry = build_registry();
-    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("production leaf verifies");
-    super::erc7730::render_erc7730_eip712_pages_v3(
-        entry.chain_id,
-        &entry.contract,
-        type_hash,
-        encoded_data,
-        evidence,
-        &verified,
-        None,
-        &NameResolver::new(),
-    )
-}
-
-fn assert_exact_string_pages(pages: &Pages, label: &str, expected: &[u8]) {
-    let indices: Vec<usize> = pages
-        .as_slice()
-        .iter()
-        .enumerate()
-        .filter_map(|(index, page)| (row_str(&page[0]) == label).then_some(index))
-        .collect();
-    let total = expected.len().max(1).div_ceil(2 * DISPLAY_COLS);
-    assert_eq!(indices.len(), total, "string page count for {label:?}");
-    for (part, index) in indices.into_iter().enumerate() {
-        let start = part * 2 * DISPLAY_COLS;
-        let end = (start + 2 * DISPLAY_COLS).min(expected.len());
-        let chunk = &expected[start..end];
-        if expected.is_empty() {
-            assert_eq!(row_str(&pages.buf[index][1]), "<empty>");
-            assert!(pages.buf[index][2].iter().all(|byte| *byte == b' '));
-        } else {
-            let first = chunk.len().min(DISPLAY_COLS);
-            assert_eq!(&pages.buf[index][1][..first], &chunk[..first]);
-            assert!(pages.buf[index][1][first..].iter().all(|byte| *byte == b' '));
-            let second = chunk.len().saturating_sub(DISPLAY_COLS);
-            assert_eq!(
-                &pages.buf[index][2][..second],
-                &chunk[first..first + second]
-            );
-            assert!(pages.buf[index][2][second..].iter().all(|byte| *byte == b' '));
-        }
-        assert_eq!(
-            row_str(&pages.buf[index][3]),
-            format!("{}/{} {} bytes", part + 1, total, expected.len())
-        );
-    }
-}
-
+/// The shipped catalogue must contain NO EIP-712 leaf carrying string
+/// preimages. Secure-side mirror of dbgen's
+/// `production_catalogue_has_no_eip712_string_preimage_authority`, checked here
+/// at the layer that would actually paint them.
+///
+/// Two gates fail differently, which is the point: dbgen's checks the
+/// enrollment table, this checks the compiled IR that reaches the device.
 #[test]
-fn production_eip712_string_preimage_inventory_is_exact_and_canonical() {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use pqsigner_erc7730::ir::{FormatOp, PathOp, Visibility};
-    use pqsigner_erc7730::render::policy::{ParamMask, TerminalKind};
-
-    let hashes = [
-        (CANCEL_ORDER_SIG, vec![0u16]),
-        (TPSL_CANCEL_SIG, vec![1u16, 2]),
-        (LENS_QUOTE_SIG, vec![1u16]),
-        (RARIBLE_721_SIG, vec![1u16]),
-        (RARIBLE_1155_SIG, vec![2u16]),
-    ];
-    let expected_slots: BTreeMap<[u8; 32], Vec<u16>> = hashes
-        .iter()
-        .map(|(signature, slots)| (keccak256(signature.as_bytes()), slots.clone()))
-        .collect();
-    let expected_combos: BTreeSet<(String, u64, String, [u8; 32])> = [
-        (FT_CANCEL_SOURCE, 1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8", CANCEL_ORDER_SIG),
-        (FT_CANCEL_SOURCE, 1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8", TPSL_CANCEL_SIG),
-        (FT_CANCEL_SOURCE, 146, "109ae72778a0260571b9767477204f1ce41fbdff", CANCEL_ORDER_SIG),
-        (FT_CANCEL_SOURCE, 146, "109ae72778a0260571b9767477204f1ce41fbdff", TPSL_CANCEL_SIG),
-        (LENS_SOURCE, 137, "db46d1dc155634fbc732f92e853b10b288ad5a1d", LENS_QUOTE_SIG),
-        (RARIBLE_721_SOURCE, 1, "c9154424b823b10579895ccbe442d41b9abd96ed", RARIBLE_721_SIG),
-        (RARIBLE_1155_SOURCE, 1, "b66a603f4cfe17e3d27b87a8bfcad319856518b8", RARIBLE_1155_SIG),
-    ]
-    .into_iter()
-    .map(|(source, chain, contract, signature)| {
-        (source.to_string(), chain, contract.to_string(), keccak256(signature.as_bytes()))
-    })
-    .collect();
-
+fn production_eip712_string_preimage_authority_is_empty() {
     let registry = build_registry();
-    let mut observed_combos = BTreeSet::new();
-    let mut descriptors = BTreeSet::new();
-    let mut distinct_formats = BTreeSet::new();
-    let mut distinct_members = BTreeSet::new();
-    let mut deployment_members = 0usize;
+    let mut offenders = std::vec::Vec::new();
+    let mut eip712_leaves = 0usize;
     for entry in &registry.entries {
-        let parsed = Erc7730Ir::parse(&entry.ir_bytes).expect("generated production IR parses");
-        let has_strings = parsed
-            .format_iter()
-            .any(|format| format.expect("format parses").string_preimage_count != 0);
-        if !has_strings {
+        let parsed = Erc7730Ir::parse(&entry.ir_bytes).expect("production IR parses");
+        if !matches!(parsed.context_kind, ContextKind::Eip712) {
             continue;
         }
-        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
-        let verified = verify_erc7730_bundle(&bundle, &registry.root)
-            .expect("string-preimage production leaf verifies");
-        let source = entry
-            .source
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("source filename");
-        descriptors.insert(source.to_string());
-        for format in verified.ir.format_iter() {
+        eip712_leaves += 1;
+        for format in parsed.format_iter() {
             let format = format.expect("format parses");
-            if format.string_preimage_count == 0 {
-                continue;
+            if format.string_preimage_count != 0 {
+                offenders.push(std::format!(
+                    "{} chain={} count={}",
+                    entry.source.display(),
+                    entry.chain_id,
+                    format.string_preimage_count
+                ));
             }
-            observed_combos.insert((
-                source.to_string(),
-                entry.chain_id,
-                hex::encode(entry.contract),
-                format.type_hash,
-            ));
-            distinct_formats.insert(format.type_hash);
-            let expected = expected_slots
-                .get(&format.type_hash)
-                .unwrap_or_else(|| panic!("unexpected string format 0x{}", hex::encode(format.type_hash)));
-            assert_eq!(format.string_preimage_count as usize, expected.len());
-            let mut seen = Vec::new();
-            for field in format.fields() {
-                let field = field.expect("field parses");
-                let params = pqsigner_erc7730::render::params::parse(&verified.ir, field.param_off)
-                    .expect("field params parse");
-                let Some(ordinal) = params.eip712_string_preimage_ordinal else {
-                    continue;
-                };
-                assert_eq!(ordinal as usize, seen.len());
-                assert_eq!(field.format_op, FormatOp::Raw as u8);
-                assert_eq!(params.visibility, Visibility::Always);
-                assert_eq!(params.terminal_kind, Some(TerminalKind::Eip712StringHashWord));
-                assert_eq!(params.policy_mask(), ParamMask::EIP712_STRING_PREIMAGE);
-                assert!(params.dynamic_kind.is_none());
-                let path = verified.ir.path_bytes(field.path_off).expect("direct member path");
-                assert_eq!(path.len(), 4);
-                assert_eq!(path[0], PathOp::RootStructured as u8);
-                assert_eq!(path[1], PathOp::FieldIdx as u8);
-                let slot = u16::from_be_bytes([path[2], path[3]]);
-                assert!(slot < format.static_head_words);
-                assert_eq!(slot, expected[ordinal as usize]);
-                seen.push(slot);
-                distinct_members.insert((format.type_hash, slot));
-                deployment_members += 1;
-            }
-            assert_eq!(&seen, expected);
         }
     }
-
-    assert_eq!(observed_combos, expected_combos);
-    assert_eq!(descriptors.len(), 4, "exact descriptor inventory");
-    assert_eq!(observed_combos.len(), 7, "deployment-format combinations");
-    assert_eq!(distinct_formats.len(), 5, "distinct enrolled formats");
-    assert_eq!(distinct_members.len(), 6, "distinct marked members");
-    assert_eq!(deployment_members, 9, "deployment-expanded marked members");
+    // NON-VACUITY. "No leaf carries preimages" is trivially true of an empty
+    // set. If the catalogue ever stops emitting EIP-712 leaves entirely, this
+    // test must fail rather than pass by looking at nothing.
+    assert!(
+        eip712_leaves > 0,
+        "no EIP-712 leaves were examined - this assertion would pass vacuously"
+    );
+    assert!(
+        offenders.is_empty(),
+        "EIP-712 string-preimage authority is supposed to be dormant, but these \
+         leaves carry preimages: {offenders:?}.\n\
+         If this is a deliberate re-enrollment, it is ALSO the moment to restore \
+         the V3 render coverage this file dropped on 2026-07-31: exact empty and \
+         trailing-space preimages, two-string stream ordering/omission/extra-byte/\
+         mutation refusal, multi-page content URIs, and the mixed \
+         string-plus-nested-array page-budget boundary. Re-enrolling without them \
+         ships an unexercised painter."
+    );
 }
 
+/// Every source the #498 reconciliation quarantined must emit no leaf.
+///
+/// This is the property the deleted tests were accidentally testing in reverse.
+/// It is cheap, it is the actual shipped contract, and it means a curation
+/// regression that silently re-admits one of these is caught here rather than
+/// by a renderer test failing for an unrelated-looking reason.
 #[test]
-fn v3_cancel_order_renders_empty_and_exact_preimage_while_v2_refuses() {
-    let entry = find_leaf(build_registry(), FT_CANCEL_SOURCE, 1);
-    let type_hash = keccak256(CANCEL_ORDER_SIG.as_bytes());
-    for preimage in [&b""[..], &b"FT-order-2026/07/21 trailing space "[..]] {
-        let encoded_data = keccak256(preimage).to_vec();
-        let evidence = evidence_record(preimage);
-        let pages = render_registry_eip712_v3(entry, &type_hash, &encoded_data, &evidence)
-            .expect("exact CancelOrder preimage renders through V3");
-        assert_exact_string_pages(&pages, "Order ID", preimage);
-        assert_all_pages_printable(&pages);
-
-        let registry = build_registry();
-        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
-        let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("leaf verifies");
-        assert!(super::erc7730::render_erc7730_eip712_pages(
-            entry.chain_id,
-            &entry.contract,
-            &type_hash,
-            &encoded_data,
-            &verified,
-            None,
-            &NameResolver::new(),
-        )
-        .is_err());
-        assert!(render_registry_eip712_v3(entry, &type_hash, &encoded_data, &[]).is_err());
-    }
-}
-
-#[test]
-fn v3_tpsl_two_string_stream_rejects_reorder_omission_padding_and_mutation() {
-    let entry = find_leaf(build_registry(), FT_CANCEL_SOURCE, 1);
-    let type_hash = keccak256(TPSL_CANCEL_SIG.as_bytes());
-    let position = b"position-123";
-    let group = b"group-456";
-    let encoded_data = encoded_words(&[
-        abi_address_word([0x44; 20]),
-        keccak256(position),
-        keccak256(group),
-        u256_from_u64(1_735_689_600).0,
-    ]);
-    let first = evidence_record(position);
-    let second = evidence_record(group);
-    let mut evidence = first.clone();
-    evidence.extend_from_slice(&second);
-    let pages = render_registry_eip712_v3(entry, &type_hash, &encoded_data, &evidence)
-        .expect("ordered two-string evidence renders");
-    assert_exact_string_pages(&pages, "Position ID", position);
-    assert_exact_string_pages(&pages, "TP/SL group", group);
-
-    let mut swapped = second;
-    swapped.extend_from_slice(&first);
-    let mut extra = evidence.clone();
-    extra.push(0);
-    let mut changed_word = encoded_data.clone();
-    changed_word[32] ^= 1;
-    let mut changed_preimage = evidence.clone();
-    changed_preimage[2] ^= 1;
-    for (candidate_ed, candidate_evidence) in [
-        (&encoded_data[..], &swapped[..]),
-        (&encoded_data[..], &first[..]),
-        (&encoded_data[..], &extra[..]),
-        (&changed_word[..], &evidence[..]),
-        (&encoded_data[..], &changed_preimage[..]),
+fn quarantined_eip712_sources_emit_no_leaf() {
+    for source in [
+        "eip712-SpotOrderCancel.json",
+        "eip712-lens-lenshub.json",
+        "eip712-rarible-erc-721.json",
+        "eip712-rarible-erc-1155.json",
+        "eip712-tally-ethereum-pool-token.json",
+        "eip712-tally-ethereum-bravo-governor.json",
     ] {
-        assert!(
-            render_registry_eip712_v3(entry, &type_hash, candidate_ed, candidate_evidence)
-                .is_err(),
-            "malformed two-string evidence must refuse"
-        );
+        assert_registry_source_excluded(source);
     }
 }
 
+/// DRIFT GUARD. Every production source these tests pin must still be in the
+/// compiled catalogue.
+///
+/// Without this, a curation change that withdraws a descriptor shows up as a
+/// panic inside whichever renderer test happened to use it — which reads as a
+/// renderer bug and is what let the previous breakage sit red for 84 commits.
+/// Here it reads as what it is: the catalogue moved, go look at the manifest.
 #[test]
-fn v3_lens_quote_renders_the_exact_multi_page_content_uri() {
-    let entry = find_leaf(build_registry(), LENS_SOURCE, 137);
-    let type_hash = keccak256(LENS_QUOTE_SIG.as_bytes());
-    let content_uri = b"ipfs://bafybeigdyrzt5lens-content-uri";
-    assert!(content_uri.len() > 2 * DISPLAY_COLS);
-    let encoded_data = encoded_words(&[
-        u256_from_u64(17).0,
-        keccak256(content_uri),
-        u256_from_u64(23).0,
-        u256_from_u64(29).0,
-        u256_from_u64(31).0,
-        u256_from_u64(1_735_689_600).0,
-    ]);
-    let evidence = evidence_record(content_uri);
+fn production_sources_used_by_renderer_tests_are_still_in_the_catalogue() {
+    const PINNED: [(&str, u64); 6] = [
+        ("calldata-lbtc-mainnet.json", 1),
+        ("calldata-wstETH.json", 1),
+        ("calldata-yieldxyz-usde-vault.json", 1),
+        ("eip712-uniswap-permit2.json", 1),
+        ("eip712-network-fee-authorization-mainnet.json", 1),
+        ("calldata-Safe-1.5.0.json", 1),
+    ];
+    let registry = build_registry();
+    let mut missing = std::vec::Vec::new();
+    for (source, chain) in PINNED {
+        let present = registry.entries.iter().any(|entry| {
+            entry.chain_id == chain
+                && entry.source.file_name().and_then(|n| n.to_str()) == Some(source)
+        });
+        if !present {
+            missing.push(std::format!("{source} on chain {chain}"));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "renderer tests pin production sources that are no longer compiled: {missing:?}.\n\
+         Check tests/erc7730-semantic-evidence/eip712-reconciliation/manifest.json for a \
+         quarantine `reason_code` before touching any renderer test — the catalogue \
+         moving is not a renderer defect."
+    );
+}
 
-    let pages = render_registry_eip712_v3(entry, &type_hash, &encoded_data, &evidence)
-        .expect("exact Lens Quote contentURI renders through V3");
-    assert_exact_string_pages(&pages, "contentURI", content_uri);
+/// Synthetic-fixture coverage of the CALLDATA dynamic-string painter.
+///
+/// This path is live in production (unlike the EIP-712 preimage path above), is
+/// capped at `DYN_TEXT_MAX` = 2 x DISPLAY_COLS on a single page, and refuses
+/// anything longer or non-printable rather than truncating. Hosted on
+/// `tests/erc7730-renderer-fixtures/registry/calldata-string-streams.json` so
+/// catalogue curation cannot withdraw it.
+#[test]
+fn fixture_calldata_string_renders_exactly_and_refuses_overlong_or_nonprintable() {
+    let res = build_fixture_registry();
+    let entry = find_leaf(res, "calldata-string-streams.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("fixture leaf verifies");
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+
+    // Exactly at the limit: every byte occupies its own cell, including the
+    // trailing space, which must not collapse into display padding.
+    let exact = b"abcdefghijklmno pqrstuvwxyz0123 ";
+    assert_eq!(exact.len(), 2 * DISPLAY_COLS);
+    let calldata = calldata_sole_bytes(b"oneString(string)", exact);
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
+        .expect("exact-length printable string renders");
+    let page = find_page_by_label(&pages, "Note");
+    assert_eq!(&pages.buf[page][1][..], &exact[..DISPLAY_COLS]);
+    assert_eq!(&pages.buf[page][2][..], &exact[DISPLAY_COLS..]);
     assert_all_pages_printable(&pages);
 
-    let mut mismatched = encoded_data.clone();
-    mismatched[32] ^= 1;
-    assert!(render_registry_eip712_v3(entry, &type_hash, &mismatched, &evidence).is_err());
-}
-
-#[test]
-fn v3_rarible_mixed_string_and_nested_streams_fit_small_721_and_refuse_large_1155_suffix() {
-    use super::erc7730::nested::hash_struct_array;
-    use super::eip1271::{append_eip1271_context_pages, OffchainConfirmContext};
-    use pqsigner_erc7730::display::MAX_PAGES;
-
-    let part_type_hash = keccak256(b"Part(address account,uint96 value)");
-    let creator = part_ed([0x11; 20], 10_000);
-    let royalty = part_ed([0x22; 20], 500);
-    let creator_hash = hash_struct_array(&part_type_hash, &[creator.as_slice()]);
-    let royalty_hash = hash_struct_array(&part_type_hash, &[royalty.as_slice()]);
-    let uri_721 = b"ipfs://small";
-    let top_721 = encoded_words(&[
-        u256_from_u64(7).0,
-        keccak256(uri_721),
-        creator_hash,
-        royalty_hash,
-    ]);
-    let mut evidence_721 = evidence_record(uri_721);
-    append_struct_array_record(&mut evidence_721, &[creator.clone()]);
-    append_struct_array_record(&mut evidence_721, &[royalty.clone()]);
-    let leaf_721 = find_leaf(build_registry(), RARIBLE_721_SOURCE, 1);
-    let pages_721 = render_registry_eip712_v3(
-        leaf_721,
-        &keccak256(RARIBLE_721_SIG.as_bytes()),
-        &top_721,
-        &evidence_721,
-    )
-    .expect("small Mint721 mixed evidence stream renders");
-    assert_exact_string_pages(&pages_721, "Token URI", uri_721);
-    let dump_721 = dump_pages(&pages_721);
-    assert!(dump_721.contains("1111111111111111"));
-    assert!(dump_721.contains("2222222222222222"));
-    assert_eq!(dump_721.matches("Item 1 of 1").count(), 2);
-
-    let creators = vec![part_ed([0x31; 20], 5_000), part_ed([0x32; 20], 5_000)];
-    let royalties = vec![part_ed([0x41; 20], 250), part_ed([0x42; 20], 250)];
-    let creator_refs: Vec<&[u8]> = creators.iter().map(Vec::as_slice).collect();
-    let royalty_refs: Vec<&[u8]> = royalties.iter().map(Vec::as_slice).collect();
-    let uri_1155 = [b'x'; 100];
-    let top_1155 = encoded_words(&[
-        u256_from_u64(9).0,
-        u256_from_u64(2).0,
-        keccak256(&uri_1155),
-        hash_struct_array(&part_type_hash, &creator_refs),
-        hash_struct_array(&part_type_hash, &royalty_refs),
-    ]);
-    let mut evidence_1155 = evidence_record(&uri_1155);
-    append_struct_array_record(&mut evidence_1155, &creators);
-    append_struct_array_record(&mut evidence_1155, &royalties);
-    let leaf_1155 = find_leaf(build_registry(), RARIBLE_1155_SOURCE, 1);
-    let type_hash_1155 = keccak256(RARIBLE_1155_SIG.as_bytes());
-    let registry = build_registry();
-    let bundle = synth_bundle(&registry.blob, &leaf_1155.ir_bytes, leaf_1155.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("Mint1155 leaf verifies");
-
-    // The production checked renderer itself refuses this exact worst admitted
-    // catalogue shape. The handler therefore never receives a confirmable
-    // transcript and cannot downgrade it to RAW32/blind signing.
+    // One byte over the budget must REFUSE, never truncate: a silently
+    // shortened string is a different string on the confirm screen.
+    let overlong = b"abcdefghijklmno pqrstuvwxyz0123 X";
     assert!(matches!(
-        super::erc7730_secure_shim::render_erc7730_eip712_pages_v3_checked(
-            leaf_1155.chain_id,
-            &leaf_1155.contract,
-            &type_hash_1155,
-            &top_1155,
-            &evidence_1155,
+        render_erc7730_pages(
+            &tx,
+            &calldata_sole_bytes(b"oneString(string)", overlong),
             &verified,
             None,
-            &NameResolver::new(),
+            &resolver
         ),
-        Err(crate::tx::erc7730_render::RenderErr::PageBudget)
+        Err(crate::tx::erc7730_render::RenderErr::Reject(_))
     ));
 
-    // Inspect the scratch buffer used by one render pass: it reaches the fixed
-    // limit without truncating the already-painted exact URI. Both unchanged
-    // handler suffix builders then refuse atomically.
-    let mut attempted = Pages::with_len(0);
-    assert!(matches!(
-        super::erc7730::render_erc7730_eip712_pages_v3_into(
-            leaf_1155.chain_id,
-            &leaf_1155.contract,
-            &type_hash_1155,
-            &top_1155,
-            &evidence_1155,
-            &verified,
-            None,
-            &NameResolver::new(),
-            &mut attempted,
-        ),
-        Err(crate::tx::erc7730_render::RenderErr::PageBudget)
-    ));
-    assert_eq!(attempted.len, MAX_PAGES);
-    assert_exact_string_pages(&attempted, "Token URI", &uri_1155);
-    let partial_dump = dump_pages(&attempted);
-    assert!(!partial_dump.contains("Raw32"));
-    assert!(!partial_dump.contains("Blind"));
-
-    let original_len = attempted.len;
-    let original_pages = attempted.buf;
-    assert!(
-        append_fingerprint_for_test(&mut attempted, Erc8213Kind::Eip712Final([0xA5; 32]))
-            .is_err(),
-        "handler must refuse rather than omit the fingerprint"
-    );
-    let context = OffchainConfirmContext::new(
-        sphincs_tz_shared::OFFCHAIN_KIND_EIP712_TYPED_V3,
-        1,
-        0,
-        0,
-        [0x55; 20],
-        true,
-        1,
-        0,
-        65_536,
-        [0xA6; 32],
-    );
-    let mut cfi = crate::fi::CfiCounter::new();
-    assert!(
-        append_eip1271_context_pages(&mut attempted, &context, &mut cfi).is_err(),
-        "handler must refuse rather than omit its authorization context"
-    );
-    assert_eq!(attempted.len, original_len);
-    assert_eq!(
-        &attempted.buf[..original_len],
-        &original_pages[..original_len],
-        "suffix failures must not truncate or rewrite any exact renderer page"
-    );
+    // Non-printable bytes must refuse rather than reach the display.
+    for bad in [&b"line\nbreak"[..], &b"tab\there"[..], &[0x80u8, b'x'][..]] {
+        assert!(
+            matches!(
+                render_erc7730_pages(
+                    &tx,
+                    &calldata_sole_bytes(b"oneString(string)", bad),
+                    &verified,
+                    None,
+                    &resolver
+                ),
+                Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+            ),
+            "non-printable payload must not render: {bad:?}"
+        );
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -16434,3 +16268,4 @@ fn production_layerswap_routes_render_only_the_signed_funding_action() {
     *tampered_bundle.last_mut().expect("proof byte") ^= 1;
     assert!(verify_erc7730_bundle(&tampered_bundle, &registry.root).is_err());
 }
+

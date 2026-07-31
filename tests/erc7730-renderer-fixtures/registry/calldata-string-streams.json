@@ -1,0 +1,24 @@
+{
+  "context": {
+    "contract": {
+      "deployments": [{ "chainId": 1, "address": "0xfe0000000000000000000000000000000000fe01" }]
+    }
+  },
+  "metadata": { "owner": "PQSigner renderer fixtures", "contractName": "StringStreams" },
+  "display": {
+    "formats": {
+      "oneString(string note)": {
+        "intent": "One string",
+        "fields": [{ "path": "note", "label": "Note", "format": "raw", "visible": "always" }]
+      },
+      "twoStrings(string first, string second, uint256 nonce)": {
+        "intent": "Two strings",
+        "fields": [
+          { "path": "first", "label": "First", "format": "raw", "visible": "always" },
+          { "path": "second", "label": "Second", "format": "raw", "visible": "always" },
+          { "path": "nonce", "label": "Nonce", "format": "raw", "visible": "always" }
+        ]
+      }
+    }
+  }
+}
