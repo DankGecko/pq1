@@ -278,15 +278,29 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      # ProVerif is OCaml, installed via opam. --assume-depexts skips the GTK
-      # depext (the CLI needs no GUI). PINNED to 2.05 — the exact version the
-      # scripts/check_protocol_models.py verdict baseline was produced with; an
-      # unpinned bump could shift the counts spuriously. setup-ocaml caches opam.
+      # ProVerif is OCaml, installed via opam. PINNED to 2.05 — the exact
+      # version the scripts/check_protocol_models.py verdict baseline was
+      # produced with; an unpinned bump could shift the counts spuriously.
+      # setup-ocaml caches opam.
       - uses: ocaml/setup-ocaml@e32b06a3e831ff2fbc6f08cf35be2085e3918014 # v3.6.1
         with:
           ocaml-compiler: "4.14.2"
-      - name: opam install proverif 2.05 (CLI-only)
-        run: opam install -y --assume-depexts proverif.2.05
+      # GTK2 headers. We do NOT want ProVerif's GUI, but `lablgtk` is a HARD
+      # dependency of the proverif opam package (not a depopt), and lablgtk's
+      # `conf-gtk2` runs `pkg-config --exists gtk+-2.0` in its BUILD step.
+      #
+      # This step replaces `--assume-depexts`, which was here before and could
+      # never have worked: that flag tells opam to assume system deps are
+      # already installed and skip installing them — it does not stop
+      # conf-gtk2 from probing pkg-config and failing. This job has been red
+      # since it was added on 2026-07-01 with:
+      #     ERROR while compiling conf-gtk2.1
+      #     command /usr/bin/pkg-config --exists gtk+-2.0
+      #     exit-code 1
+      - name: install GTK2 headers (lablgtk is a hard dep of proverif)
+        run: sudo apt-get update && sudo apt-get install -y libgtk2.0-dev
+      - name: opam install proverif 2.05
+        run: opam install -y proverif.2.05
       # Tamarin + its Maude backend: upstream prebuilt linux64 binaries, PINNED
       # to the exact versions the baseline used (1.12.0 / 3.5.1). No sudo/GHC.
       - name: install tamarin-prover 1.12.0 + maude 3.5.1 (prebuilt binaries)
