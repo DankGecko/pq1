@@ -301,8 +301,15 @@ a warm-up, low value relative to the lockstep/channel work.
   eval** against your own thumbv8m binaries, reusing rainbow+lascar+scared for the SCA half.
 - **Security MCP servers for the red-team loop** (find→verify→patch): Slither-MCP (contracts),
   Semgrep-MCP (Rust+Solidity custom rules), Foundry/`forge` (Yul fuzz), Echidna-MCP, GhidraMCP
-  (closed-SE-blob RE), lean-lsp-MCP (proofs), Z3/`mcp-solver`. **CodeQL = useless** (no Rust, no
-  Solidity). **Data-egress/prompt-injection discipline (mandatory for a key-holding repo):**
+  (closed-SE-blob RE), lean-lsp-MCP (proofs), Z3/`mcp-solver`. ~~**CodeQL = useless** (no Rust, no
+  Solidity).~~ **CORRECTED 2026-07-31: the Rust half of this verdict expired.** CodeQL Rust
+  analysis went **generally available on 2025-10-14 in CodeQL CLI 2.23.3** ("Rust joins the list
+  of generally available languages", [GitHub changelog](https://github.blog/changelog/2025-10-14-codeql-scanning-rust-and-c-c-without-builds-is-now-generally-available/)),
+  build-mode `none`, i.e. no build required. The **Solidity/Yul half stands** — there is still no
+  CodeQL Solidity analyzer, so it remains blind to the on-chain verifier (§2 already says this
+  correctly). Revised verdict: **pilot advisory-only** over the Rust crates and the ~100 Python
+  gate/tooling scripts, never as a merge gate (deterministic-gates-first, §8). Its Rust query pack
+  is young and thinner than the C/C++/JS packs, so calibrate before believing a clean run. **Data-egress/prompt-injection discipline (mandatory for a key-holding repo):**
   per-subagent MCP allowlists in `.mcp.json`; **deny outbound network** for binary/fuzzing tools;
   never give one agent both repo-secret read access and a network tool; sandbox any
   code-exec MCP (Sage/Z3/radare2-ESIL); audit the existing untracked `.mcp.json`. Keep
@@ -326,7 +333,9 @@ a warm-up, low value relative to the lockstep/channel work.
   silently drop.*
 - **Embedded caveat:** `cargo-auditable` should **not** embed the manifest in size-critical
   secure-world firmware — use an external SBOM sidecar keyed to the FSBL-measured hash.
-- **Skip:** CodeQL/Copilot Autofix (no Solidity, narrow Rust); stacking SaaS reviewers
+- **Skip:** ~~CodeQL/Copilot Autofix (no Solidity, narrow Rust)~~ — **moved to pilot-advisory
+  2026-07-31**, see the corrected verdict in §7: Rust went GA (CLI 2.23.3, 2025-10-14); the
+  no-Solidity objection survives, so it never covers the Yul verifier; stacking SaaS reviewers
   (CodeRabbit+Greptile+Semgrep-Assistant — re-creates fatigue + multiplies firmware-diff egress).
   Malicious-crate "AI detectors" have **no published precision/recall** — treat as hype.
 
