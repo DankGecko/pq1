@@ -136,6 +136,28 @@ impl ArtifactEvidenceKey {
     }
 }
 
+/// The immutable embedded firmware-vendor key material (R18-3): the
+/// authority every recheck re-verifies against. In production this is
+/// the fused-in vendor verifying key; in the model, the test keypair.
+/// Plain data (public key material).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct VendorKey {
+    pub pk_seed: [u8; 16],
+    pub pk_root: [u8; 16],
+}
+
+impl VendorKey {
+    /// From a signing keypair (test/model construction).
+    pub fn from_parts(pk_seed: [u8; 16], pk_root: [u8; 16]) -> VendorKey {
+        VendorKey { pk_seed, pk_root }
+    }
+
+    /// The frozen v6 vendor-key fingerprint of this key.
+    pub fn fingerprint(&self) -> [u8; 32] {
+        fw_manifest::v6::vendor_fingerprint(&self.pk_seed, &self.pk_root)
+    }
+}
+
 /// One bounded immutable verification transaction. Minted once per
 /// boot/floor decode pass; proofs from two different passes cannot join
 /// (§6.2 L2130–2133). Boot-scoped: neither `Copy` nor `Clone`.
@@ -277,5 +299,75 @@ impl AcceptedArtifact {
     /// The accepted artifact.
     pub fn artifact(&self) -> &VerifiedArtifact {
         &self.artifact
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::journal::FullTerminalSet;
+
+    const ID: [u8; 16] = [
+        0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e,
+        0x8f,
+    ];
+
+    fn seq(start: u8) -> [u8; 32] {
+        let mut o = [0u8; 32];
+        for (i, b) in o.iter_mut().enumerate() {
+            *b = start.wrapping_add(i as u8);
+        }
+        o
+    }
+
+    fn artifact_for(pass: &VerificationPass) -> VerifiedArtifact {
+        let key = sphincs_c10::SigningKey::keygen(
+            *b"RB-TEST-SK-SEED-NONPROD-00000001",
+            *b"RB-TEST-PK-00001",
+        );
+        let vk = key.verifying_key();
+        let fpr = fw_manifest::v6::vendor_fingerprint(&vk.pk_seed, &vk.pk_root);
+        let fields = fw_manifest::v6::ReleasePackageFields {
+            slot: fw_manifest::v6::PhysicalSlot::A,
+            release_version: 0x0102_0304,
+            security_epoch: 0x0506_0708,
+            secure_len: 0x1000,
+            nonsecure_len: 0x2000,
+            secure_hash: &seq(0x00),
+            nonsecure_hash: &seq(0x20),
+            vendor_fpr: &fpr,
+            build_id: &seq(0x60),
+            signature: &[0xFF; fw_manifest::SIGNATURE_LEN],
+        };
+        let mut page = fw_manifest::v6::build_release_package(&fields).unwrap();
+        let digest = fw_manifest::v6::parse_and_validate(&page, fw_manifest::v6::PhysicalSlot::A)
+            .unwrap()
+            .manifest_digest();
+        let sig = key.sign(&digest, None);
+        page[fw_manifest::v6::OFF_SIGNATURE..fw_manifest::v6::OFF_SIGNATURE + fw_manifest::SIGNATURE_LEN]
+            .copy_from_slice(&sig);
+        fw_manifest::v6::rewrite_normalized_crc(&mut page);
+        let m = fw_manifest::v6::parse_and_validate(&page, fw_manifest::v6::PhysicalSlot::A).unwrap();
+        pass.verify_artifact(&m, ID, &vk.pk_seed, &vk.pk_root).unwrap()
+    }
+
+    #[test]
+    fn accepted_artifact_rejects_cross_pass_key_join() {
+        // R18-4: the AcceptedArtifact key gate is PINNED — a terminal
+        // set minted under a DIFFERENT verification pass must never join
+        // the artifact (the cross-artifact-join defence is load-bearing,
+        // not incidental).
+        let pass_a = VerificationPass::begin(1, 1, [0x42; 32]);
+        let pass_b = VerificationPass::begin(1, 2, [0x99; 32]);
+        let artifact = artifact_for(&pass_a);
+
+        // A set keyed for the artifact's own pass joins.
+        let ok_set = FullTerminalSet::for_test(artifact.key().digest());
+        assert!(AcceptedArtifact::new(artifact_for(&pass_a), RobustConfirmedEvidence::RobustTerminalSet(ok_set)).is_some());
+
+        // A set keyed under a DIFFERENT pass (same identity bytes) must
+        // not join.
+        let bad_set = FullTerminalSet::for_test(pass_b.mint_key(*artifact.key().identity()).digest());
+        assert!(AcceptedArtifact::new(artifact_for(&pass_a), RobustConfirmedEvidence::RobustTerminalSet(bad_set)).is_none());
     }
 }

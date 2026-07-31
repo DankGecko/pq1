@@ -87,8 +87,10 @@ impl FloorResumePermit {
 /// re-derived identity plus fresh reads of all five journal QWs at the
 /// identity's canonical addresses, each with explicit attributions.
 pub struct ArtifactRecheck {
-    /// Identity re-derived from the re-probed, re-verified manifest.
-    pub identity: crate::evidence::ArtifactIdentity,
+    /// The re-parsed manifest page (R18-3: the ENTRY re-runs the
+    /// embedded-key verification against it — the backend returns RAW
+    /// evidence, it does not attest validity).
+    pub manifest: fw_manifest::v6::ManifestV6,
     /// `QW_CONFIRMED_0` fresh read + attributions.
     pub terminal_c0: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
     /// `QW_CONFIRMED_1` fresh read + attributions.
@@ -106,8 +108,9 @@ pub struct ArtifactRecheck {
 /// for terminal-authoritative (Robust) artifacts never touches the
 /// PENDING field at all.
 pub struct TerminalRecheck {
-    /// Identity re-derived from the re-probed, re-verified manifest.
-    pub identity: crate::evidence::ArtifactIdentity,
+    /// The re-parsed manifest page (R18-3: the ENTRY re-runs the
+    /// embedded-key verification against it).
+    pub manifest: fw_manifest::v6::ManifestV6,
     /// `QW_CONFIRMED_0` fresh read + attributions.
     pub terminal_c0: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
     /// `QW_CONFIRMED_1` fresh read + attributions.
@@ -152,15 +155,12 @@ pub trait RollbackBackend {
     /// — the artifact half of the frozen pre-handoff recheck (R6-1).
     /// `None` when the backend cannot produce a coherent re-read.
     ///
-    /// CONTRACT (R16-4, mandatory for every implementation): before
-    /// returning a recheck, the backend MUST freshly re-verify the
-    /// manifest — full v6 parse, `stored_digest_matches`, AND
-    /// `verify_with_embedded_key` with the immutable embedded vendor key
-    /// — and derive the identity from THAT verification. The crate
-    /// cannot re-run the signature check at the recheck call site (key
-    /// material is not available there); the backend owns the
-    /// key-holding verification context. `ScriptedBackend`'s
-    /// implementation is the reference.
+    /// CONTRACT (R16-4 + R18-3): the backend returns RAW evidence — a
+    /// structurally valid re-parse of the manifest page plus the fresh
+    /// journal reads. The backend performs NO signature verification;
+    /// the ENTRY re-runs the embedded-key C10 check against the
+    /// returned page. A backend that swaps in a different manifest is
+    /// caught structurally by the entry's identity comparison.
     fn reverify_artifact(
         &mut self,
         identity: &crate::evidence::ArtifactIdentity,
@@ -550,16 +550,11 @@ mod scripted {
                     script.install_id_inv,
                 )
             };
-            // Re-verify the manifest (structure, stored digest, vendor
-            // signature, fingerprint) and re-derive the identity
-            // (R10-6: the stored-digest leg the primary path performs).
+            // R18-3: RAW evidence only — structurally parse the page
+            // (the ENTRY owns the signature verification now; the
+            // key-material fields in the script are unused here).
+            let _ = (pk_seed, pk_root);
             let m = fw_manifest::v6::parse_and_validate(&page, identity.slot).ok()?;
-            if !m.stored_digest_matches() {
-                return None;
-            }
-            if !m.verify_with_embedded_key(&pk_seed, &pk_root) {
-                return None;
-            }
             let ProbeScript::Clean(install_id) = iid.outcome else {
                 return None;
             };
@@ -576,19 +571,17 @@ mod scripted {
                     return None;
                 }
             }
-            let derived = crate::evidence::ArtifactIdentity::derive(&m, install_id)?;
-
             let mk = |b: &mut Self, index: u16, addr: u32, s: &JournalQwScript| {
                 assert!(b.script(index, addr, s.outcome));
                 (b.fresh_probe(index, addr), s.durability, s.launch)
             };
-            let terminal_c0 = mk(self, 40, derived.confirmed_0_qw_address, &t_c0);
-            let terminal_c1 = mk(self, 41, derived.confirmed_1_qw_address, &t_c1);
-            let pending = mk(self, 42, derived.pending_qw_address, &pd);
-            let install = mk(self, 43, derived.install_id_qw_address(), &iid);
-            let install_inv = mk(self, 44, derived.install_id_inv_qw_address(), &iid_inv);
+            let terminal_c0 = mk(self, 40, identity.confirmed_0_qw_address, &t_c0);
+            let terminal_c1 = mk(self, 41, identity.confirmed_1_qw_address, &t_c1);
+            let pending = mk(self, 42, identity.pending_qw_address, &pd);
+            let install = mk(self, 43, identity.install_id_qw_address(), &iid);
+            let install_inv = mk(self, 44, identity.install_id_inv_qw_address(), &iid_inv);
             Some(ArtifactRecheck {
-                identity: derived,
+                manifest: m,
                 terminal_c0,
                 terminal_c1,
                 pending,
@@ -620,12 +613,6 @@ mod scripted {
                 )
             };
             let m = fw_manifest::v6::parse_and_validate(&page, identity.slot).ok()?;
-            if !m.stored_digest_matches() {
-                return None;
-            }
-            if !m.verify_with_embedded_key(&pk_seed, &pk_root) {
-                return None;
-            }
             let ProbeScript::Clean(install_id) = iid.outcome else {
                 return None;
             };
@@ -638,18 +625,17 @@ mod scripted {
                     return None;
                 }
             }
-            let derived = crate::evidence::ArtifactIdentity::derive(&m, install_id)?;
-
+            let _ = (pk_seed, pk_root);
             let mk = |b: &mut Self, index: u16, addr: u32, s: &JournalQwScript| {
                 assert!(b.script(index, addr, s.outcome));
                 (b.fresh_probe(index, addr), s.durability, s.launch)
             };
-            let terminal_c0 = mk(self, 40, derived.confirmed_0_qw_address, &t_c0);
-            let terminal_c1 = mk(self, 41, derived.confirmed_1_qw_address, &t_c1);
-            let install = mk(self, 43, derived.install_id_qw_address(), &iid);
-            let install_inv = mk(self, 44, derived.install_id_inv_qw_address(), &iid_inv);
+            let terminal_c0 = mk(self, 40, identity.confirmed_0_qw_address, &t_c0);
+            let terminal_c1 = mk(self, 41, identity.confirmed_1_qw_address, &t_c1);
+            let install = mk(self, 43, identity.install_id_qw_address(), &iid);
+            let install_inv = mk(self, 44, identity.install_id_inv_qw_address(), &iid_inv);
             Some(TerminalRecheck {
-                identity: derived,
+                manifest: m,
                 terminal_c0,
                 terminal_c1,
                 install_id: install,

@@ -591,6 +591,10 @@ pub enum FloorFault {
     /// BASE0): a stale, already-committed, or generation-skipping stage
     /// is never Recovering/Aborted.
     WrongAllocationCursor { expected: u32, got: u32 },
+    /// Two keyed completed-plan bindings share one group key, or two
+    /// validated role maps (completed plans or the active plan) claim
+    /// ownership of the same cell (R18-2).
+    OverlappingRoleMap { index: u16 },
 }
 
 /// The four mutually exclusive decoder classes (FROZEN-OTP-API-3
@@ -1158,10 +1162,21 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     // committed target — a phantom or unmatched binding (including any
     // binding during an ACTIVE FIRST bump, where no committed group
     // exists) is contradictory.
+    let mut seen_keys: [u32; MAX_COMPLETE_RECORDS] = [0; MAX_COMPLETE_RECORDS];
+    let mut n_keys = 0usize;
+    // Role-map ownership across every validated completed plan (R18-2:
+    // one physical QW may be claimed by at most one map).
+    let mut role_owners: [u16; 64] = [u16::MAX; 64];
+    let mut n_role_owners = 0usize;
     for entry in snapshot.committed_plan_bindings() {
         let Some((group, binding)) = entry else {
             return FloorView::Unknown(FloorFault::ConflictingCompletion);
         };
+        if seen_keys[..n_keys].contains(group) {
+            return FloorView::Unknown(FloorFault::OverlappingRoleMap { index: *group as u16 });
+        }
+        seen_keys[n_keys] = *group;
+        n_keys += 1;
         let Some(&(_, committed_t)) = committed_list[..n_committed]
             .iter()
             .find(|&&(cg, _)| cg == *group)
@@ -1170,6 +1185,24 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
         };
         if binding.e().checked_sub(1) != Some(committed_t) {
             return FloorView::Unknown(FloorFault::ConflictingCompletion);
+        }
+        for &(idx, _) in binding.roles() {
+            if role_owners[..n_role_owners].contains(&idx) {
+                return FloorView::Unknown(FloorFault::OverlappingRoleMap { index: idx });
+            }
+            role_owners[n_role_owners] = idx;
+            n_role_owners += 1;
+        }
+    }
+    // The ACTIVE stage's plan must not claim a cell any completed plan
+    // already owns (R18-2).
+    if active.is_some() {
+        if let Some(b) = snapshot.stage_binding() {
+            for &(idx, _) in b.roles() {
+                if role_owners[..n_role_owners].contains(&idx) {
+                    return FloorView::Unknown(FloorFault::OverlappingRoleMap { index: idx });
+                }
+            }
         }
     }
 

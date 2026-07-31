@@ -301,6 +301,14 @@ impl FullTerminalSet {
     pub fn evidence_key(&self) -> &[u8; 32] {
         &self.evidence_key
     }
+
+    /// Test-backend constructor for a full terminal set carrying an
+    /// arbitrary evidence key (e.g. one minted under a *different*
+    /// artifact pass, for cross-pass join pins).
+    #[cfg(feature = "test-backend")]
+    pub fn for_test(evidence_key: [u8; 32]) -> Self {
+        FullTerminalSet { evidence_key }
+    }
 }
 
 /// Which physical terminal replica survived.

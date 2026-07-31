@@ -220,17 +220,33 @@ fn reverify_artifact<B: RollbackBackend>(
     backend: &mut B,
     artifact: &VerifiedArtifact,
     expect: ArtifactExpectation,
+    pk: &crate::evidence::VendorKey,
 ) -> Result<(), IntentError> {
     let id = artifact.identity();
     // R15-2: terminal-authoritative artifacts are re-probed through the
     // terminal-only path (no PENDING acquisition at all).
     if expect == ArtifactExpectation::Robust {
-        return reverify_robust(backend, artifact);
+        return reverify_robust(backend, artifact, pk);
     }
     let recheck = backend
         .reverify_artifact(id)
         .ok_or(IntentError::ArtifactDrift)?;
-    if recheck.identity != *id {
+    // R18-3: the ENTRY re-runs the embedded-key verification against the
+    // re-parsed page — a backend that swaps or forges is caught here,
+    // structurally, not by contract.
+    let manifest = &recheck.manifest;
+    if !manifest.stored_digest_matches()
+        || !manifest.verify_with_embedded_key(&pk.pk_seed, &pk.pk_root)
+    {
+        return Err(IntentError::ArtifactDrift);
+    }
+    let install_id = match &recheck.install_id.0 {
+        crate::qw_read::FreshQwRead::Clean(qw) => *qw.bytes(),
+        _ => return Err(IntentError::ArtifactDrift),
+    };
+    let derived = crate::evidence::ArtifactIdentity::derive(manifest, install_id)
+        .ok_or(IntentError::ArtifactDrift)?;
+    if derived != *id {
         return Err(IntentError::ArtifactDrift);
     }
     // R9-3 + R14-4: canonical validation matches the row's authority
@@ -310,12 +326,25 @@ fn reverify_artifact<B: RollbackBackend>(
 fn reverify_robust<B: RollbackBackend>(
     backend: &mut B,
     artifact: &VerifiedArtifact,
+    pk: &crate::evidence::VendorKey,
 ) -> Result<(), IntentError> {
     let id = artifact.identity();
     let recheck = backend
         .reverify_terminal(id)
         .ok_or(IntentError::ArtifactDrift)?;
-    if recheck.identity != *id {
+    let manifest = &recheck.manifest;
+    if !manifest.stored_digest_matches()
+        || !manifest.verify_with_embedded_key(&pk.pk_seed, &pk.pk_root)
+    {
+        return Err(IntentError::ArtifactDrift);
+    }
+    let install_id = match &recheck.install_id.0 {
+        crate::qw_read::FreshQwRead::Clean(qw) => *qw.bytes(),
+        _ => return Err(IntentError::ArtifactDrift),
+    };
+    let derived = crate::evidence::ArtifactIdentity::derive(manifest, install_id)
+        .ok_or(IntentError::ArtifactDrift)?;
+    if derived != *id {
         return Err(IntentError::ArtifactDrift);
     }
     let trio_epoch = match crate::lifecycle::canonical_terminal_reads(
@@ -378,6 +407,7 @@ fn arm_and_handoff<B: RollbackBackend>(
     backend: &mut B,
     artifact: &VerifiedArtifact,
     recheck: &RecheckContext,
+    pk: &crate::evidence::VendorKey,
 ) -> Result<ProbationHandoff, IntentError> {
     let id = artifact.identity();
     let words = backend.read_arm_token().ok_or(IntentError::TokenNotArmReady)?;
@@ -408,7 +438,7 @@ fn arm_and_handoff<B: RollbackBackend>(
     run_recheck(backend, recheck)?;
     // Frozen artifact recheck (R6-1): the candidate's manifest and
     // lifecycle evidence must still verify against fresh reads.
-    reverify_artifact(backend, artifact, ArtifactExpectation::PendingCandidate)?;
+    reverify_artifact(backend, artifact, ArtifactExpectation::PendingCandidate, pk)?;
     // Fresh token decode + binding immediately before handoff.
     let words = backend.read_arm_token().ok_or(IntentError::TokenNotArmReady)?;
     let token = ArmToken::decode_and_bind(
@@ -548,6 +578,7 @@ impl CheckedSteadyProbationIntent {
 pub fn arm_probation_from_steady<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedSteadyProbationIntent,
+    pk: &crate::evidence::VendorKey,
 ) -> Result<ProbationHandoff, IntentError> {
     let _token = intent.token;
     // Same-epoch arming bypasses all capacity preflight; an epoch bump
@@ -568,10 +599,10 @@ pub fn arm_probation_from_steady<B: RollbackBackend>(
         snapshot_digest: *intent.steady.snapshot_digest(),
         fallback_t: Some(intent.fallback.artifact().t()),
     };
-    let handoff = arm_and_handoff(backend, &intent.candidate, &recheck)?;
+    let handoff = arm_and_handoff(backend, &intent.candidate, &recheck, pk)?;
     // R6-1: the robust exact-`F` fallback must ALSO still verify
     // immediately before handoff (§10 item 5: "reverify both artifacts").
-    reverify_artifact(backend, intent.fallback.artifact(), ArtifactExpectation::Robust)?;
+    reverify_artifact(backend, intent.fallback.artifact(), ArtifactExpectation::Robust, pk)?;
     Ok(handoff)
 }
 
@@ -632,6 +663,7 @@ impl CheckedSteadyIntent {
 pub fn start_from_steady<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedSteadyIntent,
+    pk: &crate::evidence::VendorKey,
 ) -> Result<StartOutcome, IntentError> {
     let t = intent.artifact.artifact().t();
     match intent.receipt {
@@ -640,7 +672,7 @@ pub fn start_from_steady<B: RollbackBackend>(
             // FROZEN-OTP-API-3 L897–900: fresh re-verification of the
             // robust artifact (R7-1) and a fresh full decode immediately
             // before the mutation.
-            reverify_artifact(backend, intent.artifact.artifact(), ArtifactExpectation::Robust)?;
+            reverify_artifact(backend, intent.artifact.artifact(), ArtifactExpectation::Robust, pk)?;
             let recheck = RecheckContext {
                 class: RecheckClass::Steady,
                 floor: intent.steady.floor(),
@@ -704,13 +736,14 @@ impl CheckedRecoveryIntent {
 pub fn resume_from_recovery<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedRecoveryIntent,
+    pk: &crate::evidence::VendorKey,
 ) -> Result<ResumeReceipt, IntentError> {
     let target = intent.proof.target();
     let group = intent.proof.group();
     // FROZEN-OTP-API-3 L897–900: fresh re-verification of the bound
     // robust candidate (R7-1) and a fresh full decode immediately
     // before the mutation, reproducing the bound plan.
-    reverify_artifact(backend, intent.candidate.artifact(), ArtifactExpectation::Robust)?;
+    reverify_artifact(backend, intent.candidate.artifact(), ArtifactExpectation::Robust, pk)?;
     let recheck = RecheckContext {
         class: RecheckClass::Recovering { target, group },
         floor: target,
@@ -761,6 +794,7 @@ impl CheckedAbortedAcceptedIntent {
 pub fn boot_accepted_from_aborted<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedAbortedAcceptedIntent,
+    pk: &crate::evidence::VendorKey,
 ) -> Result<BootHandoff, IntentError> {
     let art = intent.artifact.artifact();
     let id = *art.identity();
@@ -780,7 +814,7 @@ pub fn boot_accepted_from_aborted<B: RollbackBackend>(
     run_recheck(backend, &recheck)?;
     // R6-1: re-verify the artifact's manifest and robust terminal
     // evidence against fresh reads immediately before handoff.
-    reverify_artifact(backend, art, ArtifactExpectation::Robust)?;
+    reverify_artifact(backend, art, ArtifactExpectation::Robust, pk)?;
     Ok(BootHandoff {
         slot: id.slot,
         r: id.r,
@@ -933,18 +967,19 @@ impl CheckedPeerRepairIntent {
 pub fn arm_peer_repair<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedPeerRepairIntent,
+    pk: &crate::evidence::VendorKey,
 ) -> Result<ProbationHandoff, IntentError> {
     let _token = intent.token;
     // R9-4: the admission-load-bearing robust source is reverified at
     // entry, same discipline as the other entries.
-    reverify_artifact(backend, intent.source.artifact(), ArtifactExpectation::Robust)?;
+    reverify_artifact(backend, intent.source.artifact(), ArtifactExpectation::Robust, pk)?;
     let recheck = RecheckContext {
         class: RecheckClass::SteadyOrAborted,
         floor: intent.floor_proof.floor(),
         snapshot_digest: *intent.floor_proof.snapshot_digest(),
         fallback_t: None,
     };
-    arm_and_handoff(backend, &intent.twin, &recheck)
+    arm_and_handoff(backend, &intent.twin, &recheck, pk)
 }
 
 /// Receipt for a complete inactive-range erase/restage of one physical
@@ -1119,16 +1154,17 @@ impl CheckedDegradedRepairIntent {
 pub fn arm_degraded_artifact_repair<B: RollbackBackend>(
     backend: &mut B,
     intent: CheckedDegradedRepairIntent,
+    pk: &crate::evidence::VendorKey,
 ) -> Result<ProbationHandoff, IntentError> {
     let _token = intent.token;
     // R8-4(b): the load-bearing robust source is reverified at entry,
     // same discipline as R7-1.
-    reverify_artifact(backend, intent.source.artifact(), ArtifactExpectation::Robust)?;
+    reverify_artifact(backend, intent.source.artifact(), ArtifactExpectation::Robust, pk)?;
     let recheck = RecheckContext {
         class: RecheckClass::SteadyOrAborted,
         floor: intent.floor_proof.floor(),
         snapshot_digest: *intent.floor_proof.snapshot_digest(),
         fallback_t: None,
     };
-    arm_and_handoff(backend, &intent.target, &recheck)
+    arm_and_handoff(backend, &intent.target, &recheck, pk)
 }

@@ -72,6 +72,50 @@ impl TokenEvidence {
     }
 }
 
+/// One sealed probation session (R18-1): the terminal reads, PENDING
+/// evidence, and arm-token evidence for ONE artifact identity, owned
+/// together. The three evidence pieces can only exist as one session's
+/// product — a caller cannot mix artifact A's capability with artifact
+/// B's PENDING or token, and cannot reuse a second session's evidence.
+pub struct ProbationSession {
+    identity: crate::evidence::ArtifactIdentity,
+    terminals: TerminalFirst,
+    pending: PendingEvidence,
+    token: Option<TokenEvidence>,
+}
+
+impl ProbationSession {
+    /// The identity the session is bound to.
+    pub fn identity(&self) -> &crate::evidence::ArtifactIdentity {
+        &self.identity
+    }
+
+    /// The terminal-first reads (shared with terminal rows).
+    pub fn terminals(&self) -> &TerminalFirst {
+        &self.terminals
+    }
+
+    /// The sealed PENDING evidence.
+    pub fn pending(&self) -> &PendingEvidence {
+        &self.pending
+    }
+
+    /// The sealed arm-token evidence, when present.
+    pub fn token(&self) -> Option<&TokenEvidence> {
+        self.token.as_ref()
+    }
+}
+
+/// The evidence input to `decode_lifecycle` (R18-1): either bare
+/// terminal-first reads (terminal rows — PENDING/TAMP never probed,
+/// per R16-3) or one sealed probation session.
+pub enum JournalEvidence<'a> {
+    /// Terminal-first reads only (terminal rows).
+    TerminalsOnly(&'a TerminalFirst),
+    /// One sealed probation session (terminals + pending + token).
+    Probation(&'a ProbationSession),
+}
+
 /// Sealed probation evidence (R13-1b): a PENDING read minted ONLY by
 /// [`TerminalFirst::probe_pending`]. `pub(crate)` constructor — no
 /// other public path exists, so probation evidence can only exist as
@@ -116,6 +160,7 @@ impl PendingEvidence {
 /// order); the capability carries the terminal reads it made. PENDING/
 /// TAMP evidence is only meaningful downstream of this value.
 pub struct TerminalFirst {
+    identity: crate::evidence::ArtifactIdentity,
     c0: (FreshQwRead, Durability, LaunchAttribution),
     c1: (FreshQwRead, Durability, LaunchAttribution),
 }
@@ -136,9 +181,15 @@ impl TerminalFirst {
         let c0 = backend.fresh_probe(c0_index, identity.confirmed_0_qw_address);
         let c1 = backend.fresh_probe(c1_index, identity.confirmed_1_qw_address);
         TerminalFirst {
+            identity: *identity,
             c0: (c0, c0_attribution.0, c0_attribution.1),
             c1: (c1, c1_attribution.0, c1_attribution.1),
         }
+    }
+
+    /// The artifact identity this capability is bound to (R18-1).
+    pub fn identity(&self) -> &crate::evidence::ArtifactIdentity {
+        &self.identity
     }
 
     /// The terminal reads this capability made.
@@ -167,11 +218,12 @@ impl TerminalFirst {
         &self,
         backend: &mut P,
         index: u16,
-        addr: u32,
         attribution: (Durability, LaunchAttribution),
     ) -> PendingEvidence {
+        // R18-1: the PENDING read is always THIS capability's canonical
+        // address — no caller-chosen address exists.
         PendingEvidence {
-            read: backend.fresh_probe(index, addr),
+            read: backend.fresh_probe(index, self.identity.pending_qw_address),
             durability: attribution.0,
             launch: attribution.1,
         }
@@ -189,14 +241,41 @@ impl TerminalFirst {
         backend.read_arm_token().map(TokenEvidence::from_words)
     }
 
+    /// Consume this capability into ONE sealed probation session bound
+    /// to the SAME artifact identity it was probed for (R18-1). The
+    /// PENDING evidence must be this capability's own product (its
+    /// canonical address) — anything else is not a session.
+    pub fn into_probation_session(
+        self,
+        pending: PendingEvidence,
+        token: Option<TokenEvidence>,
+    ) -> Option<ProbationSession> {
+        if let crate::qw_read::FreshQwRead::Clean(qw) = &pending.read {
+            if qw.addr() != self.identity.pending_qw_address {
+                return None;
+            }
+        }
+        Some(ProbationSession {
+            identity: self.identity,
+            terminals: self,
+            pending,
+            token,
+        })
+    }
+
     /// TEST-SCAFFOLD constructor (feature-gated): adversarial tests
     /// inject mis-addressed or cross-epoch terminal reads through this.
     #[cfg(feature = "test-backend")]
     pub fn from_reads(
+        identity: &crate::evidence::ArtifactIdentity,
         c0: (FreshQwRead, Durability, LaunchAttribution),
         c1: (FreshQwRead, Durability, LaunchAttribution),
     ) -> TerminalFirst {
-        TerminalFirst { c0, c1 }
+        TerminalFirst {
+            identity: *identity,
+            c0,
+            c1,
+        }
     }
 }
 
@@ -225,6 +304,9 @@ pub enum MalformedReason {
     BadInstallGeneration,
     /// Token binding does not match the artifact identity.
     TokenBindingMismatch,
+    /// The probation session is bound to a DIFFERENT artifact identity
+    /// than the one being decoded (R18-1).
+    SessionIdentityMismatch,
     /// The artifact proof and its lifecycle/terminal proof do not carry
     /// the same sealed `ArtifactEvidenceKey` (R17-3: not a token issue —
     /// no token is consulted on terminal rows).
@@ -416,12 +498,13 @@ pub fn decode_install_generation(
 pub fn decode_lifecycle(
     artifact: VerifiedArtifact,
     generation: Option<InstallGenerationEvidence>,
-    terminals: &TerminalFirst,
-    pending: Option<&PendingEvidence>,
-    token: Option<TokenEvidence>,
+    evidence: JournalEvidence<'_>,
     floor: u32,
 ) -> LifecycleState {
-    let (terminal_c0, terminal_c1) = terminals.terminals();
+    let (terminal_c0, terminal_c1) = match &evidence {
+        JournalEvidence::TerminalsOnly(terminals) => terminals.terminals(),
+        JournalEvidence::Probation(session) => session.terminals().terminals(),
+    };
     // Terminal-first classification (R13-1a): the TERMINAL reads must
     // be canonical for THIS artifact on every row (R3-2); the PENDING
     // read is consulted ONLY on the probation branch below — on
@@ -506,15 +589,21 @@ pub fn decode_lifecycle(
         return LifecycleState::Malformed(MalformedReason::OutOfOrderMarkers);
     }
 
-    // PENDING branch (R13-1a): only here is the PENDING evidence
-    // consulted — and it must exist (R16-3: terminal rows pass `None`
-    // and never probe PENDING at all) and satisfy the full trio
-    // canonical check (canonical addresses for THIS artifact, one
-    // common probe epoch across all three journal reads).
-    let Some(pending) = pending else {
-        return LifecycleState::Malformed(MalformedReason::OutOfOrderMarkers);
+    // PENDING branch (R13-1a + R18-1): only here is probation evidence
+    // consulted — and it must come from ONE sealed session bound to
+    // THIS artifact (R18-1: the session's identity must match, or the
+    // evidence is not this artifact's at all). The session's PENDING
+    // evidence must satisfy the full trio canonical check.
+    let session = match &evidence {
+        JournalEvidence::Probation(session) if session.identity() == artifact.identity() => session,
+        JournalEvidence::Probation(_) => {
+            return LifecycleState::Malformed(MalformedReason::SessionIdentityMismatch);
+        }
+        JournalEvidence::TerminalsOnly(_) => {
+            return LifecycleState::Malformed(MalformedReason::OutOfOrderMarkers);
+        }
     };
-    let pending = pending.as_attributed_read();
+    let pending = session.pending().as_attributed_read();
     if canonical_journal_reads(
         artifact.identity(),
         terminal_c0.read,
@@ -550,10 +639,11 @@ pub fn decode_lifecycle(
             if !generation_matches(&generation, &artifact, true, trio_epoch) {
                 return LifecycleState::Malformed(MalformedReason::BadInstallGeneration);
             }
-            // R15-1: the token evidence is sealed capability output;
-            // it is decoded and bound HERE, against this artifact.
+            // R15-1: the token evidence comes from the SAME sealed
+            // session; it is decoded and bound HERE, against this
+            // artifact.
             let id = artifact.identity();
-            let token = match token {
+            let token = match session.token() {
                 Some(evidence) => match evidence.decode_and_bind(
                     id.slot,
                     &id.install_id,

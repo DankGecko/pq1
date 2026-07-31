@@ -53,6 +53,12 @@ pub const TEST_SK_SEED: [u8; 32] = *b"RB-TEST-SK-SEED-NONPROD-00000001";
 /// TEST-ONLY public seed.
 pub const TEST_PK_SEED: [u8; 16] = *b"RB-TEST-PK-00001";
 
+/// The test key as a VendorKey (R18-3: threaded into the six entries).
+pub fn test_vendor_key() -> pqsigner_rollback::evidence::VendorKey {
+    let (pk_seed, pk_root) = test_key_material();
+    pqsigner_rollback::evidence::VendorKey::from_parts(pk_seed, pk_root)
+}
+
 /// The test signing key (regenerated per call; deterministic).
 pub fn test_signing_key() -> sphincs_c10::SigningKey {
     sphincs_c10::SigningKey::keygen(TEST_SK_SEED, TEST_PK_SEED)
@@ -260,7 +266,8 @@ use pqsigner_rollback::floor::{
     decode_floor, CompletionLaunchEvidence, FloorSnapshot, FloorView, PlanRole, StageBinding,
     ROUTE1_BASE0_CODEWORD,
 };
-use pqsigner_rollback::lifecycle::{decode_lifecycle, AttributedRead, LifecycleState};
+use pqsigner_rollback::arm_token::{ArmState, ArmToken};
+use pqsigner_rollback::lifecycle::{decode_lifecycle, AttributedRead, JournalEvidence, LifecycleState};
 
 /// A scripted OTP/floor bank: scripts are accumulated, then every
 /// canonical index is probed through `FloorSnapshot::probe` (the
@@ -380,7 +387,7 @@ pub fn accepted_artifact(
     let art = pass
         .verify_artifact(&m, INSTALL_ID, &pk_seed, &pk_root)
         .expect("test manifest verifies");
-    let (tf, pd) = probe_journal(
+    let (tf, _pd) = probe_journal(
         b,
         &art,
         ProbeScript::Clean(QW_CONFIRMED_0),
@@ -389,7 +396,7 @@ pub fn accepted_artifact(
     );
     let gen = Some(full_generation(b, &art, 13, 14));
     let t = m.security_epoch - 1;
-    match decode_lifecycle(art, gen, &tf, Some(&pd), None, t) {
+    match decode_lifecycle(art, gen, JournalEvidence::TerminalsOnly(&tf), t) {
         LifecycleState::ConfirmedRobust(a) => a,
         _ => panic!("expected ConfirmedRobust"),
     }
@@ -445,8 +452,29 @@ pub fn probe_journal(
     // capability — it cannot precede the terminal probes and cannot be
     // fabricated by a direct probe.
     assert!(b.script(32, id.pending_qw_address, pd));
-    let pd_ev = tf.probe_pending(b, 32, id.pending_qw_address, attr(&pd));
+    let pd_ev = tf.probe_pending(b, 32, attr(&pd));
     (tf, pd_ev)
+}
+
+/// One sealed probation session for `art` (R18-1): virgin terminals,
+/// exact PENDING, the planted arm token — all through the capability.
+pub fn probation_session(
+    b: &mut TestBackend,
+    art: &VerifiedArtifact,
+    state: ArmState,
+) -> pqsigner_rollback::lifecycle::ProbationSession {
+    let binding = binding_of(art);
+    b.set_arm_token(Some(ArmToken::encode(state, &binding)));
+    let (tf, pd) = probe_journal(
+        b,
+        art,
+        ProbeScript::Clean(ERASED),
+        ProbeScript::Clean(ERASED),
+        ProbeScript::Clean(fw_manifest::v6::QW_PENDING),
+    );
+    let tok = tf.read_arm_token(b).expect("token planted");
+    tf.into_probation_session(pd, Some(tok))
+        .expect("session binds its own identity")
 }
 
 /// Full degraded-history evidence for a prior degraded artifact at
@@ -470,7 +498,7 @@ pub fn degraded_history(
     // Decode the degradation proof: one exact terminal replica, the
     // other indeterminate, at the canonical journal addresses.
     let mut b = TestBackend::new(7);
-    let (tf, pd) = probe_journal(
+    let (tf, _pd) = probe_journal(
         &mut b,
         &prior_art,
         ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_0),
@@ -478,7 +506,7 @@ pub fn degraded_history(
         ProbeScript::Clean(ERASED),
     );
     let gen = Some(full_generation(&mut b, &prior_art, 3, 4));
-    let row = match decode_lifecycle(prior_art, gen, &tf, Some(&pd), None, e - 1) {
+    let row = match decode_lifecycle(prior_art, gen, JournalEvidence::TerminalsOnly(&tf), e - 1) {
         LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed for the prior artifact"),
     };
