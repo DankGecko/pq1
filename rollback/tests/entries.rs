@@ -1721,7 +1721,7 @@ fn second_bump_with_prior_consumed_residue_recovers() {
     let committed_binding = binding(PhysicalSlot::A, 6, committed_roles);
     let snap = bank
         .snapshot(FENCE, Some(active_binding))
-        .with_committed_plan_binding(Some(committed_binding));
+        .with_committed_plan_binding(1, committed_binding);
     match floor::decode_floor(&snap) {
         FloorView::Recovering(p) => assert_eq!(p.target(), 6),
         other => panic!(
@@ -1856,5 +1856,115 @@ fn view_name(v: &FloorView) -> &'static str {
         FloorView::Recovering(_) => "Recovering",
         FloorView::Aborted(_) => "Aborted",
         FloorView::Unknown(_) => "Unknown",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R17-1: keyed committed-plan bindings
+// ---------------------------------------------------------------------------
+
+#[test]
+fn first_bump_phantom_committed_binding_is_unknown() {
+    // R17-1(a): during an ACTIVE FIRST bump (no committed group), a
+    // keyed completed-plan binding is phantom — it cannot own anything.
+    let mut bank = Bank::new();
+    bank.clean(floor::encode_stage_record(1));
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(1, 1));
+    }
+    bank.virgin();
+    bank.route1(true);
+    let roles = [
+        (1, PlanRole::Witness),
+        (2, PlanRole::Witness),
+        (3, PlanRole::Witness),
+        (4, PlanRole::Reserved),
+    ];
+    let snap = bank
+        .snapshot(FENCE, Some(binding(PhysicalSlot::A, 2, roles)))
+        .with_committed_plan_binding(1, binding(PhysicalSlot::A, 2, roles));
+    match floor::decode_floor(&snap) {
+        FloorView::Unknown(floor::FloorFault::ConflictingCompletion) => {}
+        other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn two_generation_residue_recovers_third_bump() {
+    // R17-1(b): residue from TWO older completed plans, each keyed and
+    // validated, plus the active third plan → Recovering(g3).
+    let mut bank = Bank::new();
+    // Committed g1 (t=5): records 0-2, COMPLETE 3, torn residue 4.
+    for i in 0..3u16 {
+        bank.clean(floor::encode_floor_record(5, 1));
+        let _ = i;
+    }
+    bank.clean(floor::encode_complete_record(1));
+    bank.add(ProbeScript::Corrected(floor::encode_floor_record(5, 1)));
+    // Committed g2 (t=6): records 5-7, COMPLETE 8, torn residue 9.
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(6, 2));
+    }
+    bank.clean(floor::encode_complete_record(2));
+    bank.add(ProbeScript::Corrected(floor::encode_floor_record(6, 2)));
+    // Active g3 plan: STAGEACT 10, records 11-13, reserved virgin 14.
+    bank.clean(floor::encode_stage_record(3));
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(7, 3));
+    }
+    bank.virgin();
+    bank.route1(false);
+    let g3_roles = [
+        (11, PlanRole::Witness),
+        (12, PlanRole::Witness),
+        (13, PlanRole::Witness),
+        (14, PlanRole::Reserved),
+    ];
+    let g1_roles = [
+        (0, PlanRole::Witness),
+        (1, PlanRole::Witness),
+        (2, PlanRole::Witness),
+        (4, PlanRole::Consumed),
+    ];
+    let g2_roles = [
+        (5, PlanRole::Witness),
+        (6, PlanRole::Witness),
+        (7, PlanRole::Witness),
+        (9, PlanRole::Consumed),
+    ];
+    let snap = bank
+        .snapshot(FENCE, Some(binding(PhysicalSlot::A, 8, g3_roles)))
+        .with_committed_plan_binding(1, binding(PhysicalSlot::A, 6, g1_roles))
+        .with_committed_plan_binding(2, binding(PhysicalSlot::A, 7, g2_roles));
+    match floor::decode_floor(&snap) {
+        FloorView::Recovering(p) => {
+            assert_eq!(p.target(), 7);
+            assert_eq!(p.group(), 3);
+        }
+        other => panic!("expected Recovering(g3), got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn binding_keyed_to_uncommitted_group_is_unknown() {
+    // R17-1: a keyed binding for a group NOT in the committed list.
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(5, 1));
+    }
+    bank.clean(floor::encode_complete_record(1));
+    bank.route1(false);
+    let roles = [
+        (0, PlanRole::Witness),
+        (1, PlanRole::Witness),
+        (2, PlanRole::Witness),
+        (3, PlanRole::Consumed),
+    ];
+    let snap = bank
+        .snapshot(FENCE, None)
+        .with_committed_plan_binding(9, binding(PhysicalSlot::A, 6, roles));
+    match floor::decode_floor(&snap) {
+        FloorView::Unknown(floor::FloorFault::ConflictingCompletion) => {}
+        other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
     }
 }

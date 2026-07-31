@@ -601,8 +601,11 @@ fn garbage_route1_with_committed_group_is_diagnostic_only() {
         launch: MAY_LAUNCH,
     };
     match decode_floor(&snap) {
-        FloorView::Unknown(FloorFault::UncertainQw { .. }) => {}
-        other => panic!("expected UncertainQw, got {}", view_name(&other)),
+        // R17-2: the fault names the accurate class AND marker — clean
+        // garbage is an orphan (UncertainQw is for corrected/faulted
+        // reads).
+        FloorView::Unknown(FloorFault::OrphanQw { index: 61 }) => {}
+        other => panic!("expected OrphanQw{{index: 61}}, got {}", view_name(&other)),
     }
 }
 

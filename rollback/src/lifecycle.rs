@@ -225,6 +225,10 @@ pub enum MalformedReason {
     BadInstallGeneration,
     /// Token binding does not match the artifact identity.
     TokenBindingMismatch,
+    /// The artifact proof and its lifecycle/terminal proof do not carry
+    /// the same sealed `ArtifactEvidenceKey` (R17-3: not a token issue —
+    /// no token is consulted on terminal rows).
+    EvidenceKeyMismatch,
     /// A presented journal read is not the artifact's canonical QW for
     /// its role (wrong address), or the presented reads do not share
     /// one probe epoch (R3-2: A's QWs can never construct B's evidence).
@@ -454,7 +458,7 @@ pub fn decode_lifecycle(
                 crate::evidence::RobustConfirmedEvidence::RobustTerminalSet(set),
             ) {
                 Some(accepted) => LifecycleState::ConfirmedRobust(accepted),
-                None => LifecycleState::Malformed(MalformedReason::TokenBindingMismatch),
+                None => LifecycleState::Malformed(MalformedReason::EvidenceKeyMismatch),
             };
         }
         TerminalSetOutcome::Surviving(set) => {

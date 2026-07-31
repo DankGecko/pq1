@@ -253,11 +253,14 @@ pub struct FloorSnapshot {
     completion_fence: CompletionLaunchEvidence,
     /// Required iff a stage record is present.
     stage_binding: Option<StageBinding>,
-    /// The most recent committed group's COMPLETED plan binding (its
-    /// authenticated role map; R16-1: cumulative historical ownership
-    /// of consumed/quarantined residue). Model input; OPEN-OTP-1..3
-    /// owns the real history chain.
-    committed_plan_binding: Option<StageBinding>,
+    /// COMPLETED plan bindings keyed by group (R17-1: cumulative
+    /// historical ownership of consumed/quarantined residue, validated
+    /// against the committed list — a binding keyed to a group that is
+    /// not committed is contradictory). Bounded to
+    /// [`MAX_COMPLETE_RECORDS`]. Model input; OPEN-OTP-1..3 owns the
+    /// real history chain.
+    committed_plan_bindings: [Option<(u32, StageBinding)>; MAX_COMPLETE_RECORDS],
+    committed_plan_count: usize,
 }
 
 impl FloorSnapshot {
@@ -331,20 +334,30 @@ impl FloorSnapshot {
             route1,
             completion_fence,
             stage_binding,
-            committed_plan_binding: None,
+            committed_plan_bindings: [const { None }; MAX_COMPLETE_RECORDS],
+            committed_plan_count: 0,
         }
     }
 
-    /// Attach the most recent committed group's completed plan binding
-    /// (R16-1).
-    pub fn with_committed_plan_binding(mut self, binding: Option<StageBinding>) -> FloorSnapshot {
-        self.committed_plan_binding = binding;
+    /// Attach one completed plan binding for `group` (R16-1/R17-1). At
+    /// most [`MAX_COMPLETE_RECORDS`] keyed bindings.
+    pub fn with_committed_plan_binding(
+        mut self,
+        group: u32,
+        binding: StageBinding,
+    ) -> FloorSnapshot {
+        assert!(
+            self.committed_plan_count < MAX_COMPLETE_RECORDS,
+            "committed plan binding capacity"
+        );
+        self.committed_plan_bindings[self.committed_plan_count] = Some((group, binding));
+        self.committed_plan_count += 1;
         self
     }
 
-    /// The most recent committed group's completed plan binding.
-    pub fn committed_plan_binding(&self) -> Option<&StageBinding> {
-        self.committed_plan_binding.as_ref()
+    /// The completed plan bindings keyed by group.
+    pub fn committed_plan_bindings(&self) -> &[Option<(u32, StageBinding)>] {
+        &self.committed_plan_bindings[..self.committed_plan_count]
     }
 }
 
@@ -790,23 +803,26 @@ fn snapshot_digest(snapshot: &FloorSnapshot) -> [u8; 32] {
         }
         None => h.update([0xB0]),
     }
-    match &snapshot.committed_plan_binding {
-        Some(b) => {
-            h.update([0xB3, b.slot().to_u8()]);
-            h.update(b.r().to_be_bytes());
-            h.update(b.e().to_be_bytes());
-            h.update(b.manifest_digest());
-            h.update(b.install_id());
-            for &(index, role) in b.roles() {
-                h.update(index.to_be_bytes());
-                h.update([match role {
-                    PlanRole::Witness => 0xC1,
-                    PlanRole::Consumed => 0xC2,
-                    PlanRole::Reserved => 0xC3,
-                }]);
+    for entry in snapshot.committed_plan_bindings() {
+        match entry {
+            Some((group, b)) => {
+                h.update([0xB3, b.slot().to_u8()]);
+                h.update(group.to_be_bytes());
+                h.update(b.r().to_be_bytes());
+                h.update(b.e().to_be_bytes());
+                h.update(b.manifest_digest());
+                h.update(b.install_id());
+                for &(index, role) in b.roles() {
+                    h.update(index.to_be_bytes());
+                    h.update([match role {
+                        PlanRole::Witness => 0xC1,
+                        PlanRole::Consumed => 0xC2,
+                        PlanRole::Reserved => 0xC3,
+                    }]);
+                }
             }
+            None => h.update([0xB2]),
         }
-        None => h.update([0xB2]),
     }
     h.finalize().into()
 }
@@ -943,12 +959,24 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     // slice, matching the FA-1.3 deferral.
     let mut base_proof_ok = true;
     let mut route1_anomaly = false;
-    for cell in snapshot.route1().iter() {
+    let mut route1_fault: Option<FloorFault> = None;
+    for (j, cell) in snapshot.route1().iter().enumerate() {
         match classify_route1(cell) {
             Route1Class::Virgin => base_proof_ok = false,
             Route1Class::Base0Marker => {}
-            Route1Class::Orphan | Route1Class::Uncertain => {
+            Route1Class::Orphan => {
                 route1_anomaly = true;
+                let index = match &cell.read {
+                    FreshQwRead::Clean(qw) => qw.index(),
+                    _ => ROUTE1_QW_INDICES[j],
+                };
+                route1_fault.get_or_insert(FloorFault::OrphanQw { index });
+            }
+            Route1Class::Uncertain => {
+                route1_anomaly = true;
+                route1_fault.get_or_insert(FloorFault::UncertainQw {
+                    index: ROUTE1_QW_INDICES[j],
+                });
             }
         }
     }
@@ -1125,16 +1153,40 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
         _ => return FloorView::Unknown(FloorFault::AmbiguousStage),
     };
 
+    // R17-1: every keyed completed-plan binding must correspond to a
+    // group IN the validated committed list and target that group's
+    // committed target — a phantom or unmatched binding (including any
+    // binding during an ACTIVE FIRST bump, where no committed group
+    // exists) is contradictory.
+    for entry in snapshot.committed_plan_bindings() {
+        let Some((group, binding)) = entry else {
+            return FloorView::Unknown(FloorFault::ConflictingCompletion);
+        };
+        let Some(&(_, committed_t)) = committed_list[..n_committed]
+            .iter()
+            .find(|&&(cg, _)| cg == *group)
+        else {
+            return FloorView::Unknown(FloorFault::ConflictingCompletion);
+        };
+        if binding.e().checked_sub(1) != Some(committed_t) {
+            return FloorView::Unknown(FloorFault::ConflictingCompletion);
+        }
+    }
+
     // R14-1 + R16-1 + R16-2(b): uncertain cells are accounted by
-    // CUMULATIVE ownership — a cell mapped `Consumed` by SOME
-    // committed group's completed plan (the `committed_plan_binding`,
-    // or the R14-1-compatible single binding targeting the committed
-    // target) or by the active stage's plan. Absorption requires REAL
-    // superseded residue (n_superseded > 0) when there is no active
-    // stage; only otherwise-unmapped uncertain cells force Unknown.
+    // CUMULATIVE ownership — a cell mapped `Consumed` by SOME committed
+    // group's validated completed plan or by the active stage's plan.
+    // Absorption requires REAL superseded residue (n_superseded > 0)
+    // when there is no active stage; only otherwise-unmapped uncertain
+    // cells force Unknown.
     let committed_t = committed.map(|(_, t)| t);
-    let committed_map: Option<&StageBinding> = match snapshot.committed_plan_binding() {
-        Some(b) => Some(b),
+    let committed_map: Option<&StageBinding> = match snapshot
+        .committed_plan_bindings()
+        .iter()
+        .flatten()
+        .next()
+    {
+        Some((_, b)) => Some(b),
         None => match (snapshot.stage_binding(), committed_t) {
             (Some(b), Some(t)) if b.e().checked_sub(1) == Some(t) => Some(b),
             _ => None,
@@ -1151,10 +1203,15 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
         let residue_present = n_superseded > 0;
         for &idx in &uncertain_indices[..n_uncertain_idx] {
             let accounted = residue_present
-                && [committed_map, active_map]
-                    .into_iter()
+                && (snapshot
+                    .committed_plan_bindings()
+                    .iter()
                     .flatten()
-                    .any(|b| b.role_of(idx) == Some(PlanRole::Consumed));
+                    .any(|(_, b)| b.role_of(idx) == Some(PlanRole::Consumed))
+                    || [committed_map, active_map]
+                        .into_iter()
+                        .flatten()
+                        .any(|b| b.role_of(idx) == Some(PlanRole::Consumed)));
             if !accounted {
                 return FloorView::Unknown(FloorFault::UncertainQw { index: idx });
             }
@@ -1173,10 +1230,14 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                     snapshot_digest: digest,
                 }),
                 None => {
-                    // R10-5: with NO committed group, Route-1 anomalies
-                    // remain fatal (BASE0 needs the full canonical map).
+                    // R10-5 + R17-2: with NO committed group, Route-1
+                    // anomalies remain fatal (BASE0 needs the full
+                    // canonical map), and the fault names the actual
+                    // offending marker.
                     if route1_anomaly {
-                        return FloorView::Unknown(FloorFault::UncertainQw { index: 60 });
+                        return FloorView::Unknown(
+                            route1_fault.unwrap_or(FloorFault::UncertainQw { index: 60 }),
+                        );
                     }
                     // Canonical base: fully virgin bank, exact BASE0 pair,
                     // proven no launch anywhere (classify_cell already
@@ -1300,6 +1361,11 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                 // the ACTIVE plan OR of some committed group's
                 // completed plan (cumulative historical ownership).
                 let mapped = binding.role_of(idx) == Some(PlanRole::Consumed)
+                    || snapshot
+                        .committed_plan_bindings()
+                        .iter()
+                        .flatten()
+                        .any(|(_, b)| b.role_of(idx) == Some(PlanRole::Consumed))
                     || committed_map
                         .map(|b| b.role_of(idx) == Some(PlanRole::Consumed))
                         .unwrap_or(false);
