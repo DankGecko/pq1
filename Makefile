@@ -2269,7 +2269,8 @@ override PROD_FORBIDDEN := e2e-test dev-testkey mock-se debug-log otp-hardcoded-
 # not establish the final shipping feature set or authorize the ratchet.
 # (Dev/bench hardware uses the `flash-hw-*` / `*-e2e` targets, NOT
 # `make release` / `prod-check`, so it is unaffected.)
-override PROD_REQUIRED := mode-production optiga-lock-operational optiga-hw-counter \
+override PROD_REQUIRED := mode-production stm32u585 se050 optiga-trust-m dual-se \
+                optiga-lock-operational optiga-hw-counter \
                 consumption-mask tamp tamp-wipe tzic-wipe iwdg \
                 saes-dhuk se050-derived-scp03 bhk rdp2-self-lock
 
@@ -4013,12 +4014,18 @@ sbom-firmware:
 # build, so these do NOT cover those — see work-todo §34.
 # ---------------------------------------------------------------------------
 .PHONY: kani miri ui-golden
-kani-heavy: ## HIGH-MEMORY Kani harnesses excluded from `make kani` (>=32 GB)
+kani-heavy: ## Kani harnesses excluded from `make kani` (peak RSS near the 16 GB runner ceiling)
 	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
-	@echo "==> Kani (HEAVY): harnesses that do not fit a 16 GB hosted runner."
-	@echo "    cow_presign_precedence measured 2026-07-31: SUCCESSFUL, 3m56s,"
-	@echo "    peak RSS 11.5 GiB. Excluded from `make kani` so an OOM cannot kill"
-	@echo "    the runner and suppress the rest of the nightly job's evidence."
+	@echo "==> Kani (HEAVY): harnesses whose peak RSS sits near the hosted-runner"
+	@echo "    ceiling. Measured 2026-07-31, both VERIFY SUCCESSFULLY:"
+	@echo "      cow_presign_precedence  11.5  GiB, 3m56s"
+	@echo "      no_hidden_value         13.05 GiB, 7m55s"
+	@echo "    A public-repo runner has 16 GB RAM and 14 GB disk. These are UNDER"
+	@echo "    16 GB, so 'needs >=32 GB' would be an overclaim - the actual kill"
+	@echo "    mechanism (RAM headroom vs disk) is instrumented in nightly.yml and"
+	@echo "    not yet settled. They are excluded because an OOM kills the runner"
+	@echo "    and suppresses the rest of the job's evidence, not because a bigger"
+	@echo "    number has been proven necessary."
 	cargo kani -p pqsigner-tx --features kani-heavy --harness cow_presign_precedence
 
 kani: ## Bounded model-checking on firmware decoders/counters

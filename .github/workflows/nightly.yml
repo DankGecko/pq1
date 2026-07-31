@@ -57,8 +57,33 @@ jobs:
         run: |
           cargo install --locked --version 0.67.0 kani-verifier
           cargo kani setup
+      # INSTRUMENTATION, added 2026-07-31 — do not remove until the Kani OOM is
+      # settled. The job has been dying with "The runner has received a
+      # shutdown signal", which is what GitHub prints when the agent is killed
+      # and says NOTHING about why. Two hypotheses are live and they have
+      # different fixes:
+      #   RAM  — no_hidden_value peaks at 13.05 GiB and cow_presign_precedence
+      #          at 11.5 GiB (both measured locally, both VERIFY SUCCESSFULLY).
+      #          A public-repo runner has 16 GB, so these are close to but under
+      #          the ceiling.
+      #   DISK — a public-repo runner has only 14 GB of SSD, and this job
+      #          installs the whole Kani/CBMC toolchain on top of the preinstalled
+      #          image before building the workspace.
+      # Print both before and after so the next failure names its own cause
+      # instead of requiring another round of guessing.
+      - name: capacity before (RAM + disk)
+        run: |
+          echo "--- memory"; free -m
+          echo "--- disk";   df -h /
       - name: make kani
-        run: make kani
+        run: /usr/bin/time -v make kani
+      - name: capacity after (RAM + disk, and any OOM kill)
+        if: always()
+        run: |
+          echo "--- memory"; free -m
+          echo "--- disk";   df -h /
+          echo "--- kernel OOM evidence (empty means it was NOT an OOM kill)"
+          sudo dmesg 2>/dev/null | grep -iE "out of memory|oom-kill|killed process" || echo "none"
       - name: make verify-kani-mutation (anti-vacuity — break a decoder, expect a harness to redden)
         # Kani-side mirror of the Lean verify-proof-mutation gate: each mutation
         # recompiles a crate + runs one harness (~1-4 min), all reverted. See
