@@ -239,6 +239,11 @@ fn reverify_artifact<B: RollbackBackend>(
             if !crate::journal::exact_marker(read, &fw_manifest::v6::QW_PENDING, *durability) {
                 return Err(IntentError::ArtifactDrift);
             }
+            // R7-4: the admission rule admits a qualified
+            // SurvivingInstallGeneration on this row, so the recheck
+            // must supply the same later-lifecycle evidence — a
+            // Full-only reconstruction would self-DoS every legally
+            // armed survivor-generation candidate.
             let gen = crate::lifecycle::decode_install_generation(
                 artifact,
                 crate::lifecycle::AttributedRead {
@@ -251,7 +256,7 @@ fn reverify_artifact<B: RollbackBackend>(
                     durability: recheck.install_id_inv.1,
                     launch: recheck.install_id_inv.2,
                 },
-                None,
+                Some(fw_manifest::v6::LaterLifecycleEvidence::Pending),
             );
             if gen.is_none() {
                 return Err(IntentError::ArtifactDrift);
@@ -542,8 +547,10 @@ pub fn start_from_steady<B: RollbackBackend>(
     match intent.receipt {
         None => Ok(StartOutcome::SameEpochNoWrite),
         Some(receipt) => {
-            // FROZEN-OTP-API-3 L897–900: a fresh full decode immediately
+            // FROZEN-OTP-API-3 L897–900: fresh re-verification of the
+            // robust artifact (R7-1) and a fresh full decode immediately
             // before the mutation.
+            reverify_artifact(backend, intent.artifact.artifact(), ArtifactExpectation::Robust)?;
             let recheck = RecheckContext {
                 class: RecheckClass::Steady,
                 floor: intent.steady.floor(),
@@ -571,7 +578,6 @@ pub fn start_from_steady<B: RollbackBackend>(
 /// `RobustAccepted` candidate.
 pub struct CheckedRecoveryIntent {
     proof: RecoveryProof,
-    #[allow(dead_code)]
     candidate: AcceptedArtifact,
 }
 
@@ -607,8 +613,10 @@ pub fn resume_from_recovery<B: RollbackBackend>(
 ) -> Result<ResumeReceipt, IntentError> {
     let target = intent.proof.target();
     let group = intent.proof.group();
-    // FROZEN-OTP-API-3 L897–900: a fresh full decode immediately before
-    // the mutation, reproducing the bound plan.
+    // FROZEN-OTP-API-3 L897–900: fresh re-verification of the bound
+    // robust candidate (R7-1) and a fresh full decode immediately
+    // before the mutation, reproducing the bound plan.
+    reverify_artifact(backend, intent.candidate.artifact(), ArtifactExpectation::Robust)?;
     let recheck = RecheckContext {
         class: RecheckClass::Recovering { target, group },
         floor: target,
@@ -718,51 +726,52 @@ impl FreshFloorProof {
 
 /// Writer-minted linear receipt for the twin slot's complete
 /// erase/restage (§10 item 9: "the independently restaged opposite-slot
-/// archived A/B twin... fresh install identity"). HOST-MODEL
-/// constructor stands in for the physical writer; the receipt proves
-/// the twin is a FRESH restage (new install id ≠ the prior twin
-/// generation's id), not merely a different stale copy.
+/// archived A/B twin... fresh install identity"). Mirrors
+/// [`DegradedHistoryEvidence`]: the receipt cross-checks the supplied
+/// prior twin identity (slot + manifest digest) against the erase/
+/// restage receipt and requires the NEW install id to differ from the
+/// prior twin generation's — proving the twin is a FRESH restage, not
+/// merely a different stale copy. HOST-MODEL constructor stands in for
+/// the physical writer (same posture as [`EraseRestageReceipt`]).
 #[derive(PartialEq, Eq, Debug)]
 pub struct TwinRestageReceipt {
-    slot: PhysicalSlot,
-    prior_manifest_digest: [u8; 32],
-    prior_install_id: [u8; 16],
+    prior_identity: crate::evidence::ArtifactIdentity,
     new_install_id: [u8; 16],
 }
 
 impl TwinRestageReceipt {
     /// HOST-MODEL constructor (the writer is out of scope). `None` when
-    /// the new install id equals the prior generation's (no fresh
-    /// identity, no restage).
+    /// the erase/restage receipt does not bind the prior identity's
+    /// slot and manifest digest, or when the new install id equals the
+    /// prior generation's (no fresh identity, no restage).
     pub fn new(
-        slot: PhysicalSlot,
-        prior_manifest_digest: [u8; 32],
-        prior_install_id: [u8; 16],
+        prior_identity: crate::evidence::ArtifactIdentity,
+        restage: EraseRestageReceipt,
         new_install_id: [u8; 16],
     ) -> Option<TwinRestageReceipt> {
-        if prior_install_id == new_install_id {
+        if restage.slot() != prior_identity.slot
+            || restage.prior_manifest_digest() != &prior_identity.manifest_digest
+            || prior_identity.install_id == new_install_id
+        {
             return None;
         }
         Some(TwinRestageReceipt {
-            slot,
-            prior_manifest_digest,
-            prior_install_id,
+            prior_identity,
             new_install_id,
         })
     }
 
+    /// The prior twin generation's slot.
     pub fn slot(&self) -> PhysicalSlot {
-        self.slot
+        self.prior_identity.slot
     }
 
-    pub fn prior_manifest_digest(&self) -> &[u8; 32] {
-        &self.prior_manifest_digest
+    /// The prior twin generation's identity.
+    pub fn prior_identity(&self) -> &crate::evidence::ArtifactIdentity {
+        &self.prior_identity
     }
 
-    pub fn prior_install_id(&self) -> [u8; 16] {
-        self.prior_install_id
-    }
-
+    /// The fresh install id of the restaged twin.
     pub fn new_install_id(&self) -> [u8; 16] {
         self.new_install_id
     }
@@ -918,8 +927,13 @@ impl CheckedDegradedRepairIntent {
     /// erase/restage receipt, and a FRESH install identity (the new
     /// row's install id must differ from the degraded generation's).
     /// Under `Aborted`, exact `T == F` is mandatory and the backend
-    /// remains untouched. Under `Steady`, the repair itself grants no
-    /// floor authority and the target must satisfy `T > F` STRICTLY.
+    /// remains untouched. Under `Steady`, the item only PERMITS a
+    /// repaired `T > F` candidate to later earn robust terminal
+    /// evidence through probation (floor establishment remains a later
+    /// ordinary `start_from_steady` action) — it does NOT require
+    /// strict `T > F`, and the ordinary same-floor `DegradedConfirmed`
+    /// repair (the `F == T` row) is legal, so the Steady arm rejects
+    /// only `target.t() < floor`.
     pub fn new(
         floor_proof: FreshFloorProof,
         source: AcceptedArtifact,
@@ -952,7 +966,7 @@ impl CheckedDegradedRepairIntent {
                 }
             }
             FreshFloorProof::Steady(proof) => {
-                if target.t() <= proof.floor() {
+                if target.t() < proof.floor() {
                     return Err(IntentError::FloorRegression);
                 }
             }

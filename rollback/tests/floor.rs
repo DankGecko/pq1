@@ -791,3 +791,20 @@ fn monotone_two_group_history_yields_highest_target() {
         other => panic!("expected Steady(9), got {}", view_name(&other)),
     }
 }
+
+#[test]
+fn non_adjacent_duplicate_group_is_unknown() {
+    // R7-2: completes [g1, g2, g1] — a non-adjacent duplicate that the
+    // pre-sort window check would have missed.
+    let mut bank = Bank::new();
+    bank.clean(encode_floor_record(5, 1));
+    bank.clean(encode_complete_record(1));
+    bank.clean(encode_floor_record(9, 2));
+    bank.clean(encode_complete_record(2));
+    bank.clean(encode_complete_record(1)); // duplicate g1, non-adjacent
+    bank.route1(false);
+    match bank.decode(FENCE_OK, None) {
+        FloorView::Unknown(FloorFault::NonMonotoneAllocation) => {}
+        other => panic!("expected NonMonotoneAllocation, got {}", view_name(&other)),
+    }
+}

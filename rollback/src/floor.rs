@@ -953,19 +953,15 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
         committed_list[n_committed] = (g, t);
         n_committed += 1;
     }
-    // Sequence validation: unique groups; targets non-decreasing in
-    // group order. A non-monotone or duplicate history is Unknown,
-    // never a silent max-pick.
-    for w in committed_list[..n_committed].windows(2) {
-        let ((g0, _), (g1, _)) = (w[0], w[1]);
-        if g0 == g1 {
-            return FloorView::Unknown(FloorFault::NonMonotoneAllocation);
-        }
-    }
+    // Sequence validation (R7-2): sort by group FIRST, then in one
+    // post-sort pass require strictly increasing group IDs (any
+    // duplicate — adjacent or not — is caught) and non-decreasing
+    // targets. A non-monotone or duplicate history is Unknown, never a
+    // silent max-pick.
     committed_list[..n_committed].sort_unstable_by_key(|&(g, _)| g);
     for w in committed_list[..n_committed].windows(2) {
-        let ((_, t0), (_, t1)) = (w[0], w[1]);
-        if t1 < t0 {
+        let ((g0, t0), (g1, t1)) = (w[0], w[1]);
+        if g0 == g1 || t1 < t0 {
             return FloorView::Unknown(FloorFault::NonMonotoneAllocation);
         }
     }
