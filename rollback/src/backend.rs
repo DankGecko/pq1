@@ -151,13 +151,24 @@ pub trait RollbackBackend {
     /// terminal QWs, install generation) against CURRENT backend state
     /// — the artifact half of the frozen pre-handoff recheck (R6-1).
     /// `None` when the backend cannot produce a coherent re-read.
+    ///
+    /// CONTRACT (R16-4, mandatory for every implementation): before
+    /// returning a recheck, the backend MUST freshly re-verify the
+    /// manifest — full v6 parse, `stored_digest_matches`, AND
+    /// `verify_with_embedded_key` with the immutable embedded vendor key
+    /// — and derive the identity from THAT verification. The crate
+    /// cannot re-run the signature check at the recheck call site (key
+    /// material is not available there); the backend owns the
+    /// key-holding verification context. `ScriptedBackend`'s
+    /// implementation is the reference.
     fn reverify_artifact(
         &mut self,
         identity: &crate::evidence::ArtifactIdentity,
     ) -> Option<ArtifactRecheck>;
 
     /// Terminal-only variant for terminal-authoritative (Robust)
-    /// artifacts (R15-2): never probes the PENDING QW.
+    /// artifacts (R15-2): never probes the PENDING QW. Same R16-4
+    /// signature-verification contract as [`Self::reverify_artifact`].
     fn reverify_terminal(
         &mut self,
         identity: &crate::evidence::ArtifactIdentity,

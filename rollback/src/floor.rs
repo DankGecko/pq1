@@ -253,6 +253,11 @@ pub struct FloorSnapshot {
     completion_fence: CompletionLaunchEvidence,
     /// Required iff a stage record is present.
     stage_binding: Option<StageBinding>,
+    /// The most recent committed group's COMPLETED plan binding (its
+    /// authenticated role map; R16-1: cumulative historical ownership
+    /// of consumed/quarantined residue). Model input; OPEN-OTP-1..3
+    /// owns the real history chain.
+    committed_plan_binding: Option<StageBinding>,
 }
 
 impl FloorSnapshot {
@@ -326,7 +331,20 @@ impl FloorSnapshot {
             route1,
             completion_fence,
             stage_binding,
+            committed_plan_binding: None,
         }
+    }
+
+    /// Attach the most recent committed group's completed plan binding
+    /// (R16-1).
+    pub fn with_committed_plan_binding(mut self, binding: Option<StageBinding>) -> FloorSnapshot {
+        self.committed_plan_binding = binding;
+        self
+    }
+
+    /// The most recent committed group's completed plan binding.
+    pub fn committed_plan_binding(&self) -> Option<&StageBinding> {
+        self.committed_plan_binding.as_ref()
     }
 }
 
@@ -772,6 +790,24 @@ fn snapshot_digest(snapshot: &FloorSnapshot) -> [u8; 32] {
         }
         None => h.update([0xB0]),
     }
+    match &snapshot.committed_plan_binding {
+        Some(b) => {
+            h.update([0xB3, b.slot().to_u8()]);
+            h.update(b.r().to_be_bytes());
+            h.update(b.e().to_be_bytes());
+            h.update(b.manifest_digest());
+            h.update(b.install_id());
+            for &(index, role) in b.roles() {
+                h.update(index.to_be_bytes());
+                h.update([match role {
+                    PlanRole::Witness => 0xC1,
+                    PlanRole::Consumed => 0xC2,
+                    PlanRole::Reserved => 0xC3,
+                }]);
+            }
+        }
+        None => h.update([0xB2]),
+    }
     h.finalize().into()
 }
 
@@ -927,12 +963,10 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     let mut stages: [u32; MAX_STAGE_RECORDS] = [0; MAX_STAGE_RECORDS];
     let mut n_stage = 0usize;
     let mut n_virgin = 0u32;
-    let mut n_uncertain = 0u32;
     let mut virgin_indices: [u16; RESERVED_ROLLBACK_QWS] = [0; RESERVED_ROLLBACK_QWS];
     let mut n_virgin_idx = 0usize;
     let mut uncertain_indices: [u16; RESERVED_ROLLBACK_QWS] = [0; RESERVED_ROLLBACK_QWS];
     let mut n_uncertain_idx = 0usize;
-    let mut uncertain_index: Option<u16> = None;
 
     for (i, cell) in snapshot.cells().iter().enumerate() {
         let Some(cell) = cell else { continue };
@@ -943,8 +977,6 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                 n_virgin_idx += 1;
             }
             CellClass::Uncertain => {
-                n_uncertain += 1;
-                uncertain_index.get_or_insert(i as u16);
                 uncertain_indices[n_uncertain_idx] = i as u16;
                 n_uncertain_idx += 1;
             }
@@ -1058,6 +1090,12 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     }
     let stages = active_stages;
     let n_stage = n_active;
+    // R16-2(a): a stage binding with NO associated stage record (active
+    // or superseded) is contradictory evidence — it must not sit in the
+    // snapshot unexamined (least of all to absorb torn cells later).
+    if snapshot.stage_binding().is_some() && n_active == 0 && n_superseded == 0 {
+        return FloorView::Unknown(FloorFault::ConflictingCompletion);
+    }
     // The ONLY remaining conflict class: residue WITHOUT an active
     // stage, where the global binding contradicts the committed target.
     // With an active stage present, the binding belongs to that stage
@@ -1087,25 +1125,37 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
         _ => return FloorView::Unknown(FloorFault::AmbiguousStage),
     };
 
-    // R14-1: uncertain cells are NOT unconditionally fatal when no
-    // active stage exists. When the (single) stage binding targets the
-    // committed target, its role map IS the committed group's completed
-    // plan: a cell mapped as an authenticated `Consumed` plan role is
-    // accounted for (the designed degraded-establishment path leaves
-    // exactly that residue). Only UNASSIGNED uncertain cells force
-    // Unknown.
-    if n_uncertain > 0 && active.is_none() {
-        let committed_t = committed.map(|(_, t)| t);
-        let map_accounts = |idx: u16| -> bool {
-            match (snapshot.stage_binding(), committed_t) {
-                (Some(b), Some(t)) if b.e().checked_sub(1) == Some(t) => {
-                    b.role_of(idx) == Some(PlanRole::Consumed)
-                }
-                _ => false,
-            }
-        };
+    // R14-1 + R16-1 + R16-2(b): uncertain cells are accounted by
+    // CUMULATIVE ownership — a cell mapped `Consumed` by SOME
+    // committed group's completed plan (the `committed_plan_binding`,
+    // or the R14-1-compatible single binding targeting the committed
+    // target) or by the active stage's plan. Absorption requires REAL
+    // superseded residue (n_superseded > 0) when there is no active
+    // stage; only otherwise-unmapped uncertain cells force Unknown.
+    let committed_t = committed.map(|(_, t)| t);
+    let committed_map: Option<&StageBinding> = match snapshot.committed_plan_binding() {
+        Some(b) => Some(b),
+        None => match (snapshot.stage_binding(), committed_t) {
+            (Some(b), Some(t)) if b.e().checked_sub(1) == Some(t) => Some(b),
+            _ => None,
+        },
+    };
+    let active_map: Option<&StageBinding> = match active {
+        Some(_) => snapshot.stage_binding(),
+        None => None,
+    };
+    // The absorption guard applies when there is NO active stage (the
+    // active arm below owns its own role-map accountancy for the active
+    // plan, extended with the committed map per R16-1).
+    if active.is_none() {
+        let residue_present = n_superseded > 0;
         for &idx in &uncertain_indices[..n_uncertain_idx] {
-            if !map_accounts(idx) {
+            let accounted = residue_present
+                && [committed_map, active_map]
+                    .into_iter()
+                    .flatten()
+                    .any(|b| b.role_of(idx) == Some(PlanRole::Consumed));
+            if !accounted {
                 return FloorView::Unknown(FloorFault::UncertainQw { index: idx });
             }
         }
@@ -1246,7 +1296,14 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                 }
             }
             for &idx in &uncertain_indices[..n_uncertain_idx] {
-                if binding.role_of(idx) != Some(PlanRole::Consumed) {
+                // R16-1: accounted iff the cell is a Consumed role of
+                // the ACTIVE plan OR of some committed group's
+                // completed plan (cumulative historical ownership).
+                let mapped = binding.role_of(idx) == Some(PlanRole::Consumed)
+                    || committed_map
+                        .map(|b| b.role_of(idx) == Some(PlanRole::Consumed))
+                        .unwrap_or(false);
+                if !mapped {
                     return FloorView::Unknown(FloorFault::UnmappedRole { index: idx });
                 }
             }

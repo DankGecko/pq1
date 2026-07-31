@@ -135,7 +135,7 @@ fn pending_row(
     let tok = tf.read_arm_token(&mut *backend).expect("token planted");
     let gen = Some(full_generation(backend, &art, 23, 24));
     backend.set_artifact_script(slot, pending_script(slot, r, e, install_id));
-    let row = decode_lifecycle(art, gen, &tf, &pd, Some(tok), m.security_epoch - 1);
+    let row = decode_lifecycle(art, gen, &tf, Some(&pd), Some(tok), m.security_epoch - 1);
     row
 }
 
@@ -798,7 +798,7 @@ fn degraded_repair_rejects_stale_install_identity() {
         ProbeScript::Clean(ERASED),
     );
     let gen = Some(full_generation(&mut b2, &prior_art, 3, 4));
-    let degraded_row = match decode_lifecycle(prior_art, gen, &tf, &pd, None, GOLDEN_E - 2)
+    let degraded_row = match decode_lifecycle(prior_art, gen, &tf, Some(&pd), None, GOLDEN_E - 2)
     {
         LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed"),
@@ -1116,7 +1116,7 @@ fn probation_surviving_install_generation_candidate_hands_off() {
         gen,
         Some(pqsigner_rollback::journal::InstallGenerationEvidence::Surviving(_))
     ));
-    let row = decode_lifecycle(art, gen, &tf, &pd, Some(tok), GOLDEN_T);
+    let row = decode_lifecycle(art, gen, &tf, Some(&pd), Some(tok), GOLDEN_T);
     let intent =
         CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent builds");
     // The recheck backend carries the same surviving-half evidence.
@@ -1164,7 +1164,7 @@ fn degraded_history_rejects_cross_artifact_evidence() {
     );
     let gen = Some(full_generation(&mut b2, &art_a, 3, 4));
     let row_a = match pqsigner_rollback::lifecycle::decode_lifecycle(
-        art_a, gen, &tf, &pd, None, GOLDEN_E - 2,
+        art_a, gen, &tf, Some(&pd), None, GOLDEN_E - 2,
     ) {
         pqsigner_rollback::lifecycle::LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed"),
@@ -1499,7 +1499,7 @@ fn cross_epoch_install_halves_are_rejected_in_both_decode_paths() {
         b8.set_arm_token(Some(ArmToken::encode(ArmState::ArmReady, &binding)));
         tf.read_arm_token(&mut b8).expect("token planted")
     };
-    match decode_lifecycle(art, gen, &tf, &pd, Some(tok), GOLDEN_T) {
+    match decode_lifecycle(art, gen, &tf, Some(&pd), Some(tok), GOLDEN_T) {
         pqsigner_rollback::lifecycle::LifecycleState::Malformed(
             pqsigner_rollback::lifecycle::MalformedReason::BadInstallGeneration,
         ) => {}
@@ -1564,7 +1564,7 @@ fn recovery_join_rejects_other_generation_of_same_manifest() {
         (c1, CLEAN, MAY_LAUNCH),
     );
     let pd = pqsigner_rollback::lifecycle::PendingEvidence::for_test(pd, CLEAN, NO_LAUNCH);
-    let row = decode_lifecycle(other_gen, gen, &tf, &pd, None, GOLDEN_T);
+    let row = decode_lifecycle(other_gen, gen, &tf, Some(&pd), None, GOLDEN_T);
     let LifecycleState::ConfirmedRobust(candidate) = row else {
         panic!("expected ConfirmedRobust")
     };
@@ -1681,4 +1681,180 @@ fn robust_recheck_succeeds_with_faulting_pending_qw() {
         arm_probation_from_steady(&mut backend, intent).unwrap_err(),
         IntentError::ArtifactDrift
     );
+}
+
+// ---------------------------------------------------------------------------
+// R16-1 / R16-2 / R16-3 / R16-4
+// ---------------------------------------------------------------------------
+
+#[test]
+fn second_bump_with_prior_consumed_residue_recovers() {
+    // R16-1: a prior committed group's torn (Consumed) residue must not
+    // wedge the NEXT bump's active plan.
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(5, 1));
+    }
+    bank.clean(floor::encode_complete_record(1));
+    bank.add(ProbeScript::Corrected(floor::encode_floor_record(5, 1))); // g1's torn plan cell
+    bank.clean(floor::encode_stage_record(2));
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(6, 2));
+    }
+    bank.virgin();
+    bank.route1(false);
+    // Index layout: g1 records 0–2, COMPLETE 3, torn g1 cell 4,
+    // STAGEACT 5, g2 records 6–8, virgin 9.
+    let active_roles = [
+        (6, PlanRole::Witness),
+        (7, PlanRole::Witness),
+        (8, PlanRole::Witness),
+        (9, PlanRole::Reserved),
+    ];
+    let committed_roles = [
+        (0, PlanRole::Witness),
+        (1, PlanRole::Witness),
+        (2, PlanRole::Witness),
+        (4, PlanRole::Consumed),
+    ];
+    let active_binding = binding(PhysicalSlot::A, 7, active_roles);
+    let committed_binding = binding(PhysicalSlot::A, 6, committed_roles);
+    let snap = bank
+        .snapshot(FENCE, Some(active_binding))
+        .with_committed_plan_binding(Some(committed_binding));
+    match floor::decode_floor(&snap) {
+        FloorView::Recovering(p) => assert_eq!(p.target(), 6),
+        other => panic!(
+            "committed Consumed residue must not wedge the second bump, got {}",
+            view_name(&other)
+        ),
+    }
+}
+
+#[test]
+fn phantom_binding_without_any_stage_record_is_unknown() {
+    // R16-2(a): a StageBinding with zero stage records (no active, no
+    // superseded) is contradictory → Unknown, and it absorbs nothing.
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(5, 1));
+    }
+    bank.clean(floor::encode_complete_record(1));
+    bank.route1(false);
+    let roles = [
+        (0, PlanRole::Witness),
+        (1, PlanRole::Witness),
+        (2, PlanRole::Witness),
+        (3, PlanRole::Consumed),
+    ];
+    match bank.decode(FENCE, Some(binding(PhysicalSlot::A, 6, roles))) {
+        FloorView::Unknown(floor::FloorFault::ConflictingCompletion) => {}
+        other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn absorption_without_real_residue_is_unknown() {
+    // R16-2(b): a torn cell plus a matching binding but NO superseded
+    // stage residue. Absorption can never happen here — the binding has
+    // no associated stage record, so the R16-2(a) phantom guard fires
+    // first: ConflictingCompletion, and the torn cell absorbs nothing.
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(5, 1));
+    }
+    bank.clean(floor::encode_complete_record(1));
+    bank.add(ProbeScript::Corrected(floor::encode_floor_record(5, 1))); // torn cell, no STAGEACT
+    bank.route1(false);
+    let roles = [
+        (0, PlanRole::Witness),
+        (1, PlanRole::Witness),
+        (2, PlanRole::Witness),
+        (3, PlanRole::Consumed),
+    ];
+    match bank.decode(FENCE, Some(binding(PhysicalSlot::A, 6, roles))) {
+        FloorView::Unknown(floor::FloorFault::ConflictingCompletion) => {}
+        FloorView::Steady(_) => panic!("a phantom binding must never absorb into Steady"),
+        other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn terminal_rows_pass_no_pending_evidence() {
+    // R16-3: a terminal-row decode with `None` PENDING evidence
+    // classifies normally (the PENDING QW is never probed).
+    let p = pass();
+    let mut b = TestBackend::new(7);
+    let art = artifact(&p, PhysicalSlot::A);
+    let (tf, _pd) = probe_journal(
+        &mut b,
+        &art,
+        ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_0),
+        ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_1),
+        ProbeScript::Clean(ERASED),
+    );
+    let gen = Some(full_generation(&mut b, &art, 3, 4));
+    match decode_lifecycle(art, gen, &tf, None, None, GOLDEN_T) {
+        pqsigner_rollback::lifecycle::LifecycleState::ConfirmedRobust(_) => {}
+        _ => panic!("expected ConfirmedRobust"),
+    }
+
+    // The probation branch with `None` → Malformed.
+    let p = pass();
+    let art = artifact(&p, PhysicalSlot::A);
+    let (tf, _pd) = probe_journal(
+        &mut b,
+        &art,
+        ProbeScript::Clean(ERASED),
+        ProbeScript::Clean(ERASED),
+        ProbeScript::Clean(fw_manifest::v6::QW_PENDING),
+    );
+    let gen = Some(full_generation(&mut b, &art, 3, 4));
+    assert!(matches!(
+        decode_lifecycle(art, gen, &tf, None, None, GOLDEN_T),
+        pqsigner_rollback::lifecycle::LifecycleState::Malformed(_)
+    ));
+}
+
+#[test]
+fn recheck_contract_rejects_forged_signature_and_tampered_digest() {
+    // R16-4: the backend's mandatory re-verification (reference
+    // ScriptedBackend) refuses a recheck whose manifest signature is
+    // forged or whose stored digest is tampered.
+    let p = pass();
+    let art = artifact(&p, PhysicalSlot::A);
+    let id = *art.identity();
+
+    // Forged signature (one bit, CRC re-sealed).
+    let mut backend = TestBackend::new(7);
+    let mut script = robust_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, INSTALL_ID);
+    script.page[fw_manifest::v6::OFF_SIGNATURE + 123] ^= 0x01;
+    fw_manifest::v6::rewrite_normalized_crc(&mut script.page);
+    backend.set_artifact_script(PhysicalSlot::A, script);
+    assert!(backend.reverify_artifact(&id).is_none());
+
+    // Tampered stored digest (CRC re-sealed → parse OK, digest leg fails).
+    let mut backend = TestBackend::new(7);
+    let mut script = robust_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, INSTALL_ID);
+    script.page[fw_manifest::v6::OFF_DIGEST] ^= 0x01;
+    fw_manifest::v6::rewrite_normalized_crc(&mut script.page);
+    backend.set_artifact_script(PhysicalSlot::A, script);
+    assert!(backend.reverify_artifact(&id).is_none());
+
+    // And the intact script still verifies.
+    let mut backend = TestBackend::new(7);
+    backend.set_artifact_script(
+        PhysicalSlot::A,
+        robust_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, INSTALL_ID),
+    );
+    assert!(backend.reverify_artifact(&id).is_some());
+}
+
+fn view_name(v: &FloorView) -> &'static str {
+    match v {
+        FloorView::Steady(_) => "Steady",
+        FloorView::Recovering(_) => "Recovering",
+        FloorView::Aborted(_) => "Aborted",
+        FloorView::Unknown(_) => "Unknown",
+    }
 }

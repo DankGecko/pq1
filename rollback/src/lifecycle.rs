@@ -413,7 +413,7 @@ pub fn decode_lifecycle(
     artifact: VerifiedArtifact,
     generation: Option<InstallGenerationEvidence>,
     terminals: &TerminalFirst,
-    pending: &PendingEvidence,
+    pending: Option<&PendingEvidence>,
     token: Option<TokenEvidence>,
     floor: u32,
 ) -> LifecycleState {
@@ -503,9 +503,13 @@ pub fn decode_lifecycle(
     }
 
     // PENDING branch (R13-1a): only here is the PENDING evidence
-    // consulted — and it must satisfy the full trio canonical check
-    // (canonical addresses for THIS artifact, one common probe epoch
-    // across all three journal reads).
+    // consulted — and it must exist (R16-3: terminal rows pass `None`
+    // and never probe PENDING at all) and satisfy the full trio
+    // canonical check (canonical addresses for THIS artifact, one
+    // common probe epoch across all three journal reads).
+    let Some(pending) = pending else {
+        return LifecycleState::Malformed(MalformedReason::OutOfOrderMarkers);
+    };
     let pending = pending.as_attributed_read();
     if canonical_journal_reads(
         artifact.identity(),

@@ -389,7 +389,7 @@ pub fn accepted_artifact(
     );
     let gen = Some(full_generation(b, &art, 13, 14));
     let t = m.security_epoch - 1;
-    match decode_lifecycle(art, gen, &tf, &pd, None, t) {
+    match decode_lifecycle(art, gen, &tf, Some(&pd), None, t) {
         LifecycleState::ConfirmedRobust(a) => a,
         _ => panic!("expected ConfirmedRobust"),
     }
@@ -478,7 +478,7 @@ pub fn degraded_history(
         ProbeScript::Clean(ERASED),
     );
     let gen = Some(full_generation(&mut b, &prior_art, 3, 4));
-    let row = match decode_lifecycle(prior_art, gen, &tf, &pd, None, e - 1) {
+    let row = match decode_lifecycle(prior_art, gen, &tf, Some(&pd), None, e - 1) {
         LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed for the prior artifact"),
     };
