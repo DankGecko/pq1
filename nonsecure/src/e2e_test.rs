@@ -2111,9 +2111,21 @@ fn main() -> ! {
     hprintln!("[NS][e2e] Scenario 5f: degenerate 1-tx batch");
     unsafe {
         let to0: [u8; 20] = [0xb0; 20];
+        // The VALUE here is load-bearing even though this scenario is about
+        // `batch_count == 1`. Since "refuse rounded legacy fee and token
+        // amounts" (2026-07-26), a signed native amount must be EXACTLY
+        // renderable at NATIVE_DISPLAY_FRACTION_DIGITS = 6 on a chain with a
+        // known ticker — and Sepolia (11155111) has one. 1 wei is not: it
+        // would have to paint as "0.000000 ETH", which is a lie about a value
+        // the user is signing, so `native_amount_is_exactly_renderable`
+        // refuses and the batch renderer fails closed. That is correct
+        // behaviour; this test just wants a value that renders, so use the
+        // same 0.01 ETH the multi-tx batch scenarios use. Do NOT "simplify"
+        // this back to 1 — it will refuse, and the failure looks like a batch
+        // bug rather than an amount-precision policy.
         let inner = [E2eBatchTx {
             to: to0,
-            value_wei: 1u128,
+            value_wei: 10_000_000_000_000_000u128, // 0.01 ETH — exact at 6 dp
             data: &[],
         }];
         let len = build_batch_payload(
