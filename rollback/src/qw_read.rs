@@ -124,6 +124,14 @@ pub enum ProbeStatus {
 /// RAW bytes + a raw status snapshot; the provided [`fresh_probe`] method
 /// is the ONLY place where the outcome class is derived, and the only
 /// [`CleanQw`] constructor available outside this module.
+///
+/// This trait is the platform TRUST SEAM by design: some code must
+/// attest physical reads, and no type system can prevent a platform
+/// from lying about its own hardware. The discipline here is the
+/// maximum meaningful: implementors supply only raw bytes + raw status
+/// while the provided method binds index/address/epoch and classifies
+/// canonically — everything DOWNSTREAM of `fresh_probe` is unforgeable,
+/// and the real implementation remains OPEN-ECC-1-gated.
 pub trait FreshArrayProbe {
     /// The single immutable-entry probe epoch all reads of this pass bind.
     fn probe_epoch(&self) -> u32;

@@ -29,6 +29,65 @@ pub struct AttributedRead<'a> {
     pub launch: LaunchAttribution,
 }
 
+/// The terminal-first probing capability (R10-2): PROOF that both
+/// terminal QWs were fresh-probed BEFORE any PENDING/TAMP evidence was
+/// obtained (§6.2 L2183–2189). Only constructible through
+/// [`TerminalFirst::probe`] (canonical addresses, one acquisition
+/// order); the capability carries the terminal reads it made. PENDING/
+/// TAMP evidence is only meaningful downstream of this value.
+pub struct TerminalFirst {
+    c0: (FreshQwRead, Durability, LaunchAttribution),
+    c1: (FreshQwRead, Durability, LaunchAttribution),
+}
+
+impl TerminalFirst {
+    /// The only construction path: fresh-probe BOTH terminal QWs first,
+    /// at the artifact's canonical addresses, with the caller's explicit
+    /// attributions. Callers obtain PENDING/TAMP evidence only AFTER
+    /// this returns.
+    pub fn probe<P: crate::qw_read::FreshArrayProbe>(
+        backend: &mut P,
+        identity: &crate::evidence::ArtifactIdentity,
+        c0_index: u16,
+        c0_attribution: (Durability, LaunchAttribution),
+        c1_index: u16,
+        c1_attribution: (Durability, LaunchAttribution),
+    ) -> TerminalFirst {
+        let c0 = backend.fresh_probe(c0_index, identity.confirmed_0_qw_address);
+        let c1 = backend.fresh_probe(c1_index, identity.confirmed_1_qw_address);
+        TerminalFirst {
+            c0: (c0, c0_attribution.0, c0_attribution.1),
+            c1: (c1, c1_attribution.0, c1_attribution.1),
+        }
+    }
+
+    /// The terminal reads this capability made.
+    pub fn terminals(&self) -> (AttributedRead<'_>, AttributedRead<'_>) {
+        (
+            AttributedRead {
+                read: &self.c0.0,
+                durability: self.c0.1,
+                launch: self.c0.2,
+            },
+            AttributedRead {
+                read: &self.c1.0,
+                durability: self.c1.1,
+                launch: self.c1.2,
+            },
+        )
+    }
+
+    /// TEST-SCAFFOLD constructor (feature-gated): adversarial tests
+    /// inject mis-addressed or cross-epoch terminal reads through this.
+    #[cfg(feature = "test-backend")]
+    pub fn from_reads(
+        c0: (FreshQwRead, Durability, LaunchAttribution),
+        c1: (FreshQwRead, Durability, LaunchAttribution),
+    ) -> TerminalFirst {
+        TerminalFirst { c0, c1 }
+    }
+}
+
 /// Why a combination is `MALFORMED` (§6.2 L2191–2193).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MalformedReason {
@@ -229,12 +288,12 @@ pub fn decode_install_generation(
 pub fn decode_lifecycle(
     artifact: VerifiedArtifact,
     generation: Option<InstallGenerationEvidence>,
-    terminal_c0: AttributedRead<'_>,
-    terminal_c1: AttributedRead<'_>,
+    terminals: &TerminalFirst,
     pending: AttributedRead<'_>,
     token: Option<ArmToken>,
     floor: u32,
 ) -> LifecycleState {
+    let (terminal_c0, terminal_c1) = terminals.terminals();
     // R3-2: the presented journal reads must be THIS artifact's
     // canonical QWs (identity addresses), under one common probe epoch.
     if !canonical_journal_reads(

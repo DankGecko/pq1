@@ -331,6 +331,7 @@ pub struct SteadyProof {
     floor: u32,
     group: GroupIdentity,
     virgin_cells: u32,
+    route1_anomaly: bool,
     snapshot_digest: [u8; 32],
 }
 
@@ -354,6 +355,14 @@ impl SteadyProof {
     /// Digest of the complete physical snapshot this proof decodes from.
     pub fn snapshot_digest(&self) -> &[u8; 32] {
         &self.snapshot_digest
+    }
+
+    /// R10-5 diagnostic: a Route-1 QW outside the virgin/BASE0 map was
+    /// observed. Diagnostic only — it does not lower or negate the
+    /// proven floor (Route-1 reservation/claim roles land with
+    /// FROZEN-ROUTE1-1 in a later slice).
+    pub fn route1_anomaly(&self) -> bool {
+        self.route1_anomaly
     }
 }
 
@@ -850,24 +859,19 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     if let Err(fault) = validate_physical_map(snapshot) {
         return FloorView::Unknown(fault);
     }
-    // Route-1 accountancy (R3-6): only virgin or exact BASE0 codeword is
-    // inside the authenticated map; anything else forces Unknown.
+    // Route-1 classification (R3-6, relaxed by R10-5): anomalies are
+    // recorded as diagnostics; only the no-committed-group branch
+    // consults them (a torn Route-1 cell cannot wedge a proven Steady).
+    // Route-1 reservation/claim roles (FROZEN-ROUTE1-1) land in a later
+    // slice, matching the FA-1.3 deferral.
     let mut base_proof_ok = true;
-    for (j, cell) in snapshot.route1().iter().enumerate() {
+    let mut route1_anomaly = false;
+    for cell in snapshot.route1().iter() {
         match classify_route1(cell) {
             Route1Class::Virgin => base_proof_ok = false,
             Route1Class::Base0Marker => {}
-            Route1Class::Orphan => {
-                let index = match &cell.read {
-                    FreshQwRead::Clean(qw) => qw.index(),
-                    _ => 60 + j as u16,
-                };
-                return FloorView::Unknown(FloorFault::OrphanQw { index });
-            }
-            Route1Class::Uncertain => {
-                return FloorView::Unknown(FloorFault::UncertainQw {
-                    index: 60 + j as u16,
-                });
+            Route1Class::Orphan | Route1Class::Uncertain => {
+                route1_anomaly = true;
             }
         }
     }
@@ -991,13 +995,34 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     }
     let committed: Option<(u32, u32)> = committed_list[..n_committed].last().copied();
 
-    // A stage record for a group that is already committed is conflicting
-    // completion authority.
+    // R10-1: a stage record for an already-committed group is
+    // SUPERSEDED maintenance residue when its identity MATCHES the
+    // committed group (§11 L3810, L1152: after exact authoritative
+    // COMPLETE, optional close/compaction is maintenance, not
+    // progress). Superseded records are not active stages at all (they
+    // do not interact with the R8-2 cursor rule). Genuinely
+    // incompatible stage/completion evidence keeps rejecting.
+    let mut active_stages: [u32; MAX_STAGE_RECORDS] = [0; MAX_STAGE_RECORDS];
+    let mut n_active = 0usize;
     for &g in &stages[..n_stage] {
-        if completes[..n_complete].contains(&g) {
-            return FloorView::Unknown(FloorFault::ConflictingCompletion);
+        if let Some(&(_, committed_t)) = committed_list[..n_committed].iter().find(|&&(cg, _)| cg == g)
+        {
+            // Matching identity requires the stage binding to target
+            // exactly the committed target.
+            let binding_matches = snapshot
+                .stage_binding()
+                .is_some_and(|b| b.e().checked_sub(1) == Some(committed_t));
+            if !binding_matches {
+                return FloorView::Unknown(FloorFault::ConflictingCompletion);
+            }
+            // Superseded: not an active stage.
+        } else {
+            active_stages[n_active] = g;
+            n_active += 1;
         }
     }
+    let stages = active_stages;
+    let n_stage = n_active;
 
     // Floor records belonging to NO group context are orphan roles: any
     // record whose group has neither COMPLETE nor STAGE evidence forces
@@ -1031,9 +1056,15 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                     floor: t,
                     group: GroupIdentity::Group(g),
                     virgin_cells: n_virgin,
+                    route1_anomaly,
                     snapshot_digest: digest,
                 }),
                 None => {
+                    // R10-5: with NO committed group, Route-1 anomalies
+                    // remain fatal (BASE0 needs the full canonical map).
+                    if route1_anomaly {
+                        return FloorView::Unknown(FloorFault::UncertainQw { index: 60 });
+                    }
                     // Canonical base: fully virgin bank, exact BASE0 pair,
                     // proven no launch anywhere (classify_cell already
                     // forced any may-have-launched cell to Uncertain, which
@@ -1043,6 +1074,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                             floor: 0,
                             group: GroupIdentity::Base0,
                             virgin_cells: n_virgin,
+                            route1_anomaly,
                             snapshot_digest: digest,
                         })
                     } else if n_floor == 0 && n_virgin as usize == RESERVED_ROLLBACK_QWS {
@@ -1270,19 +1302,26 @@ impl EpochBumpReceipt {
 /// Snapshot-bound read-only preflight. Returns `None` unless `T > F`,
 /// the allocation sequence can advance (fail-closed at
 /// `u32::MAX`), and the proof's own virgin-cell count still funds the
-/// COMPLETE frozen plan: [`PLAN_CELLS`] cells — three initial replica
-/// witnesses plus one replacement — because every `Reserved` role in
-/// the issued plan must map to a distinct canonically-virgin QW at
-/// decode (R8-1: at INITIAL_THRESHOLD virgins the 4-cell plan is born
-/// dead and OTP is one-way). The margin is PROOF-BOUND (counted by the
-/// decode, never caller-asserted), and the receipt binds the proof's
-/// snapshot digest (currency proof for the recheck).
+/// COMPLETE frozen plan: [`PLAN_CELLS`] replica cells (three initial
+/// witnesses plus one replacement; every `Reserved` role must map to a
+/// distinct canonically-virgin QW at decode, R8-1) PLUS the stage and
+/// COMPLETE marker cells the model's codec draws from the same bank
+/// (R10-4, gate = `PLAN_CELLS + 2`; real marker placement is
+/// OPEN-OTP-1..3). The margin is PROOF-BOUND (counted by the decode,
+/// never caller-asserted), and the receipt binds the proof's snapshot
+/// digest (currency proof for the recheck).
 pub fn preflight(steady: &SteadyProof, target: u32) -> Option<EpochBumpReceipt> {
     let floor = steady.floor();
     if target <= floor || target > crate::arm_token::T_MAX {
         return None;
     }
-    if steady.virgin_cells() < PLAN_CELLS {
+    // R10-4: the gate covers the marker cells too — the model's codec
+    // draws the STAGEACT cell and the COMPLETE cell from the same bank,
+    // so a completable bump needs PLAN_CELLS + 2 virgins (a 4–5-virgin
+    // bank would reach the witnesses but never COMPLETE — the same
+    // born-dead class one level up). MODEL NOTE: the real marker
+    // placement is OPEN-OTP-1..3's; only the gate constant changes then.
+    if steady.virgin_cells() < PLAN_CELLS + 2 {
         return None;
     }
     let group = match steady.group() {

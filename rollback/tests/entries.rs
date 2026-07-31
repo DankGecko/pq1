@@ -131,7 +131,7 @@ fn pending_row(
         &binding.nonsecure_hash,
     )
     .unwrap();
-    let (c0, c1, pd) = probe_journal(
+    let (tf, pd) = probe_journal(
         backend,
         &art,
         ProbeScript::Clean(ERASED),
@@ -140,7 +140,7 @@ fn pending_row(
     );
     let gen = Some(full_generation(backend, &art, 23, 24));
     backend.set_artifact_script(slot, pending_script(slot, r, e, install_id));
-    let row = decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), m.security_epoch - 1);
+    let row = decode_lifecycle(art, gen, &tf, atr(&pd), Some(tok), m.security_epoch - 1);
     row
 }
 
@@ -791,7 +791,7 @@ fn degraded_repair_rejects_stale_install_identity() {
         .unwrap();
     let prior = *prior_art.identity();
     let mut b2 = TestBackend::new(7);
-    let (c0, c1, pd) = probe_journal(
+    let (tf, pd) = probe_journal(
         &mut b2,
         &prior_art,
         ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_0),
@@ -799,7 +799,7 @@ fn degraded_repair_rejects_stale_install_identity() {
         ProbeScript::Clean(ERASED),
     );
     let gen = Some(full_generation(&mut b2, &prior_art, 3, 4));
-    let degraded_row = match decode_lifecycle(prior_art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, GOLDEN_E - 2)
+    let degraded_row = match decode_lifecycle(prior_art, gen, &tf, atr_nl(&pd), None, GOLDEN_E - 2)
     {
         LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed"),
@@ -1099,7 +1099,7 @@ fn probation_surviving_install_generation_candidate_hands_off() {
         &binding.nonsecure_hash,
     )
     .unwrap();
-    let (c0, c1, pd) = probe_journal(
+    let (tf, pd) = probe_journal(
         &mut backend,
         &art,
         ProbeScript::Clean(ERASED),
@@ -1124,7 +1124,7 @@ fn probation_surviving_install_generation_candidate_hands_off() {
         gen,
         Some(pqsigner_rollback::journal::InstallGenerationEvidence::Surviving(_))
     ));
-    let row = decode_lifecycle(art, gen, atr_nl(&c0), atr_nl(&c1), atr(&pd), Some(tok), GOLDEN_T);
+    let row = decode_lifecycle(art, gen, &tf, atr(&pd), Some(tok), GOLDEN_T);
     let intent =
         CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent builds");
     // The recheck backend carries the same surviving-half evidence.
@@ -1163,7 +1163,7 @@ fn degraded_history_rejects_cross_artifact_evidence() {
         .expect("A verifies");
     let identity_a = *art_a.identity();
     let mut b2 = TestBackend::new(7);
-    let (c0, c1, pd) = probe_journal(
+    let (tf, pd) = probe_journal(
         &mut b2,
         &art_a,
         ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_0),
@@ -1172,7 +1172,7 @@ fn degraded_history_rejects_cross_artifact_evidence() {
     );
     let gen = Some(full_generation(&mut b2, &art_a, 3, 4));
     let row_a = match pqsigner_rollback::lifecycle::decode_lifecycle(
-        art_a, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, GOLDEN_E - 2,
+        art_a, gen, &tf, atr_nl(&pd), None, GOLDEN_E - 2,
     ) {
         pqsigner_rollback::lifecycle::LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed"),
@@ -1402,4 +1402,44 @@ fn peer_repair_source_drift_rejected_at_entry() {
         IntentError::ArtifactDrift
     );
     assert_eq!(backend.mutation_count(), 0, "no token transition on drift");
+}
+
+// ---------------------------------------------------------------------------
+// R10-3: degraded-repair source must be exact-F
+// ---------------------------------------------------------------------------
+
+#[test]
+fn degraded_repair_rejects_higher_epoch_source() {
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+
+    // Aborted arm: source T = floor + 1 → FloorRegression.
+    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES);
+    let proof = dead_proof(GOLDEN_T - 1, failed);
+    let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let mut backend = TestBackend::new(7);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1, ArmState::ArmReady, INSTALL_ID);
+    assert!(matches!(
+        CheckedDegradedRepairIntent::new(
+            FreshFloorProof::Aborted(proof),
+            source,
+            row,
+            degraded_history(PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1),
+        ),
+        Err(IntentError::FloorRegression)
+    ));
+
+    // Steady arm: same violation.
+    let steady = steady_proof_at(GOLDEN_T);
+    let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
+    assert!(matches!(
+        CheckedDegradedRepairIntent::new(
+            FreshFloorProof::Steady(steady),
+            source,
+            row,
+            degraded_history(PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E),
+        ),
+        Err(IntentError::FloorRegression)
+    ));
 }

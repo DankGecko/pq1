@@ -192,10 +192,13 @@ fn dead_stage_with_possible_completion_is_unknown() {
 
 #[test]
 fn conflicting_completion_authority_is_unknown() {
+    // A stage record for the committed group whose binding targets a
+    // DIFFERENT target is genuinely incompatible completion evidence
+    // (R10-1: matching identity would be superseded maintenance).
     let mut bank = steady_bank(5, 1);
     bank.clean(encode_stage_record(1));
     bank.route1(false);
-    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 6, RECOVERING_ROLES))) {
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, RECOVERING_ROLES))) {
         FloorView::Unknown(FloorFault::ConflictingCompletion) => {}
         other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
     }
@@ -554,10 +557,10 @@ fn route1_pair_must_be_two_distinct_qws() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn garbage_route1_with_committed_group_is_unknown() {
-    // R3-6: a Clean+DurableClean garbage Route-1 page (non-BASE0,
-    // nonblank) is outside the authenticated map → Unknown, never
-    // Steady(5).
+fn garbage_route1_with_committed_group_is_diagnostic_only() {
+    // R10-5: a garbage-but-clean Route-1 QW cannot wedge a PROVEN
+    // Steady floor — it is recorded as a diagnostic instead. (The
+    // no-committed-group case below stays fatal.)
     let mut bank = steady_bank(5, 1);
     let mut snap = bank.snapshot(FENCE_OK, None);
     let garbage = probe_at(
@@ -571,13 +574,35 @@ fn garbage_route1_with_committed_group_is_unknown() {
         durability: CLEAN,
         launch: MAY_LAUNCH,
     };
-    let view = decode_floor(&snap);
-    if let FloorView::Steady(_) = &view {
-        panic!("garbage Route-1 must never yield Steady");
+    match decode_floor(&snap) {
+        FloorView::Steady(p) => {
+            assert_eq!(p.floor(), 5);
+            assert!(p.route1_anomaly(), "anomaly must be recorded");
+        }
+        other => panic!("expected Steady(5) with diagnostic, got {}", view_name(&other)),
     }
-    match view {
-        FloorView::Unknown(FloorFault::OrphanQw { .. }) => {}
-        other => panic!("expected OrphanQw, got {}", view_name(&other)),
+
+    // No committed group: the same garbage is still fatal.
+    let mut bank = Bank::new();
+    for _ in 0..4 {
+        bank.virgin();
+    }
+    bank.route1(false);
+    let mut snap = bank.snapshot(FENCE_OK, None);
+    let garbage = probe_at(
+        &mut bank.b,
+        61,
+        canonical_route1_addr(1),
+        ProbeScript::Clean([0x42; 16]),
+    );
+    snap.route1_mut()[1] = FloorCell {
+        read: garbage,
+        durability: CLEAN,
+        launch: MAY_LAUNCH,
+    };
+    match decode_floor(&snap) {
+        FloorView::Unknown(FloorFault::UncertainQw { .. }) => {}
+        other => panic!("expected UncertainQw, got {}", view_name(&other)),
     }
 }
 
@@ -815,43 +840,68 @@ fn non_adjacent_duplicate_group_is_unknown() {
 
 #[test]
 fn preflight_requires_plan_cells_of_virgins() {
-    // Exactly INITIAL_THRESHOLD (3) virgins: the 4-cell plan is born
-    // dead (the 4th Reserved role could never map) → no receipt.
-    let mut bank = Bank::new();
-    for _ in 0..(RESERVED_ROLLBACK_QWS - 4) {
-        bank.clean(encode_floor_record(5, 1));
+    // R8-1+R10-4: the plan needs the 4 replica cells PLUS the stage and
+    // COMPLETE marker cells the model codec draws from the same bank —
+    // 3, 4, or 5 virgins all leave the plan born dead; 6 fund it.
+    for role_cells in [
+        RESERVED_ROLLBACK_QWS - 3,
+        RESERVED_ROLLBACK_QWS - 4,
+        RESERVED_ROLLBACK_QWS - 5,
+    ] {
+        let mut bank = Bank::new();
+        for _ in 0..role_cells {
+            bank.clean(encode_floor_record(5, 1));
+        }
+        bank.clean(encode_complete_record(1));
+        bank.route1(false);
+        let FloorView::Steady(proof) = bank.decode(FENCE_OK, None) else {
+            panic!("steady")
+        };
+        assert_eq!(proof.virgin_cells() as usize, RESERVED_ROLLBACK_QWS - role_cells - 1);
+        assert!(
+            preflight(&proof, 6).is_none(),
+            "{} virgins must not fund the plan",
+            proof.virgin_cells()
+        );
     }
-    bank.clean(encode_complete_record(1));
-    // 28 records + complete = 29 role cells → exactly 3 virgins.
-    bank.route1(false);
-    let FloorView::Steady(proof3) = bank.decode(FENCE_OK, None) else {
-        panic!("steady")
-    };
-    assert_eq!(proof3.virgin_cells(), INITIAL_THRESHOLD);
-    assert!(preflight(&proof3, 6).is_none(), "3 virgins must not fund a 4-cell plan");
 
-    // 4 virgins → receipt mints.
+    // 6 virgins → receipt mints.
     let mut bank = Bank::new();
-    for _ in 0..(RESERVED_ROLLBACK_QWS - 5) {
+    for _ in 0..(RESERVED_ROLLBACK_QWS - 6 - 1) {
         bank.clean(encode_floor_record(5, 1));
     }
     bank.clean(encode_complete_record(1));
     bank.route1(false);
-    let FloorView::Steady(proof4) = bank.decode(FENCE_OK, None) else {
+    let FloorView::Steady(proof6) = bank.decode(FENCE_OK, None) else {
         panic!("steady")
     };
-    assert_eq!(proof4.virgin_cells(), PLAN_CELLS);
-    let receipt = preflight(&proof4, 6).expect("4 virgins fund the plan");
-    assert_eq!(receipt.margin(), PLAN_CELLS);
+    assert_eq!(proof6.virgin_cells(), PLAN_CELLS + 2);
+    let receipt = preflight(&proof6, 6).expect("6 virgins fund the plan");
+    assert_eq!(receipt.margin(), PLAN_CELLS + 2);
 }
 
 #[test]
-fn stage_for_committed_group_is_conflicting_completion() {
-    // R8-2: a stage record for an already-committed group.
+fn stage_for_committed_group_is_superseded_or_conflicting() {
+    // R10-1 case 1 — MATCHING identity: a stage record for the
+    // committed group targeting the same floor is SUPERSEDED
+    // maintenance residue (§11 L3810/L1152); the group decodes as
+    // committed Steady(T) and the record is not an active stage at all.
     let mut bank = steady_bank(5, 1);
     bank.clean(encode_stage_record(1));
     bank.route1(false);
     match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 6, COMPLETABLE_ROLES))) {
+        FloorView::Steady(p) => assert_eq!(p.floor(), 5),
+        other => panic!(
+            "matching-identity stage must be superseded maintenance, got {}",
+            view_name(&other)
+        ),
+    }
+
+    // R10-1 case 2 — CONFLICTING identity: different target → Unknown.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(1));
+    bank.route1(false);
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, COMPLETABLE_ROLES))) {
         FloorView::Unknown(FloorFault::ConflictingCompletion) => {}
         other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
     }

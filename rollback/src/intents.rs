@@ -403,10 +403,11 @@ fn receipt_matches(steady: &SteadyProof, receipt: &EpochBumpReceipt, t: u32) -> 
         && Some(receipt.group()) == expected_group
         // The margin is proof-bound: it must equal THIS proof's decoded
         // virgin-cell count, and it must fund the COMPLETE frozen plan
-        // (PLAN_CELLS = three initial witnesses plus one replacement;
-        // R8-1).
+        // (PLAN_CELLS replica cells plus the stage/COMPLETE marker cells
+        // the model codec draws from the same bank; R8-1 + R10-4, gate
+        // = PLAN_CELLS + 2).
         && receipt.margin() == steady.virgin_cells()
-        && receipt.margin() >= crate::floor::PLAN_CELLS
+        && receipt.margin() >= crate::floor::PLAN_CELLS + 2
 }
 
 // ---------------------------------------------------------------------------
@@ -1007,6 +1008,12 @@ impl CheckedDegradedRepairIntent {
             // The install identity must be FRESH (never the degraded
             // generation's id).
             return Err(IntentError::MissingDegradedHistory);
+        }
+        // R10-3: the load-bearing robust SOURCE must itself be exact-`F`
+        // (a higher-epoch source authorizes nothing here, least of all
+        // under Aborted).
+        if source.artifact().t() != floor_proof.floor() {
+            return Err(IntentError::FloorRegression);
         }
         match &floor_proof {
             FreshFloorProof::Aborted(proof) => {

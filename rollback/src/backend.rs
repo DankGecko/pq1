@@ -514,15 +514,32 @@ mod scripted {
                     script.install_id_inv,
                 )
             };
-            // Re-verify the manifest (structure, digest, vendor
-            // signature, fingerprint) and re-derive the identity.
+            // Re-verify the manifest (structure, stored digest, vendor
+            // signature, fingerprint) and re-derive the identity
+            // (R10-6: the stored-digest leg the primary path performs).
             let m = fw_manifest::v6::parse_and_validate(&page, identity.slot).ok()?;
+            if !m.stored_digest_matches() {
+                return None;
+            }
             if !m.verify_with_embedded_key(&pk_seed, &pk_root) {
                 return None;
             }
             let ProbeScript::Clean(install_id) = iid.outcome else {
                 return None;
             };
+            // R10-6: when the complement half is also a clean read,
+            // cross-check exact complementarity before deriving (a
+            // torn/ambiguous half is legitimate survivor territory and
+            // is left to the generation layer).
+            if let ProbeScript::Clean(inv) = iid_inv.outcome {
+                let mut complement = [0u8; 16];
+                for (i, b) in complement.iter_mut().enumerate() {
+                    *b = !install_id[i];
+                }
+                if inv != complement {
+                    return None;
+                }
+            }
             let derived = crate::evidence::ArtifactIdentity::derive(&m, install_id)?;
 
             let mk = |b: &mut Self, index: u16, addr: u32, s: &JournalQwScript| {

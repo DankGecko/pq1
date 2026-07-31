@@ -380,7 +380,7 @@ pub fn accepted_artifact(
     let art = pass
         .verify_artifact(&m, INSTALL_ID, &pk_seed, &pk_root)
         .expect("test manifest verifies");
-    let (c0, c1, pd) = probe_journal(
+    let (tf, pd) = probe_journal(
         b,
         &art,
         ProbeScript::Clean(QW_CONFIRMED_0),
@@ -389,7 +389,7 @@ pub fn accepted_artifact(
     );
     let gen = Some(full_generation(b, &art, 13, 14));
     let t = m.security_epoch - 1;
-    match decode_lifecycle(art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, t) {
+    match decode_lifecycle(art, gen, &tf, atr_nl(&pd), None, t) {
         LifecycleState::ConfirmedRobust(a) => a,
         _ => panic!("expected ConfirmedRobust"),
     }
@@ -412,21 +412,34 @@ pub fn binding(slot: PhysicalSlot, e: u32, roles: [(u16, PlanRole); 4]) -> Stage
     StageBinding::new(slot, GOLDEN_R, e, seq(0x99), roles).expect("binding range")
 }
 
-/// Probe the three lifecycle journal QWs at the artifact's canonical
-/// identity addresses (R3-2).
+/// Probe the lifecycle journal evidence at the artifact's canonical
+/// identity addresses (R3-2), terminal-first (R10-2): both terminal QWs
+/// are fresh-probed through the `TerminalFirst` capability BEFORE the
+/// PENDING read is made. Terminal attributions are auto-assigned
+/// (erased → proven-no-launch, everything else → may-have-launched);
+/// the PENDING read's attribution is applied at the decode call site.
 pub fn probe_journal(
     b: &mut TestBackend,
     art: &VerifiedArtifact,
     c0: ProbeScript,
     c1: ProbeScript,
     pd: ProbeScript,
-) -> (FreshQwRead, FreshQwRead, FreshQwRead) {
+) -> (pqsigner_rollback::lifecycle::TerminalFirst, FreshQwRead) {
+    use pqsigner_rollback::lifecycle::TerminalFirst;
     let id = art.identity();
-    (
-        probe_at(b, 30, id.confirmed_0_qw_address, c0),
-        probe_at(b, 31, id.confirmed_1_qw_address, c1),
-        probe_at(b, 32, id.pending_qw_address, pd),
-    )
+    // Terminal-first acquisition: script and probe BOTH terminals before
+    // PENDING is touched.
+    assert!(b.script(30, id.confirmed_0_qw_address, c0));
+    assert!(b.script(31, id.confirmed_1_qw_address, c1));
+    let attr = |s: &ProbeScript| -> (pqsigner_rollback::qw_read::Durability, LaunchAttribution) {
+        match s {
+            ProbeScript::Clean(bytes) if *bytes == ERASED => (CLEAN, NO_LAUNCH),
+            _ => (CLEAN, MAY_LAUNCH),
+        }
+    };
+    let tf = TerminalFirst::probe(b, id, 30, attr(&c0), 31, attr(&c1));
+    let pd_read = probe_at(b, 32, id.pending_qw_address, pd);
+    (tf, pd_read)
 }
 
 /// Full degraded-history evidence for a prior degraded artifact at
@@ -450,7 +463,7 @@ pub fn degraded_history(
     // Decode the degradation proof: one exact terminal replica, the
     // other indeterminate, at the canonical journal addresses.
     let mut b = TestBackend::new(7);
-    let (c0, c1, pd) = probe_journal(
+    let (tf, pd) = probe_journal(
         &mut b,
         &prior_art,
         ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_0),
@@ -458,7 +471,7 @@ pub fn degraded_history(
         ProbeScript::Clean(ERASED),
     );
     let gen = Some(full_generation(&mut b, &prior_art, 3, 4));
-    let row = match decode_lifecycle(prior_art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, e - 1) {
+    let row = match decode_lifecycle(prior_art, gen, &tf, atr_nl(&pd), None, e - 1) {
         LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed for the prior artifact"),
     };
