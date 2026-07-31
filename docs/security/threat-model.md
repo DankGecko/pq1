@@ -279,6 +279,7 @@ The single biggest attack class against hardware wallets historically: the devic
 | NS fakes a "user pressed both buttons" to S | T0 (firmware) | The confirm dialog reads buttons via S-owned GPIO; NS cannot drive the GPIO. The inactivity timer is S-only TIM-driven; NS pings do not reset it. | Tamper of S-owned GPIO is a T2+ surface |
 | NS races / spoofs the LCD to show a friendly screen | T0 | The NV3007 LCD SPI bus is S-owned via GTZC | TZSC enforcement silicon-validated 2026-05-20 (§9.3) |
 | EIP-1271 path used to authorise arbitrary action (Replay against a different chain or wallet) | T0 | EIP-1271 verifier nests the raw hash via Solady EIP-712 with `chainId` and `address(this)` baked in; bootstrap key (`ownerIndex == 0`) forbidden on this path | Mismatch between companion's wrapping and on-device wrapping would refuse to validate — handler hashes the same way |
+| **Error-mimicry / attention exhaustion** — companion engineers repeated signing ceremonies ("transaction failed, please sign again") until the user stops reading, or mutates the payload between retries | T0 | **NONE TODAY — added 2026-07-31.** A trusted display defeats display *substitution*; it does nothing against a host that manufactures the *occasion* to sign. This is the shape of the Radiant Capital compromise (Oct 2024, $50M): the front-end showed legitimate transactions while malicious payloads went to the signers, and routine-looking failure errors harvested repeat signatures across retries. Tenderly simulation showed nothing; the post-mortem records that the compromise was undetectable in manual review. | **OPEN.** Proposed mitigation is a signing-ceremony anomaly layer (repeat-prompt detector, semantic-equality retry flag, error-budget → PIN re-entry), all state S-SRAM-only so invariant #8 is untouched. Tracked in the issue tracker; not implemented, and this row must not be read as if it were. |
 
 ### 7.7 Firmware integrity (boot)
 
@@ -368,10 +369,11 @@ USB is the only external interface and the primary T0 attack vector. The host is
 | Attack | Tier | Mitigation | Residual |
 |---|---|---|---|
 | Malicious companion forges signing requests | T0 | Every signed payload reaches the user's eyes on the trusted UI before any signing key is touched; user must confirm via S-owned buttons. The trusted display IS the signing oracle (§7.6) | User must actually read the screen — UX residual |
-| ZLP race / DWC2 TxFIFO atomicity (ES0499 §2.26.x) leaks stale FIFO data from a prior session | T0 (device side) | Driver enforces single-packet transfers (`DIEPTSIZ.XFRSIZ = DIEPCTL.MPSIZ`), no interleaving in ISR, flushes all FIFOs on USB reset (`GRSTCTL.RXFFLSH | TXFFLSH` with TXFNUM=0x10) | Confirm against ES0499 Rev 11 — research-cited sub-section numbers partially verified |
+| **Companion DISTRIBUTION channel compromised** (not the companion's logic) | T0/T6 | Partly structural: the device decodes and renders from its own S-stack copy, so a poisoned companion cannot change what the screen says. The Ledger Connect Kit incident (Dec 2023) is the reference shape — a phished npm session token shipped three poisoned versions of a library embedded in hundreds of dApp front-ends for ~5 hours, and the poison persisted on CDN caches after the npm fix. The devices were never compromised; the channel between user and device was. | **PARTIAL — added 2026-07-31.** T0 already models a "supply-chain-compromised npm package on the dapp side" (§4), so the class is in-model; what is NOT covered is our own companion's release path: reproducible companion builds, release attestations, SRI/lockfile pinning, maintainer hardware-2FA and session-token hygiene. The residual is that a user cross-checks the device screen against what a poisoned companion told them to expect. |
+| ZLP race / DWC2 TxFIFO atomicity (ES0499 §2.26.x) leaks stale FIFO data from a prior session | T0 (device side) | Driver enforces single-packet transfers (`DIEPTSIZ.XFRSIZ = DIEPCTL.MPSIZ`), no interleaving in ISR, flushes all FIFOs on USB reset (`GRSTCTL.RXFFLSH \| TXFFLSH` with TXFNUM=0x10) | Confirm against ES0499 Rev 11 — research-cited sub-section numbers partially verified |
 | Stuck-NS via flood of OUT reports | T0 | **CORRECTED 2026-07-31 — the token bucket this row used to describe does not exist.** It was **DESCOPED-WITH-RATIONALE 2026-05-28** (a frame-level ~200 reports/s cap false-trips legitimate APDU-chained transfers: one 8 KB `FW_BEGIN` manifest fans out to ~33 chained `seq=0` frames in ~165 ms, i.e. right at the cap — see [`work-todo` archive](../archive/work-todo-retired-2026-07-19.md) "HID OUT rate limiter"). What actually covers this today: (1) **DWC2 RX-FIFO hardware NAK backpressure** — USB-level flow control the device cannot be overrun through; (2) the **F-17 sign-rate limiter** (`secure/src/sign_rate.rs`, 1 sig/s + 250/session) plus the PIN gate on the only expensive path; (3) malformed frames are dropped by the assembler in µs. | Battery / DoS only. **Note the IWDG is NOT a backstop for this case**: a live flood keeps the NS main loop *running*, so the heartbeat keeps being published and IWDG never fires — IWDG detects a **stalled** loop, not a **flooded** one. Re-open a bucket only if profiling shows a USB-level DoS that RX-FIFO backpressure does not absorb. |
 | Buffer overflow in APDU reassembly | T0 | Bounded APDU reassembly: `4 ≤ declared_len ≤ 4096` at seq=0; 5 s timeout with buffer scrub; abort if seq=0 arrives mid-reassembly | Fuzz coverage is a tracked gap (`docs/architecture/trezor-comparison.md §2.4`) |
-| EMFI on `min()` length-clamping (Colin O'Flynn WOOT 2019) | T3 | FI-resistant `fi_min` pattern (`if r > a || r > b { return min }`); post-transfer assert `DIEPTSIZ.XFRSIZ` did not exceed declared length | Production hardness untested |
+| EMFI on `min()` length-clamping (Colin O'Flynn WOOT 2019) | T3 | FI-resistant `fi_min` pattern (`if r > a \|\| r > b { return min }`); post-transfer assert `DIEPTSIZ.XFRSIZ` did not exceed declared length | Production hardness untested |
 | Host-side keylogger captures PIN typing | T5 (effectively) | The PIN is **never** typed on the host. PIN entry is via on-device buttons through the trusted UI dialog (`secure/src/ui/pin_entry.rs`). The host never sees a PIN byte. | None — the host is never on the PIN path |
 | BadUSB injects HID keystrokes simultaneously | T1 | Device buttons are S-owned GPIO — host cannot synthesize button presses. NS code reading buttons is irrelevant since the S-only confirm dialog reads them itself | None |
 | Migration to OTG_HS (which has DMA) | — | Architectural ban — we use OTG_FS deliberately so all USB data is CPU-mediated and GTZC/TZ protections apply to every byte | Tracked invariant — do not migrate |
@@ -583,6 +585,50 @@ Tests that *should* exist but don't yet:
 - Screenshot-hash UI regression covering every confirm-dialog state, including blind-sign and the native clear-sign paths (`docs/architecture/trezor-comparison.md §2.3`).
 
 ---
+
+
+### 11.4 Known-attack regression matrix (added 2026-07-31)
+
+Every publicly documented hardware-wallet attack should exist here as a named
+test, bench sweep, or design note — not as folklore. The citations below are
+**not** re-derived: they are the ones already fact-checked, with hallucinations
+adjudicated, in [`production-security.md`](production-security.md) §"research
+round citation audit". Cite through that table, not through this one.
+
+| Historical attack | Class | Our status | The specific missing piece |
+|---|---|---|---|
+| Rashid vs Ledger Nano S (2018) — MCU↔SE isolation bypass | Architecture | Dual-SE XOR split; no single chip holds the seed | **Do not state this as "keys never on the MCU"**: unlock reconstructs full entropy in Secure SRAM and caches slot secrets there for the signing window (`dual_se.rs`, `nsc/state.rs`). The split defeats single-chip extraction and at-rest compromise, *not* a compromised secure-world image — measured boot + RDP-2 + TrustZone are what answer that |
+| wallet.fail vs Trezor (35C3, 2018) — FI during FW-update RAM staging | Fault + update flow | Sentinel FI gates in `fw_update`, measured boot, panic/reset zeroization | **No sweep injects during the staging window.** `tools/sca/` has 13 `fault_sweep_*.py` and none targets the CHUNK-accumulate → COMMIT-verify transition — filed as its own issue |
+| Kraken Security Labs vs Trezor One / Model T (2020) — RDP-downgrade glitch, ~$75, 15 min | Fault + config | `rdp2-self-lock`, TAMP wipe, PIN-in-SE, no seed in MCU flash | Per-unit option-byte attestation (the bench unit is not unit #4,312); U585 glitch replication |
+| Castelnovi/Genêt grafting trees vs SPHINCS signing (2018–2023) | Algorithmic fault | Double-compute + CT compare + verify-before-release + relock (`crypto.rs`), RFC 9814 §5 cited in §6.3 | Bench quantification of the *correlated*-fault residual (same fault in both passes) |
+| Colin O'Flynn "MIN()imum Failure" (WOOT 2019) | FI on length clamps | `fi_min` pattern + post-transfer `DIEPTSIZ` assert (§7.13) | Production hardness untested on silicon |
+| μ-Glitch (USENIX Sec 2023) — 4-fault TrustZone-M bypass | FI on TZ | SAU/GTZC config silicon-validated 2026-05-20 | Multi-fault model is not covered by the current single-injection sweeps |
+| TROPIC01 laser FI bypass of signature verification (2026) | SE fault | The lesson *is* our design: the authorization decision sits behind a silicon boundary, and that chip's secret store survived full CPU compromise | Extend bench LFI/EMFI to our SE command paths, within disclosure norms |
+| Ledger Connect Kit (Dec 2023) — poisoned library in dApp front-ends | Companion supply chain | Device renders from its own S-stack copy | Our companion's own release path — see the new §7.13 row |
+| Radiant Capital (Oct 2024) — display-legit / sign-malicious + error-mimicry harvesting | Host + human | Trusted display defeats the substitution half | The harvesting half — see the new §7.6 row |
+| TrapDoor (2026) — `build.rs` malware, `CLAUDE.md` persistence | Supply chain / AI | `cargo-deny` sources+bans, `cargo-vet`; **CODEOWNERS on AI-instruction files and an invisible-Unicode gate landed 2026-07-31** | Zero-day-malicious dependency detection (behavioural, not advisory-DB) |
+| Address poisoning / homoglyph phishing (ongoing) | UX | Stronger than the usual answer: **all non-ASCII is refused** on trusted strings (`tx/src/wire.rs`, `pqsigner-erc7730/src/ir.rs`), so confusables cannot reach the display | Intra-ASCII lookalikes remain, and live in DB curation rather than rendering |
+
+**Ownership rule:** a new public wallet attack becomes a row here within days,
+with an explicit "missing piece" cell. A row whose missing piece is empty must
+name the test that closes it.
+
+### 11.5 Maintenance cadence (added 2026-07-31)
+
+A threat model that ages silently is the most dangerous kind — this document
+carried a defence in §7.13 for two months after it was descoped (the HID token
+bucket; corrected 2026-07-31). To make that harder:
+
+1. **Re-walk §7 on each minor firmware release**, and whenever an attack row in
+   §11.4 changes status.
+2. **Every mitigation cell must be falsifiable from the repo.** If a cell names
+   a mechanism, `grep` must find it. The token-bucket row failed exactly this
+   test and nobody ran it.
+3. **An EMB3D property→threat crosswalk** (MITRE EMB3D v2.0.2) is a useful
+   external cross-check and is worth producing once; TID-level numbers should be
+   pinned to a stated EMB3D version, because they move between revisions.
+4. **Feed post-launch detections back in**, upgrading theoretical leaves to
+   evidenced ones rather than leaving them at "designed against".
 
 ## 12. Roadmap to Production Posture
 
