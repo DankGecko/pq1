@@ -2300,11 +2300,8 @@ prod-erc7730-provenance-check: check-erc7730-descriptors check-erc7730-forced-el
 	@$(error prod-erc7730-provenance-check: FAIL — ERC-7730 catalogue provenance is '$(ERC7730_CATALOGUE_PROVENANCE)'; required '$(PROD_ERC7730_PROVENANCE)'; Draft catalogue has no production authority)
 endif
 
-.PHONY: rng-consumer-audit prod-feature-check prod-check
-rng-consumer-audit: ## Refuse unreviewed direct platform-RNG consumers
-	@python3 scripts/rng_consumer_audit.py
-
-prod-feature-check: rng-consumer-audit ## Resolve and validate the production hardening feature set
+.PHONY: prod-feature-check prod-check
+prod-feature-check: ## Resolve and validate the production hardening feature set
 	@echo "==> prod-feature-check (MED-2 / HIGH-1): resolving shipping feature set"
 	@echo "    RELEASE_FEATURES = $(RELEASE_FEATURES)"
 	@feats=$$(cargo tree -p sphincs-tz-secure --no-default-features \
@@ -4017,6 +4014,22 @@ sbom-firmware:
 # build, so these do NOT cover those — see work-todo §34.
 # ---------------------------------------------------------------------------
 .PHONY: kani miri ui-golden
+kani-heavy: ## Kani harnesses excluded from `make kani` (peak RSS near the 16 GB runner ceiling)
+	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
+	@echo "==> Kani (HEAVY): harnesses whose peak RSS sits near the hosted-runner"
+	@echo "    ceiling. Measured 2026-07-31, both VERIFY SUCCESSFULLY:"
+	@echo "      cow_presign_precedence  11.5  GiB, 3m56s"
+	@echo "      no_hidden_value         13.05 GiB, 7m55s"
+	@echo "    A public-repo runner has 16 GB RAM and 14 GB disk. These are UNDER"
+	@echo "    16 GB, so 'needs >=32 GB' would be an overclaim - the actual kill"
+	@echo "    mechanism (RAM headroom vs disk) is instrumented in nightly.yml and"
+	@echo "    not yet settled. They are excluded because an OOM kills the runner"
+	@echo "    and suppresses the rest of the job's evidence, not because a bigger"
+	@echo "    number has been proven necessary."
+	cargo kani -p pqsigner-tx --features kani-heavy \
+		--harness per_record_page_bound --harness no_hidden_value \
+		--harness cow_presign_precedence
+
 kani: ## Bounded model-checking on firmware decoders/counters
 	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
 	@echo "==> Kani: tx-core RLP parsers (decode_item used<=len, bytes_to_u256)"

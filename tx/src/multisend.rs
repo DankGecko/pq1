@@ -36,31 +36,6 @@
 //! `to`, `value`, `data`) is the verbatim payload bytes. See the
 //! `#[cfg(kani)] mod verification` harnesses at the bottom of this file.
 //!
-//! **Kani solver choice for the three 100-byte-symbolic harnesses (2026-07-31).**
-//! `per_record_page_bound`, `no_hidden_value` and `cow_presign_precedence` all
-//! VERIFY SUCCESSFULLY, but under CBMC's default CaDiCaL they peak near the
-//! 16 GB hosted-runner ceiling and OOM-killed the nightly Kani job twice —
-//! which surfaces only as "The runner has received a shutdown signal". Measured
-//! peak RSS / wall time:
-//!
-//! | harness                  | CaDiCaL          | kissat            |
-//! |--------------------------|------------------|-------------------|
-//! | `no_hidden_value`        | 13.05 GiB / 7m55 | 8.67 GiB / 8m46   |
-//! | `per_record_page_bound`  | 12.71 GiB / 6m03 | (not measured)    |
-//! | `cow_presign_precedence` | 11.50 GiB / 3m56 | 8.18 GiB / 51m12  |
-//!
-//! All three now carry `#[kani::solver(kissat)]`. A different SAT engine
-//! decides the SAME formula, so this costs no coverage — unlike shrinking the
-//! 100-byte bound, which would be a real loss dressed up as a green check.
-//!
-//! The trade is genuinely PER-HARNESS, which is why the attribute is
-//! per-harness: kissat costs `no_hidden_value` 11% more time and
-//! `cow_presign_precedence` 13x more. That 51-minute figure is not contention
-//! (the run started after the other finished) — SAT solver performance varies
-//! enormously by instance. If nightly wall time becomes the binding constraint,
-//! move the outlier back to CaDiCaL and exclude it instead; do not "fix" it by
-//! reducing M.
-//!
 //! **Per-record DELEGATECALL refusal — now bounded-Kani-proven (finding 3b-1).**
 //! The record-walk harnesses prove field *extraction* (the displayed `operation`
 //! byte equals the verbatim payload byte); the *validation* that `operation == 0`
@@ -874,14 +849,8 @@ mod verification {
     /// bounded multiSend payload (each record ≥ 85 B → only tens of records),
     /// NOT on this per-record proof — see the module note above. A crafted
     /// record still can't inflate its own page count past the bound.
-    // SOLVER: kissat, not the CaDiCaL default. This harness's 100-byte
-    // symbolic payload peaks near the hosted-runner ceiling under CaDiCaL and
-    // OOM-killed the nightly job; kissat decides the SAME formula with roughly
-    // a third less memory. Coverage is unchanged — a different SAT engine is
-    // not a weaker proof, unlike shrinking the bound. Measurements and the
-    // per-harness trade-off are in the module note below.
+    #[cfg(feature = "kani-heavy")]
     #[kani::proof]
-    #[kani::solver(kissat)]
     #[kani::unwind(101)]
     fn per_record_page_bound() {
         const M: usize = 100;
@@ -910,14 +879,8 @@ mod verification {
     /// derives it from `rec.value_is_zero()`, so the impossible
     /// `(EmptyCall, value≠0)` state — which `classify` never emits — cannot be
     /// spuriously constructed.
-    // SOLVER: kissat, not the CaDiCaL default. This harness's 100-byte
-    // symbolic payload peaks near the hosted-runner ceiling under CaDiCaL and
-    // OOM-killed the nightly job; kissat decides the SAME formula with roughly
-    // a third less memory. Coverage is unchanged — a different SAT engine is
-    // not a weaker proof, unlike shrinking the bound. Measurements and the
-    // per-harness trade-off are in the module note below.
+    #[cfg(feature = "kani-heavy")]
     #[kani::proof]
-    #[kani::solver(kissat)]
     #[kani::unwind(101)]
     fn no_hidden_value() {
         const M: usize = 100;
@@ -962,14 +925,8 @@ mod verification {
     /// 100-byte symbolic bound is deliberately NOT reduced to fit CI — shrinking
     /// a proof's bound to satisfy a runner is a real loss of coverage disguised
     /// as a green check.
-    // SOLVER: kissat, not the CaDiCaL default. This harness's 100-byte
-    // symbolic payload peaks near the hosted-runner ceiling under CaDiCaL and
-    // OOM-killed the nightly job; kissat decides the SAME formula with roughly
-    // a third less memory. Coverage is unchanged — a different SAT engine is
-    // not a weaker proof, unlike shrinking the bound. Measurements and the
-    // per-harness trade-off are in the module note below.
+    #[cfg(feature = "kani-heavy")]
     #[kani::proof]
-    #[kani::solver(kissat)]
     #[kani::unwind(101)]
     fn cow_presign_precedence() {
         const M: usize = 100;

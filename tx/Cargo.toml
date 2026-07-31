@@ -17,6 +17,17 @@ edition.workspace = true
 # via `CARGO_MANIFEST_DIR`. They can move into `pqsigner-tx` later in
 # this phase or in a follow-up commit.
 
+[features]
+# Opt-in for Kani harnesses that do not fit a 16 GB hosted runner. Off by
+# default so `make kani` stays inside the nightly runner's memory budget; see
+# `make kani-heavy` and the harness doc-comment in src/multisend.rs.
+#
+# A CARGO FEATURE rather than a bare `--cfg`: `cargo kani` does not reliably
+# propagate RUSTFLAGS to the harness compilation, so a raw cfg silently made the
+# harness invisible in BOTH modes — a coverage loss that would have looked
+# exactly like a passing gate.
+kani-heavy = []
+
 [dependencies]
 pqsigner-proto    = { workspace = true }
 pqsigner-tx-core  = { workspace = true }

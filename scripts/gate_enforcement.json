@@ -476,6 +476,16 @@
       "runs_in": "workflow-security.yml",
       "enforcement": "per_pr_blocking",
       "note": "Zero-width (U+200B..U+200F/U+FEFF) and bidi override/isolate (U+202A..U+202E, U+2066..U+2069) codepoints are invisible to git diff and to code review. Two attacks share that mechanism: TrapDoor-style poisoning of the AI-instruction files every coding agent executes, and Trojan Source (CVE-2021-42574). Baseline 2026-07-31 is ZERO hits over 3841 tracked text files with NO allowlist — the two pre-existing hits were fixed, not exempted, because an allowlist here is a place to hide the payload. Carries a two-sided self-test (5 payload classes fire, 3 benign inputs stay silent); ordinary non-ASCII is deliberately allowed or the gate would be red on day one and disabled by the end of the week."
+    },
+    {
+      "id": "kani-heavy",
+      "make": "make kani-heavy",
+      "polices_paths": [
+        "tx/src/multisend.rs"
+      ],
+      "runs_in": "nightly.yml",
+      "enforcement": "local_documented",
+      "why": "The three 100-byte-symbolic multiSend harnesses (per_record_page_bound 12.71 GiB/6m03s, no_hidden_value 13.05 GiB/7m55s, cow_presign_precedence 11.50 GiB/3m56s; all VERIFY SUCCESSFULLY, measured locally 2026-07-31) exceed what a hosted runner can absorb. Instrumented CI evidence 2026-07-31: the runner has 15,989 MB RAM with 14,497 MB available and 145 GB disk with 86 GB free, so DISK IS NOT THE CAUSE - it is memory. The kill lands between 'Runtime Postprocess Equation' and 'Solving with ...', i.e. inside CBMC's formula construction and BEFORE any SAT solver is invoked; a kissat experiment was therefore reverted, since the solver never runs. (That experiment's local peak-RSS numbers were also unsound: an external solver runs out-of-process and /usr/bin/time -v reports a per-process maximum, not an aggregate.) Excluded because an OOM kills the runner and suppresses every later mandatory gate in the same job - same reasoning as verify-extracted-heavy (53c19f21); continue-on-error cannot save a dead runner. The 100-byte bound is deliberately NOT reduced: shrinking a proof's bound to earn a green check is coverage loss disguised as a pass. Larger hosted runners are unavailable (Team/Enterprise-only; this org is free-plan; hosted-runners API 404s). Run via `make kani-heavy`; the other 170 harnesses stay blocking in nightly."
     }
   ],
   "_completeness_waived": {
