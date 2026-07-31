@@ -228,6 +228,17 @@ fn reverify_artifact<B: RollbackBackend>(
     if recheck.identity != *id {
         return Err(IntentError::ArtifactDrift);
     }
+    // R9-3: the recheck applies the SAME canonical-address/one-epoch
+    // validation as decode_lifecycle (R3-2) — exact bytes at another
+    // artifact's QW addresses carry no authority.
+    if !crate::lifecycle::canonical_journal_reads(
+        id,
+        &recheck.terminal_c0.0,
+        &recheck.terminal_c1.0,
+        &recheck.pending.0,
+    ) {
+        return Err(IntentError::ArtifactDrift);
+    }
     match expect {
         ArtifactExpectation::PendingCandidate => {
             for (read, _, launch) in [&recheck.terminal_c0, &recheck.terminal_c1] {
@@ -258,8 +269,12 @@ fn reverify_artifact<B: RollbackBackend>(
                 },
                 Some(fw_manifest::v6::LaterLifecycleEvidence::Pending),
             );
-            if gen.is_none() {
-                return Err(IntentError::ArtifactDrift);
+            // R9-2: the reconstructed install id must equal the
+            // identity's install id (the primary decode's
+            // generation_matches enforces exactly this).
+            match gen {
+                Some(g) if g.install_id() == id.install_id => {}
+                _ => return Err(IntentError::ArtifactDrift),
             }
             Ok(())
         }
@@ -296,10 +311,11 @@ fn reverify_artifact<B: RollbackBackend>(
                 },
                 Some(fw_manifest::v6::LaterLifecycleEvidence::Terminal),
             );
-            if gen.is_none() {
-                return Err(IntentError::ArtifactDrift);
+            // R9-2: same reconstructed-id equality on the Robust arm.
+            match gen {
+                Some(g) if g.install_id() == id.install_id => Ok(()),
+                _ => Err(IntentError::ArtifactDrift),
             }
-            Ok(())
         }
     }
 }
@@ -803,7 +819,6 @@ impl TwinRestageReceipt {
 /// twin's erase/restage receipt.
 pub struct CheckedPeerRepairIntent {
     floor_proof: FreshFloorProof,
-    #[allow(dead_code)]
     source: AcceptedArtifact,
     twin: VerifiedArtifact,
     token: ArmToken,
@@ -863,6 +878,9 @@ pub fn arm_peer_repair<B: RollbackBackend>(
     intent: CheckedPeerRepairIntent,
 ) -> Result<ProbationHandoff, IntentError> {
     let _token = intent.token;
+    // R9-4: the admission-load-bearing robust source is reverified at
+    // entry, same discipline as the other entries.
+    reverify_artifact(backend, intent.source.artifact(), ArtifactExpectation::Robust)?;
     let recheck = RecheckContext {
         class: RecheckClass::SteadyOrAborted,
         floor: intent.floor_proof.floor(),
@@ -912,28 +930,24 @@ pub struct DegradedHistoryEvidence {
     #[allow(dead_code)]
     restage: EraseRestageReceipt,
     #[allow(dead_code)]
-    degradation: crate::journal::SurvivingTerminalSet,
+    degradation: crate::lifecycle::DegradedRow,
 }
 
 impl DegradedHistoryEvidence {
-    /// Join the prior degraded identity, its erase/restage receipt, and
-    /// the surviving terminal proof. `None` when the receipt binds a
-    /// different slot or digest, or when the surviving set's sealed key
-    /// digest does not match `prior_key_digest` (a set minted for some
-    /// other identity — or a full, non-degraded set, which cannot even
-    /// be presented in this position).
+    /// Consume the [`crate::lifecycle::DegradedRow`] (linear) and join
+    /// it to the erase/restage receipt. The prior identity is DERIVED
+    /// from the row's sealed key — there is no caller-supplied digest
+    /// and no circular comparison (R9-1): the row's key identity IS the
+    /// prior degraded artifact, and the receipt must bind its slot and
+    /// manifest digest. `None` on any mismatch.
     pub fn new(
-        prior_identity: crate::evidence::ArtifactIdentity,
+        degradation: crate::lifecycle::DegradedRow,
         restage: EraseRestageReceipt,
-        degradation: crate::journal::SurvivingTerminalSet,
-        prior_key_digest: &[u8; 32],
     ) -> Option<DegradedHistoryEvidence> {
+        let prior_identity = *degradation.key().identity();
         if restage.slot() != prior_identity.slot
             || restage.prior_manifest_digest() != &prior_identity.manifest_digest
         {
-            return None;
-        }
-        if degradation.evidence_key() != prior_key_digest {
             return None;
         }
         Some(DegradedHistoryEvidence {
@@ -984,6 +998,7 @@ impl CheckedDegradedRepairIntent {
         if target.slot() != prior.slot
             || target.r() != prior.r
             || target.e() != prior.e
+            || target.identity().manifest_digest != prior.manifest_digest
             || target.slot() == source.artifact().slot()
         {
             return Err(IntentError::MissingDegradedHistory);

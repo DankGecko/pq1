@@ -447,7 +447,6 @@ pub fn degraded_history(
         .verify_artifact(&m, OLD_INSTALL_ID, &pk_seed, &pk_root)
         .expect("prior artifact verifies");
     let prior = *prior_art.identity();
-    let prior_key_digest = prior_art.key().digest();
     // Decode the degradation proof: one exact terminal replica, the
     // other indeterminate, at the canonical journal addresses.
     let mut b = TestBackend::new(7);
@@ -459,12 +458,12 @@ pub fn degraded_history(
         ProbeScript::Clean(ERASED),
     );
     let gen = Some(full_generation(&mut b, &prior_art, 3, 4));
-    let set = match decode_lifecycle(prior_art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, e - 1) {
-        LifecycleState::DegradedConfirmed(row) => row.into_set(),
+    let row = match decode_lifecycle(prior_art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, e - 1) {
+        LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed for the prior artifact"),
     };
     let restage = EraseRestageReceipt::new(slot, prior.manifest_digest);
-    DegradedHistoryEvidence::new(prior, restage, set, &prior_key_digest).expect("history joins")
+    DegradedHistoryEvidence::new(row, restage).expect("history joins")
 }
 
 // ---------------------------------------------------------------------------

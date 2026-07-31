@@ -475,6 +475,10 @@ fn peer_repair_equal_release_set_arms_and_writes_no_backend() {
     )
     .expect("intent");
     backend.set_floor_script(steady_floor_script(GOLDEN_T));
+    backend.set_artifact_script(
+        PhysicalSlot::A,
+        robust_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, INSTALL_ID),
+    );
     let handoff = arm_peer_repair(&mut backend, intent).expect("handoff");
     assert_eq!(handoff.slot, PhysicalSlot::B);
     assert_eq!(backend.floor_mutation_count(), 0, "repair: zero rollback-backend writes");
@@ -594,6 +598,10 @@ fn peer_repair_floor_drift_rejects_handoff() {
         twin_receipt(TWIN_INSTALL_ID),
     )
     .expect("intent");
+    backend.set_artifact_script(
+        PhysicalSlot::A,
+        robust_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, INSTALL_ID),
+    );
     // Drift: the floor moved since intent construction.
     backend.set_floor_script(dead_floor_script(
         GOLDEN_T - 1,
@@ -782,7 +790,6 @@ fn degraded_repair_rejects_stale_install_identity() {
         )
         .unwrap();
     let prior = *prior_art.identity();
-    let prior_key_digest = prior_art.key().digest();
     let mut b2 = TestBackend::new(7);
     let (c0, c1, pd) = probe_journal(
         &mut b2,
@@ -792,13 +799,13 @@ fn degraded_repair_rejects_stale_install_identity() {
         ProbeScript::Clean(ERASED),
     );
     let gen = Some(full_generation(&mut b2, &prior_art, 3, 4));
-    let set = match decode_lifecycle(prior_art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, GOLDEN_E - 2)
+    let degraded_row = match decode_lifecycle(prior_art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, GOLDEN_E - 2)
     {
-        LifecycleState::DegradedConfirmed(row) => row.into_set(),
+        LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed"),
     };
     let restage = EraseRestageReceipt::new(PhysicalSlot::B, prior.manifest_digest);
-    let stale = DegradedHistoryEvidence::new(prior, restage, set, &prior_key_digest).unwrap();
+    let stale = DegradedHistoryEvidence::new(degraded_row, restage).unwrap();
     assert!(matches!(
         CheckedDegradedRepairIntent::new(FreshFloorProof::Aborted(proof), source, row, stale),
         Err(IntentError::MissingDegradedHistory)
@@ -1139,55 +1146,46 @@ fn probation_surviving_install_generation_candidate_hands_off() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn degraded_history_rejects_mismatched_surviving_set() {
-    // A surviving terminal set minted for a DIFFERENT identity must not
-    // join the prior identity's history.
+fn degraded_history_rejects_cross_artifact_evidence() {
+    // R9-1: a DegradedRow decoded from artifact A (same slot/R/E as the
+    // claimed prior B, but a DIFFERENT manifest digest) must not serve
+    // as B's degradation evidence — the sealed-key identity drives the
+    // binding, and the restage receipt mismatches.
     let p = pass();
     let (pk_seed, pk_root) = test_key_material();
-    let prior_art = p
+    let art_a = p
         .verify_artifact(
             &manifest(PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1),
             OLD_INSTALL_ID,
             &pk_seed,
             &pk_root,
         )
-        .expect("prior verifies");
-    let prior = *prior_art.identity();
-    // Mint the surviving set against A's identity digest (not the prior's).
-    let other = p
-        .verify_artifact(
-            &manifest(PhysicalSlot::A, GOLDEN_R, GOLDEN_E),
-            OLD_INSTALL_ID,
-            &pk_seed,
-            &pk_root,
-        )
-        .expect("other verifies");
+        .expect("A verifies");
+    let identity_a = *art_a.identity();
     let mut b2 = TestBackend::new(7);
     let (c0, c1, pd) = probe_journal(
         &mut b2,
-        &prior_art,
+        &art_a,
         ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_0),
         ProbeScript::Clean(ERASED),
         ProbeScript::Clean(ERASED),
     );
-    let gen = Some(full_generation(&mut b2, &prior_art, 3, 4));
-    let set = match pqsigner_rollback::lifecycle::decode_lifecycle(
-        prior_art, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, GOLDEN_E - 2,
+    let gen = Some(full_generation(&mut b2, &art_a, 3, 4));
+    let row_a = match pqsigner_rollback::lifecycle::decode_lifecycle(
+        art_a, gen, atr(&c0), atr(&c1), atr_nl(&pd), None, GOLDEN_E - 2,
     ) {
-        pqsigner_rollback::lifecycle::LifecycleState::DegradedConfirmed(row) => row.into_set(),
+        pqsigner_rollback::lifecycle::LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed"),
     };
-    let restage = pqsigner_rollback::intents::EraseRestageReceipt::new(
+    // Claim the prior degraded artifact was B (different release →
+    // different manifest digest): the receipt binds B's digest, the
+    // row's sealed identity binds A's → None.
+    let restage_for_b = pqsigner_rollback::intents::EraseRestageReceipt::new(
         PhysicalSlot::B,
-        prior.manifest_digest,
+        manifest(PhysicalSlot::B, GOLDEN_R, GOLDEN_E - 1).stored_digest,
     );
-    assert!(pqsigner_rollback::intents::DegradedHistoryEvidence::new(
-        prior,
-        restage,
-        set,
-        &other.key().digest(), // wrong sealed key
-    )
-    .is_none());
+    assert!(pqsigner_rollback::intents::DegradedHistoryEvidence::new(row_a, restage_for_b).is_none());
+    let _ = identity_a;
 }
 
 #[test]
@@ -1244,4 +1242,164 @@ fn robust_recheck_rejects_conflicting_install_generation() {
         arm_probation_from_steady(&mut backend, intent).unwrap_err(),
         IntentError::ArtifactDrift
     );
+}
+
+// ---------------------------------------------------------------------------
+// R9-2 / R9-3 / R9-4: recheck hardening
+// ---------------------------------------------------------------------------
+
+#[test]
+fn recheck_rejects_generation_for_a_different_install_id() {
+    // R9-2: the journal QWs reconstruct a VALID survivor generation —
+    // but for a DIFFERENT install id than the artifact identity's.
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let steady = steady_proof_at(GOLDEN_T);
+    let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
+    let mut backend = TestBackend::new(7);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
+    let intent =
+        CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent");
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
+    backend.set_artifact_script(
+        PhysicalSlot::B,
+        robust_script(PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E, INSTALL_ID),
+    );
+    // The candidate's id half is durability-ambiguous (Indeterminate)
+    // while the inv half durably carries the complement of a DIFFERENT
+    // id D — a valid survivor reconstruction of D ≠ INSTALL_ID.
+    const D: [u8; 16] = [0x55; 16];
+    let mut d_inv = [0u8; 16];
+    for (i, b) in d_inv.iter_mut().enumerate() {
+        *b = !D[i];
+    }
+    let mut script = pending_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, INSTALL_ID);
+    script.install_id.durability = pqsigner_rollback::qw_read::Durability::Ambiguous;
+    script.install_id_inv.outcome = ProbeScript::Clean(d_inv);
+    backend.set_artifact_script(PhysicalSlot::A, script);
+    assert_eq!(
+        arm_probation_from_steady(&mut backend, intent).unwrap_err(),
+        IntentError::ArtifactDrift
+    );
+}
+
+#[test]
+fn recheck_rejects_terminals_at_another_artifacts_addresses() {
+    // R9-3: a backend returning exact codewords AT ANOTHER ARTIFACT'S
+    // QW addresses must be rejected even though the bytes are exact.
+    use pqsigner_rollback::backend::{
+        ArmTransitionPermit, ArtifactRecheck, FloorBeginPermit, FloorResumePermit, Mutation,
+        RollbackBackend,
+    };
+    use pqsigner_rollback::floor::FloorView;
+
+    struct MisaddressedBackend {
+        inner: TestBackend,
+        wrong_slot: PhysicalSlot,
+    }
+    impl MisaddressedBackend {
+        fn reverify_impl(&mut self, identity: &pqsigner_rollback::evidence::ArtifactIdentity) -> Option<ArtifactRecheck> {
+            let mut recheck = self.inner.reverify_artifact(identity)?;
+            // Relabel the terminal reads as the OTHER slot's canonical
+            // QW addresses (the bytes stay exact).
+            let other = match identity.slot {
+                PhysicalSlot::A => PhysicalSlot::B,
+                PhysicalSlot::B => PhysicalSlot::A,
+            };
+            let wrong_id = pqsigner_rollback::evidence::ArtifactIdentity::derive(
+                &manifest(other, GOLDEN_R, GOLDEN_E),
+                INSTALL_ID,
+            )?;
+            let c0 = &recheck.terminal_c0;
+            let c1 = &recheck.terminal_c1;
+            recheck.terminal_c0 = (
+                probe_at(&mut self.inner, 45, wrong_id.confirmed_0_qw_address, ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_0)),
+                c0.1,
+                c0.2,
+            );
+            recheck.terminal_c1 = (
+                probe_at(&mut self.inner, 46, wrong_id.confirmed_1_qw_address, ProbeScript::Clean(fw_manifest::v6::QW_CONFIRMED_1)),
+                c1.1,
+                c1.2,
+            );
+            Some(recheck)
+        }
+    }
+    impl RollbackBackend for MisaddressedBackend {
+        fn read_arm_token(&self) -> Option<[u32; 24]> {
+            self.inner.read_arm_token()
+        }
+        fn transition_arm_token(&mut self, permit: ArmTransitionPermit) {
+            self.inner.transition_arm_token(permit)
+        }
+        fn begin_floor_plan(&mut self, permit: FloorBeginPermit, receipt: &pqsigner_rollback::floor::EpochBumpReceipt) {
+            self.inner.begin_floor_plan(permit, receipt)
+        }
+        fn resume_floor_plan(&mut self, permit: FloorResumePermit) {
+            self.inner.resume_floor_plan(permit)
+        }
+        fn mutation_log(&self) -> &[Option<Mutation>] {
+            self.inner.mutation_log()
+        }
+        fn redecode_floor(&mut self) -> FloorView {
+            self.inner.redecode_floor()
+        }
+        fn reverify_artifact(&mut self, identity: &pqsigner_rollback::evidence::ArtifactIdentity) -> Option<ArtifactRecheck> {
+            self.reverify_impl(identity)
+        }
+    }
+
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let steady = steady_proof_at(GOLDEN_T);
+    let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
+    let mut inner = TestBackend::new(7);
+    let row = pending_row(&p, &mut inner, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
+    inner.set_floor_script(steady_floor_script(GOLDEN_T));
+    inner.set_artifact_script(
+        PhysicalSlot::B,
+        robust_script(PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E, INSTALL_ID),
+    );
+    let intent =
+        CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent");
+    let mut backend = MisaddressedBackend {
+        inner,
+        wrong_slot: PhysicalSlot::B,
+    };
+    let _ = backend.wrong_slot;
+    assert_eq!(
+        arm_probation_from_steady(&mut backend, intent).unwrap_err(),
+        IntentError::ArtifactDrift
+    );
+}
+
+#[test]
+fn peer_repair_source_drift_rejected_at_entry() {
+    // R9-4: the peer-repair source's robust terminal evidence drifted
+    // between construction and entry → ArtifactDrift, and NO token
+    // transition happens.
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let steady = steady_proof_at(GOLDEN_T);
+    let source = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+    let mut backend = TestBackend::new(7);
+    let twin_row = pending_row(&p, &mut backend, PhysicalSlot::B, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, TWIN_INSTALL_ID);
+    let intent = CheckedPeerRepairIntent::new(
+        FreshFloorProof::Steady(steady),
+        source,
+        twin_row,
+        twin_receipt(TWIN_INSTALL_ID),
+    )
+    .expect("intent");
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
+    // Source's robust evidence is gone (terminals erased).
+    backend.set_artifact_script(
+        PhysicalSlot::A,
+        pending_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, INSTALL_ID),
+    );
+    assert_eq!(
+        arm_peer_repair(&mut backend, intent).unwrap_err(),
+        IntentError::ArtifactDrift
+    );
+    assert_eq!(backend.mutation_count(), 0, "no token transition on drift");
 }

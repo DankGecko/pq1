@@ -113,16 +113,21 @@ impl ArtifactRow {
     }
 }
 
-/// A sealed surviving-terminal-set row payload (R8-6): crate-private
-/// constructor — the floor-relation label (`F == T` vs `F < T`) cannot
-/// be forged or relabeled outside `decode_lifecycle`.
+/// A sealed surviving-terminal-set row payload (R8-6, extended in
+/// R9-1): crate-private constructor — the floor-relation label
+/// (`F == T` vs `F < T`) cannot be forged or relabeled outside
+/// `decode_lifecycle`, and the row carries the artifact's sealed
+/// `ArtifactEvidenceKey` so downstream evidence sets can bind it
+/// WITHOUT any caller-supplied digest.
+#[derive(Debug)]
 pub struct DegradedRow {
     set: SurvivingTerminalSet,
+    key: crate::evidence::ArtifactEvidenceKey,
 }
 
 impl DegradedRow {
-    pub(crate) fn new(set: SurvivingTerminalSet) -> DegradedRow {
-        DegradedRow { set }
+    pub(crate) fn new(set: SurvivingTerminalSet, key: crate::evidence::ArtifactEvidenceKey) -> DegradedRow {
+        DegradedRow { set, key }
     }
 
     /// The surviving terminal set (repair-target evidence only).
@@ -130,10 +135,15 @@ impl DegradedRow {
         &self.set
     }
 
-    /// Consume the row into its surviving terminal set (linear proof
-    /// consumption for the degraded-history evidence set).
-    pub fn into_set(self) -> SurvivingTerminalSet {
-        self.set
+    /// The artifact's sealed evidence key.
+    pub fn key(&self) -> &crate::evidence::ArtifactEvidenceKey {
+        &self.key
+    }
+
+    /// Consume the row into its parts (linear proof consumption for the
+    /// degraded-history evidence set).
+    pub fn into_parts(self) -> (SurvivingTerminalSet, crate::evidence::ArtifactEvidenceKey) {
+        (self.set, self.key)
     }
 }
 
@@ -273,9 +283,9 @@ pub fn decode_lifecycle(
                 return LifecycleState::Malformed(MalformedReason::BadInstallGeneration);
             }
             return if floor == t {
-                LifecycleState::DegradedConfirmed(DegradedRow::new(set))
+                LifecycleState::DegradedConfirmed(DegradedRow::new(set, *artifact.key()))
             } else if floor < t {
-                LifecycleState::DegradedEpochCandidate(DegradedRow::new(set))
+                LifecycleState::DegradedEpochCandidate(DegradedRow::new(set, *artifact.key()))
             } else {
                 LifecycleState::Malformed(MalformedReason::FloorRelationViolation)
             };
@@ -385,7 +395,7 @@ fn generation_matches(
 /// (terminal 0, terminal 1, PENDING), and all presented reads must
 /// share one probe epoch (one common pass). Non-Clean reads fail closed
 /// elsewhere and are not address-checkable here.
-fn canonical_journal_reads(
+pub(crate) fn canonical_journal_reads(
     id: &crate::evidence::ArtifactIdentity,
     c0: &crate::qw_read::FreshQwRead,
     c1: &crate::qw_read::FreshQwRead,
