@@ -238,7 +238,9 @@ order, and silicon receipts remain OPEN.
 
 ### From `README.md`
 
-# PQSigner OS
+[![PQ1](../../../docs/pq1_banner_image.jpg)](https://freedomfactory.io)
+
+# PQ1
 
 A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive that protects the seed — at rest, in transit between chips, in firmware updates, in transaction signing — is a NIST PQC standard or a Grover-resistant symmetric primitive. The secure elements' channel layers (which we cannot replace) are symmetric-rooted — no public-key handshake ever crosses a bus — so even against a future CRQC the strongest attack on recorded traffic is depth-limited Grover key search (NIST Category 1, the same floor as the SPHINCS+C10 signatures themselves).
 
@@ -301,7 +303,7 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
 
 Each item below is implemented today (QEMU and/or real STM32U585), partial, or planned. See [Implementation Status](#implementation-status) for the per-item state.
 
-- **Post-quantum signatures, one primitive everywhere** — SPHINCS+C10 for both Type 1 (bootstrap slot registration) and Type 2 (per-slot user tx). The on-chain contract has a single `c10Verifier` immutable wired to both dispatch paths. Per-chain caps `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` are immutable; combined ≈ 2³² user txns/chain before that chain is permanently frozen — well inside the C10 birthday margin. *(Implemented; `forge test` covers both paths.)*
+- **Post-quantum signatures, one primitive everywhere** — SPHINCS+C10 for both Type 1 (bootstrap slot registration) and Type 2 (per-slot user tx). The on-chain contract has a single `c10Verifier` immutable wired to both dispatch paths. Per-chain caps `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` are immutable; combined ≈ 2³² user txns/chain before that chain is permanently frozen. **Per-KEY margin (corrected 2026-07-26):** slot keys are chain-bound so 65,536 is a true per-key cap (birthday floor 96 b); the **bootstrap key is chain-independent** (invariant #6, for cross-chain address stability), so its per-key budget across `C` chains is `C × 65,536` and its generic floor degrades as `96 − 2·log₂ C` (94 b at 2 chains). Documented as the P14 caveat in `Quantitative.lean`; realistic bootstrap usage is tens of signatures (slot rotations only). *(Implemented; `forge test` covers both paths.)*
 - **Post-quantum firmware signing (pre-production)** — the existing V1/75-byte signer and FSBL verify SPHINCS+C10 artifacts on the bench, but their rollback/try-once backend is rejected and compile-blocked from production. Historical Draft 0.9/V4 is preserved as research evidence. Draft 1.1 proposes slot-bound manifest v6 and an exact 121-byte `PQFW_V6` preimage, but remains an unapproved research candidate; journal/ECC/OTP, FLASH, RAM/stack, release-policy, factory, and silicon gates remain open.
 - **Symmetric-only SE tunnels (no harvestable handshake)** — no public-key
   exchange crosses I²C. The `rdp2-self-lock` candidate implements a journaled
@@ -379,7 +381,7 @@ sphincs_rust/
 ├── fwsign/ fwmeasure/ fw-manifest/   host signer/verifier, measurement tool, manifest chain
 ├── dbgen/         host ERC20/names/selectors/ERC-7730 DB + Merkle-tree builder
 ├── tools/         webhid_test.html, wallet_run_hw.py, …
-└── docs/          architecture.md, HARDENING.md, work-todo.md, threat-model.md, …
+└── docs/          architecture.md, HARDENING.md, threat-model.md, …
 ```
 
 See `CLAUDE.md` for the full per-file map and the non-negotiable invariants.
@@ -663,7 +665,7 @@ Mode aliases: `mode-production` (no dev features) · `mode-bringup` (`debug-log`
 
 ## Bring-up Roadmap
 
-Each phase has a hard exit criterion before the next starts. Full backlog: `docs/work-todo.md`.
+Each phase has a hard exit criterion before the next starts. Full backlog: the `EthereumPhone/PQ1` issue tracker (labels `source:work-todo` / `source:production-todo`).
 
 - **Phase 0 — bring-up complete (today).** All-C10 firmware boots on the B-U585I-IOT02A; dual-SE split, three-way PIN-attempt enforcement, Tier-1 DHUK KDF, OPTIGA Shielded-Connection unlock, SE050 admin-wipe, and the FSBL firmware-update path all run end-to-end. The directional boot cross-check and known production-invariant regressions are stated in `CLAUDE.md`.
 - **Phase 1 — close the bring-up regressions (in progress).** Restore the GTZC `TZSC_SECCFGR` allowlist (incl. GTZC2 USB-OTG); strip `debug-log`/`e2e-test`/`mock-se` from production builds + restore the `compile_error!` fences; remove dev log/register dumps; wire TAMP IRQ → `trigger_lockout_wipe()`; move BOR/inactivity to the Secure-only TIM; land Tier 2 (BHK); step a board to RDP1 and re-validate per-die DHUK uniqueness.
@@ -740,7 +742,7 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] Field-tested on staging hardware before public rollout; documented recovery path for a bricked fleet (RDP-2 cannot be unlocked)
 
 **H. External validation**
-- [ ] External audit by an embedded + TrustZone + SE firm (NCC, Trail of Bits, Quarkslab, Kudelski, Riscure) of the *signed production image*
+- [ ] External audit by an embedded + TrustZone + SE firm of the *signed production image*
 - [ ] All findings fixed or risk-accepted with external sign-off; public bug bounty + VDP published before any device ships
 - [ ] Independent FI report from a lab; independent attestation that the build is reproducible
 
@@ -788,7 +790,7 @@ separately authorizes named sacrificial hardware.
 
 ## Documentation
 
-Start with this README → `docs/STATUS.md` (the security/verification frontier — what is done, what is open, and why, with an evidence pointer per row) → `CLAUDE.md` (invariants, file map, conventions) → `docs/work-todo.md` (backlog) → the subsystem doc for your task.
+Start with this README → `docs/STATUS.md` (the security/verification frontier — what is done, what is open, and why, with an evidence pointer per row) → `CLAUDE.md` (invariants, file map, conventions) → the `EthereumPhone/PQ1` issue tracker (backlog — labels `source:work-todo` / `source:production-todo`) → the subsystem doc for your task.
 
 - **Architecture / hardening:** `CLAUDE.md`, `docs/security/HARDENING.md`, `docs/security/threat-model.md`, `docs/security/production-security.md`, `docs/security/brownout-hardening.md`. `docs/architecture/architecture.md` is the current index.
 - **Secure elements:** `docs/secure-elements/se050-userid-pin-auth.md`, `docs/secure-elements/se050-factory-reset.md`, `docs/secure-elements/optiga-bringup-status.md`, `docs/secure-elements/OPTIGATRUSTM/*.md`
@@ -797,9 +799,43 @@ Start with this README → `docs/STATUS.md` (the security/verification frontier 
 - **USB / dev:** `docs/companion/usb-protocol-v2.md`, `docs/hardware/usb-hid-setup.md`, `docs/hardware/dev-board-setup.md`, `docs/hardware/hardware_requirements.md`
 - **Formal verification:** `contracts/verification/` (Lean proofs + axiom status), `docs/verification/lean-verification-research-2026-06.md` (tooling research), work-todo §33 (firmware track)
 
+## Acknowledgements
+
+- **On-chain SPHINCS+ verifier and the C10 parameter set — [Nicolas Consigny](https://github.com/nconsigny) (`nconsigny`, <nicolas@ethereum.org>).** The Yul verifier this wallet deploys, `contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol`, is derived from `SPHINCs-C10Sha256Asm.sol` in [nconsigny/SPHINCs-](https://github.com/nconsigny/SPHINCs-) (MIT), and the C10 parameter set itself originated in that repository (commit `0516a11`, 2026-04-09, from its Fluhrer–Dang security sweep — see `docs/verification/c10-fips205-delta-audit.md` §Addendum). The Python reference signer that `sphincs-c10/` was written against comes from the same work. PQSigner's changes on top are the SHA-256 firmware-parity constraints, N-mask key-shape enforcement in the verifier, FORS-forest binding to the hypertree leaf position, and the 65,536-per-chain use caps.
+- **Trezor** — the TAMP tamper-detection driver is a GPLv3 port from `trezor-firmware`.
+- **Solady / Coinbase Smart Wallet** — nested EIP-712 (`replaySafeHash`), ERC-6492 signature checking, and the multi-owner account shape the ERC-4337 v0.6 account is compatible with.
+
 ## License
 
 Copyright (c) 2026 Freedom Factory Inc.
+
+- **Firmware and everything else in this repository:** [GNU General Public License v3.0](LICENSE) (GPLv3). Note that ported third-party GPLv3 code (e.g. the Trezor-derived TAMP driver) is compatible with and remains under GPLv3.
+- **Smart contracts (`contracts/`):** [MIT License](contracts/LICENSE). Vendored third-party contract dependencies (Solady, Coinbase Smart Wallet reference code, forge-std, etc.) remain under their own licenses.
+
+Vendor datasheets, application notes, and the NXP Plug & Trust middleware are **not** distributed in this repository (their licenses do not permit redistribution). Download them from the respective vendors: STMicroelectronics (RM0456, STM32U585 datasheet, UM2839), NXP (SE050 datasheet, AN12413, AN12436, AN12514, AN13539, Plug & Trust middleware), Infineon (OPTIGA Trust M doc pack), and the display-controller vendors (NV3007, SSD1306). The SPHINCS+C parameter-set paper is open access at [eprint.iacr.org/2022/778](https://eprint.iacr.org/2022/778).
+
+## ⚠️ Early access — work in progress
+
+**PQ1 is unfinished, not yet audited, and not ready to hold value.** We are
+open-sourcing it early, while it is still being built, rather than presenting it
+as finished after the fact — the design and the code should be reviewable in the
+open. Expect breaking changes.
+
+- **No devices have shipped** and no on-chain wallet holds funds. Do not use this
+  to protect real value.
+- **An external security audit by Trail of Bits is currently under way**, and no
+  external audit has been finalized. Treat the security claims above as
+  unconfirmed until that work lands — the reviews under `docs/audits/` are our
+  own.
+- **Ship-blocking work is still open**, including irreversible secure-element
+  provisioning steps. [`docs/STATUS.md`](../../../docs/STATUS.md) tracks the state of each
+  subsystem — what is done, what is open, and why.
+- Values described above as "frozen" — domain-separation tags, the C10 parameter
+  set, the CREATE2 salt, the EntryPoint version — are what we intend to commit to
+  *at launch*, and can still change cleanly before first shipment.
+
+Review, reproduction, and bug reports are welcome — see
+[`SECURITY.md`](SECURITY.md).
 
 
 
@@ -814,13 +850,13 @@ Copyright (c) 2026 Freedom Factory Inc.
 
 Post-quantum ERC-4337 hardware wallet on **STM32U585 (Cortex-M33, TrustZone) + OPTIGA Trust M V3 + SE050**. **SPHINCS+C10 only** for signing — pure PQ, no ECDSA fallback. Account-abstraction smart account on **EntryPoint v0.6** (Coinbase-Smart-Wallet-compatible) — **frozen target, no v0.7/v0.8 migration**: the v0.6 instance address + ABI are baked into `initCode`, the userOpHash preimage, and the on-chain factory; switching EntryPoint versions would change the CREATE2 init-code hash and break invariant #6 (same 24 words → same address on every chain). v0.6 stays supported by EIP-4337 bundlers indefinitely; if v0.6 is ever sunset, the response is to keep using direct EOA-bundled execution against the same wallet contract, not to redeploy. Same 24 words → same on-chain address on every chain (CREATE2 salt = `sha256(masterPkSeed‖masterPkRoot)`). SHA-256 inside the PQ stack; Keccak-256 only for EVM-mandated hashes (userOpHash, EIP-712, EIP-1559, ERC-7201, CREATE2 opcode).
 
-**Status (2026-04, pre-production bring-up).** All-C10 cutover complete: bootstrap **and** slot keys are C10 (`h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205, sig=4008`). Boots on real B-U585I-IOT02A and QEMU mps2-an505. Both SE drivers + Tier-1 SAES-CMAC(DHUK) KDF working; three-way PIN-attempt consumption (MCU page 124 + OPTIGA E120 LUC + SE050 silicon UserID) and the 10-wrong-PIN brick/admin-wipe flow were validated end-to-end. Boot reconciliation has the narrower directional scope stated in invariant #2. On-chain caps: `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` (≈ 2^32 txns/chain, well inside the C10 birthday margin). Firmware is **stateless w.r.t. slot selection** — companion supplies `(chain_id, slot_index, flags)` on every sign. Page 123 durably tracks each slot's off-chain count, reconciled UserOp count, generated UserOp-signature tally, and registration state.
+**Status (2026-04, pre-production bring-up).** All-C10 cutover complete: bootstrap **and** slot keys are C10 (`h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205, sig=4008`). Boots on real B-U585I-IOT02A and QEMU mps2-an505. Both SE drivers + Tier-1 SAES-CMAC(DHUK) KDF working; three-way PIN-attempt consumption (MCU page 124 + OPTIGA E120 LUC + SE050 silicon UserID) and the 10-wrong-PIN brick/admin-wipe flow were validated end-to-end. Boot reconciliation has the narrower directional scope stated in invariant #2. On-chain caps: `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` (≈ 2^32 txns/chain). **Per-KEY margin, stated honestly (corrected 2026-07-26):** slot keys are chain-bound, so 65,536 is a true per-key cap (birthday floor 96 b). The **bootstrap key is chain-INDEPENDENT** (invariant #6 requires it for cross-chain address stability), so its per-key budget across `C` chains is `C x 65,536`, NOT 65,536 — its generic-multi-target floor degrades as `96 - 2*log2(C)` (94 b at 2 chains, 88 b at 16). This is the documented P14 caveat (`Quantitative.lean` P14 + `advantage_floor_within_bootstrap_cap_crosschain`); realistic bootstrap usage is tens of signatures (slot rotations only), so practical exposure is far below the cap. Firmware is **stateless w.r.t. slot selection** — companion supplies `(chain_id, slot_index, flags)` on every sign. Page 123 durably tracks each slot's off-chain count, reconciled UserOp count, generated UserOp-signature tally, and registration state.
 
 **Shipping model (owner decision 2026-07-14 — work-todo #36).** The factory flashes the firmware and retains responsibility for SE-internal irreversible provisioning/lockdown on per-device *transport* keysets — S-1/S-2/S-3 metadata/object preparation, UserID/LUC, attestation objects, and the eventual OPTIGA lifecycle ratchets — then ships at **RDP-0** so anyone can verify flash + option bytes + OTP over SWD (connect-under-reset, **before first power**) against the reproducible build. On the **first field boot** the device self-locks to RDP-2 (only then is the per-die DHUK final), performs the BHK first write, and replaces the transport credentials before entering the seed wizard. The `rdp2-self-lock` candidate now implements the device-side journaled flow: transport→BHK-rooted SE050 SCP03/admin rotation and transport→persisted-TRNG-salted DHUK OPTIGA PBS rotation. That code is implementation evidence, not a production-approved ceremony. A batch-uniform/erased shipping image still lacks the reviewed authenticated per-unit factory handoff/receipt, authenticate-before-rotate contract, atomic durable old/new/KVN recovery proof, selected E140 lifecycle order, and silicon receipts. No migration protocol or irreversible ordering is authorized by this summary. There is **no factory/fixture RDP-2 burn** and no factory-held final pairing secret.
 
 **Trusted-display clear-signing.** Every signable artifact is decoded and rendered inside the secure world before the user presses confirm — no blind-sign path for known shapes. (1) **Safe transactions:** the EIP-712 `SafeTx` typed-data hash is verified in S-world (`secure/src/tx/eip712/safe/`) and the inner `to/value/data/operation` is decoded locally — ERC-20 transfers and Safe owner/threshold/module/guard changes render on the LCD with full parameters; the companion never gets to substitute a hash. Safe `multiSend` batches (selector `0x8d80ff0a`, the shape the Safe web UI emits for anything multi-step) clear-sign per record: `operation=1` (DELEGATECALL) is accepted ONLY against the three pinned canonical `MultiSendCallOnly` deployments, the packed records are strictly decoded (`secure/src/tx/eip712/safe/multi_send.rs` — per-record op==0, ≤6 records, exact framing) and each record routes through the same inner ladder (ERC-20 / ETH / Safe-mgmt / CoW / loud per-record blind) with divider pages; any rule violation or page-budget overflow refuses to sign — a DELEGATECALL is never blind-signed. (`operation=0` calls to a MultiSend address stay loud blind-sign — under CALL the Safe isn't msg.sender for the records.) (2) **CoW Swap orders:** the EIP-712 `GPv2Order` is verified in S-world (`secure/src/tx/eip712/cowswap/`) and the order payload is decoded **on-device** — token name/symbol/decimals come from the firmware-pinned `ERC20_DB_ROOT` (the same Merkle root the ERC-20 transfer path uses), so the user sees the exact intent (e.g. `SELL 0.2 USDC for at least 0.0004 WETH`) rather than a 32-byte digest. ERC-7730 clear-sign descriptors and the typed-call ABI parser are likewise pure on-device decoders; incomplete registry-known formats are hard refusals. (3) **Safe-wrapped CoW orders:** when a SafeTx's inner call is CowSwap `GPv2Settlement.setPreSignature(orderUid, true)` — directly, or as a record inside an allowlisted `MultiSendCallOnly` batch (the Safe UI's actual `[approve(vault relayer), setPreSignature]` shape) — the same CoW v3 pipeline verifies the order bound to the presign calldata (the *record's* bytes for multiSend) with `orderUid.owner == the Safe` (not the wallet `sender`), and the render combines Safe context (banner, address, nonce, refund pages) with the full order intent — unmistakably "a CoW order for this specific Safe". One binding resolver (`secure/src/tx/eip712/safe/cow_binding.rs`) and the shared `cowswap_display::append_order_body_pages` keep all flows code-identical; see `docs/companion/companion-safe-cowswap-presign.md` (single-call + the folded-in multiSend-batch section).
 
-**Scope of the clear-signing guarantee:** “no blind-sign path for known shapes” above applies to the structured on-chain and typed-data dispatchers. Explicit EIP-1271 `RAW32` is a separate, loudly-labelled blind off-chain tier; it is not a semantic fallback for a typed-data request.
+**Scope of the clear-signing guarantee:** “no blind-sign path for known shapes” above applies to the structured on-chain and typed-data dispatchers. Explicit EIP-1271 `RAW32` is a separate, loudly-labelled blind off-chain tier; it is not a semantic fallback for a typed-data request. **Forced blind is likewise not clear signing.** If the default-off `erc7730-forced-blind` feature is implemented and enabled, only cleanly absent metadata for an exact member of the separately authenticated refused-known set `F = K \ C`, in the enumerated single steady-state Type-2 case for a slot already registered by the normal Type-1 rotation path, may enter its separate on-device ceremony. A tuple in the firmware's accepted clear set `C` either clear-signs or fatal-refuses: descriptor omission cannot downgrade it, and any present descriptor's validation, binding, or render failure is fatal. ERC-8176 may support catalogue admission into `C`; it grants no runtime signing authority and no semantic claim to forced raw pages. Feature-off and rollback behavior remain hard refusal, and all independent production-configuration, trusted-UI/FI, resource, provenance, rollback, and release gates remain required.
 
 ## Non-Negotiable Invariants
 
@@ -830,17 +866,18 @@ Production contract — every shipping build must respect ALL. Pre-production ma
 2. **Hardware PIN gating; three-way per-attempt consumption, directional boot cross-check.** PIN comparison stays in SE silicon. `gated_unlock` precharges MCU page 124; an ordinary wrong-PIN attempt then advances OPTIGA E120 and the SE050 UserID. Page 124 and SE050 enforce the user-facing 10-attempt bound; E120 is a separate 32-lifetime-attempt anti-extraction backstop. At boot firmware can read page 124 and E120 and wipes when `E120_used > page124_used`; an MCU lead is a conservatively charged power-cut/transport-error state. The production SE050 UserID policy denies attempt-attribute reads (`SW=0x6986`), so SE050 is not a boot-reconciliation input; `AuthMethodBlocked` still maps to `PinLocked` and the wipe path. Do not claim three-way boot reconciliation. Making that property genuinely three-way requires a separately reviewed SE050 policy/backend and silicon decision.
 3. **E2E encrypted SE tunnels.** OPTIGA Shielded Connection uses TLS-PRF + AES-128-CCM-8; SE050 SCP03 uses AES-CMAC + AES-CBC. No plaintext secret crosses I2C. The `rdp2-self-lock` candidate contains the journaled transport→final device-side rotation: SE050 SCP03/admin move to the BHK axis, while OPTIGA PBS moves to a DHUK derivation bound to a persisted fresh-TRNG salt. Page 126 is exclusively the DHUK-wrapped SE050 BHK; page 127 owns the first-boot journal and salt. Production remains blocked until the authenticated per-unit factory handoff/receipt, authenticate-before-rotate rule, atomic durable old/new/KVN recovery adequacy, E140 ordering, and silicon evidence are reviewed and closed. The ML-KEM-1024 inner wrap was DESCOPED 2026-07-07 (owner decision, do not re-raise — see work-todo #9): both tunnels are symmetric-rooted (no Shor material on the bus), so the accepted residual is Grover-2⁶⁴ (Cat-1) key search against physically-tapped sessions; consequence: per-device final rotation is load-bearing for this acceptance.
 4. **All secrets only in TrustZone secure world.** NS never sees PIN, entropy, signing key, or derived secret. NSC gateway returns opaque non-secret data. Validate NS pointers and copy NS buffers to S-stack before parse (TOCTOU).
-5. **One signature primitive: SPHINCS+C10.** Both Type 1 (bootstrap → slot registration) and Type 2 (slot → user tx). No FORS+C, no classical signer (secp256k1, P-256, Ed25519). Wallet has a single `c10Verifier`.
+5. **One signing primitive: SPHINCS+C10.** Both Type 1 (bootstrap → slot registration) and Type 2 (slot → user tx). No FORS+C, no classical signer (secp256k1, P-256, Ed25519). Wallet has a single `c10Verifier`. Host-only `dbgen` may verify externally mandated ERC-8176 EAS/secp256k1 signatures solely to admit catalogue inputs; its production verifier holds no signing key, creates no wallet/FW-update/on-chain authority, and is fenced by `make classical-crypto-boundary`.
 6. **Bootstrap C10 keys immutable per-wallet (launch invariant).** CREATE2 salt depends only on `(masterPkSeed, masterPkRoot)`; rotating changes the address. No `rotateMasterKeys` and no ownership model that could introduce one.
 7. **Per-chain caps monotonic, unresettable.** `bootstrapUses < 65,536`, `slotUses[i] + offchainSigCount[i] < 65,536`. No `reset*` or `increaseMax*` path. Exhausted chains stay frozen.
 8. **Stateless slot selection.** Companion supplies `(chain_id, slot_index, flags)` on every sign. No flash slot store, no recovery state machine in S-world. Slot keys re-derived on demand and cached in SRAM only.
-9. **Off-chain sig counter, combined cap.** Firmware tracks `local_offchain_count` + `last_userop_count` per slot in flash page 123 (log-structured, 16 B/increment, compaction). Refuses to sign past `MAX_OFFCHAIN_GAP = 100` unbacked sigs or past the combined cap. Post-restore, `CMD_SIGN_OFFCHAIN` for an unregistered slot is rejected — forces a Type 1 rotation via `CMD_SIGN_USEROP` first.
+9. **Off-chain sig counter, combined cap.** Firmware tracks `local_offchain_count` + `last_userop_count` per slot in flash page 123 (log-structured, 16 B/increment, compaction). Refuses to sign past `MAX_OFFCHAIN_GAP = 100` unbacked sigs or past the combined cap. Post-restore, `CMD_SIGN_OFFCHAIN` for an unregistered slot is rejected — forces a Type 1 rotation via `CMD_SIGN_USEROP` first. The forced-blind steady Type-2 branch enforces the same registration prerequisite and cannot create registration through its tally write.
+10. **Verify-once-physically trust chain (owner decision 2026-07-21).** The device's entire post-sale trust story is: (a) ship at RDP-0 so anyone can verify flash + option bytes (including staged WRP) + OTP over SWD, connect-under-reset **before first power**, against the reproducible build; (b) the verified image contains an FSBL whose pages are WRP-protected and which measures the active firmware slots and renders the 8-word fingerprint at boot; (c) first field boot self-locks to RDP-2, which freezes the option bytes forever — WRP on the FSBL range becomes physically permanent, so **no firmware update can ever modify, unprotect, or bypass the measuring code**; (d) from then on the boot-time fingerprint is proof of what is installed — the user never has to trust a firmware update again. Consequences that bind every future change: no runtime write path (fw_update or otherwise) may touch the FSBL range; the WRP-set → RDP-2 ordering is mandatory (RDP-2 with unprotected FSBL pages permanently forfeits the guarantee for that die); the FSBL must own the display for its fingerprint window (a later fake screen is the accepted residual — the *boot-time* window is the anchor, keep it visually distinctive); and the shipping image must actually flash the FSBL in the slot layout (monolithic builds are bench-only). Currently OPEN gates before this invariant is claimable: FSBL geometry (Draft 1.1 pages 0..4), both-bank WRP/option-byte ceremony, non-monolithic shipping image, FI-hardened FSBL image verify (EF-swarm F15), silicon receipts.
 
 ## Pre-Production Caveats
 
 No devices shipped, no funds on-chain — domain tags / parameters are still renamable pre-launch. Known acceptable regressions:
 
-- **⚠️ SHIP BLOCKERS — OPTIGA shipping-state lockdown (S-1, S-2, S-3 — all three required before any device leaves the bench).** S-1 is the unclosed F1D0 authorization/lifecycle ceremony: the candidate metadata uses `Auto(F1D0)`, but its irreversible ordering and silicon receipt are not production-approved. S-2 is the still-open type-`0x11` Protected-Update pool `{0xE0E8,0xE0E9,0xE0EF}` plus the device-certificate retype boundary. The observed `0xE0E3` is already a full type-`0x12` device certificate; the retired public-sample helper targeting it is a mis-targeted no-op, not the live anchor path. S-3 requires `optiga-hw-counter` and its production evidence. Compile-time fences prevent these candidates from masquerading as shipping closure: `OPTIGA_S2_PRODUCTION_BLOCKED` rejects every `mode-production + optiga-trust-m` build while S-2 is open, the retained helper emits no APDU, and the irreversible experimental feature pair is deliberately unbuildable. Ordinary pairing also never ratchets E140; that factory-side action remains OPEN relative to final credential rotation. **Owners:** `docs/production-todo.md` "OPTIGA Trust M V3 — LcsO transitions" and `docs/STATUS.md` §A. The SE-side blockers **S-5/S-6/S-7 are RESOLVED 2026-05-28** (`docs/security/security-review-2026-05.md` §§C-7/C-8/C-9 = Fixed); S-7d's on-silicon `VERIFY` status mapping is resolved as `0x6986` and recorded in `docs/STATUS.md`. The OPTIGA bring-up state is acceptable ONLY because nothing has shipped.
+- **⚠️ SHIP BLOCKERS — OPTIGA shipping-state lockdown (S-1, S-2, S-3 — all three required before any device leaves the bench).** S-1 is the unclosed F1D0 authorization/lifecycle ceremony: the candidate metadata uses `Auto(F1D0)`, but its irreversible ordering and silicon receipt are not production-approved. S-2 is the still-open type-`0x11` Protected-Update pool `{0xE0E8,0xE0E9,0xE0EF}` plus the device-certificate retype boundary. The observed `0xE0E3` is already a full type-`0x12` device certificate; the retired public-sample helper targeting it is a mis-targeted no-op, not the live anchor path. S-3 requires `optiga-hw-counter` and its production evidence. Compile-time fences prevent these candidates from masquerading as shipping closure: `OPTIGA_S2_PRODUCTION_BLOCKED` rejects every `mode-production + optiga-trust-m` build while S-2 is open, the retained helper emits no APDU, and the irreversible experimental feature pair is deliberately unbuildable. Ordinary pairing also never ratchets E140; that factory-side action remains OPEN relative to final credential rotation. **Owners:** GitHub issues [`label:ship-blocker`](https://github.com/EthereumPhone/PQ1/issues?q=label%3Aship-blocker) (production-todo retired 2026-07-19; original "OPTIGA Trust M V3 — LcsO transitions" at `docs/archive/production-todo-retired-2026-07-19.md`) and `docs/STATUS.md` §A. The SE-side blockers **S-5/S-6/S-7 are RESOLVED 2026-05-28** (`docs/security/security-review-2026-05.md` §§C-7/C-8/C-9 = Fixed); S-7d's on-silicon `VERIFY` status mapping is resolved as `0x6986` and recorded in `docs/STATUS.md`. The OPTIGA bring-up state is acceptable ONLY because nothing has shipped.
 
 - **TZSC config (invariant #4):** regressed then fixed; enforcement **and** USB-coexistence **silicon-validated 2026-05-20** (`make gtzc-enforcement-hw` → 7/7 secure peripherals RAZ-fault on NS access; device still enumerates `1209:7051` over USB-C). `secure/src/sau.rs` wires `GTZC1_TZSC_SECCFGR{1,3}` (AHB2 AES/HASH/RNG/PKA/SAES + I2C1/2 SECURE; OTG stays NS). Only TAMP (in GTZC2) remains as a follow-up.
 - **Debug instrumentation may ship in this branch.** `debug-log` allowed on hardware, `secure_log!` in the wizard, NS pre-USB register dumps, DHCSR-gated semihosting prints in `hw::hash::init_clock`. CI must still gate production on `debug-log` / `e2e-test` / `mock-se` OFF.
@@ -1024,7 +1061,7 @@ CI must gate shipped firmware on `debug-log` / `e2e-test` / `mock-se` / `otp-har
 - `zeroize::ZeroizeOnDrop` on every secret type with compiler fences.
 - `subtle` for constant-time compares. No secret-dependent branches.
 - Every `unsafe` block has a `// SAFETY:` comment. `#![deny(unsafe_op_in_unsafe_fn)]`, `#![warn(clippy::pedantic)]`.
-- **`unsafe` taxonomy.** Five categories that are structurally required and one that is not. **Required:** (1) CMSE `unsafe extern "C"` veneers (TrustZone ABI); (2) NS pointer deref after `NsPtr<T>` validation in `secure/src/nsc/*` — and the same NS-pointer window-check + volatile-copy primitives extracted verbatim into `shared/src/ns_ptr_validate.rs` so they are Kani-proven + Miri-checked host-side (re-exported by `nsc/{ns_ptr,ptr_validate}.rs`); (3) `unsafe extern "C"` SHA-256 hooks consumed by `sphincs-c10` under `hw-sha256`; (4) FI volatile read/write helpers in `secure/src/fi.rs` — plus the FI stack-canary `read_volatile`/`write_volatile` in `pqsigner-erc7730/src/display/render/mod.rs` that rode into the host crate with the render dispatch (all must stay `read_volatile`/`write_volatile` to defeat compiler folding; a `black_box` swap is a silent FI-weakening); (5) `static mut` bookkeeping for the HASH peripheral's 4-byte merge buffer and similar single-threaded driver state. The `.semgrep` `no-unsafe-in-pure-logic-crates` gate excludes exactly those two host-relocated files (allowlist asserted by `make invariant-gates`); any *new* `unsafe` in a pure-logic crate is still a hard error. **Avoidable:** ad-hoc per-register MMIO `read_volatile`/`write_volatile` — funnel each peripheral's registers through `hw::mmio::{Reg32, RoReg32}`, which encapsulates the unsafe once at the address-binding step. UI/log code that materialises ASCII-by-construction buffers must use `crate::ui::ascii_str` rather than `core::str::from_utf8_unchecked`.
+- **`unsafe` taxonomy.** Five categories that are structurally required and one that is not. **Required:** (1) CMSE `unsafe extern "C"` veneers (TrustZone ABI); (2) NS pointer deref after `NsPtr<T>` validation in `secure/src/nsc/*` — and the same NS-pointer window-check + volatile-copy primitives extracted verbatim into `shared/src/ns_ptr_validate.rs` so they are Kani-proven + Miri-checked host-side (re-exported by `nsc/{ns_ptr,ptr_validate}.rs`); (3) `unsafe extern "C"` SHA-256 hooks consumed by `sphincs-c10` under `hw-sha256`; (4) FI volatile read/write helpers in `secure/src/fi.rs` — plus the FI stack-canary `read_volatile`/`write_volatile` in `pqsigner-erc7730/src/display/render/mod.rs` and double-render transcript-poison writes in `pqsigner-erc7730/src/display/mod.rs` that rode into the host crate with the render dispatch (all must stay `read_volatile`/`write_volatile` to defeat compiler folding; a `black_box` or ordinary-store swap is a silent FI-weakening); (5) `static mut` bookkeeping for the HASH peripheral's 4-byte merge buffer and similar single-threaded driver state. The `.semgrep` `no-unsafe-in-pure-logic-crates` gate excludes exactly those three host-relocated files (allowlist asserted by `make invariant-gates`); any *new* `unsafe` in a pure-logic crate is still a hard error. **Avoidable:** ad-hoc per-register MMIO `read_volatile`/`write_volatile` — funnel each peripheral's registers through `hw::mmio::{Reg32, RoReg32}`, which encapsulates the unsafe once at the address-binding step. UI/log code that materialises ASCII-by-construction buffers must use `crate::ui::ascii_str` rather than `core::str::from_utf8_unchecked`.
 - NS pointer validation on every gateway call before any deref. NS buffers copied to S-stack before parse.
 - Cross-world types in `shared/src/lib.rs` with `#[repr(C)]`.
 - Secret types are `!Copy + !Clone`.
@@ -1047,7 +1084,7 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | `sphincs-c10/` | C10 signing — `SigningKey::keygen/sign`, `verify`, hypertree, wots, fors, merkle, address, hash, params. |
 | `bip39/` | 24-word English BIP-39 (no_std). |
 | `pqsigner-erc7730/src/{ir,walker,bundle,binding,abi}.rs` | ERC-7730 clear-signing — IR parser, path walker, Merkle bundle verifier, `(chain_id, contract, ds)` binding cross-checks. Host-runnable; firmware re-exports via `secure/src/tx/erc7730.rs`. |
-| `pqsigner-erc7730/src/display/{mod,primitives}.rs` + `display/render/{mod,formatters,intent,nested,calldata_nested}.rs` | Shared display substrate (`Pages`/`MAX_PAGES`/`ascii_str` + byte-writer primitives) **and the full ERC-7730 renderer** (intent banner + 14 FormatOp dispatchers + nested-EIP-712/calldata descent) — moved here 2026-07-04 so the render dispatch is host-linkable/fuzzable/Kani-provable. |
+| `pqsigner-erc7730/src/display/{mod,primitives}.rs` + `display/render/{mod,formatters,intent,nested,calldata_nested}.rs` | Shared display substrate (`Pages`/`MAX_PAGES`/`ascii_str` + byte-writer primitives) **and the full ERC-7730 renderer** (intent banner + 15 FormatOp dispatchers + nested-EIP-712/calldata descent) — moved here 2026-07-04 so the render dispatch is host-linkable/fuzzable/Kani-provable. |
 | `pqsigner-erc7730/src/render/{params,visibility,resolve,array,enums}.rs` | TLV parameter parser, visibility evaluator (`should_render_with_mode`), path/offset resolvers — the Kani-proven pure half of the renderer. |
 
 ### Secure world
@@ -1106,7 +1143,6 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | `secure/src/hw/saes_cmac.rs` | `cmac_dhuk(msg) -> tag` thin SAES adaptor. |
 | `secure/src/hw/secret_keys.rs` | Current per-purpose key API. Factory transport SCP03/admin/PBS credentials derive from the factory-burned per-device OTP master. The candidate final OPTIGA PBS derives from DHUK plus the persisted TRNG salt; final SE050 SCP03/admin credentials derive from BHK. Explicit dev/legacy configurations use hardcoded or deterministic fallback roots. The first-boot implementation remains production-quarantined pending its named handoff, recovery, silicon, and ordering gates. |
 | `secure/src/hw/otp.rs` | Rejected legacy unary rollback tally (bench-only, production-fenced) + device-master/factory legacy OTP regions. Draft 1.1 is a research candidate for the replacement typed floor API; its implementation, physical codec, ECC, interruption, and durability gates remain open. |
-| `secure/src/hw/huk.rs` | `derive_device_key(label) = HKDF(UID‖OTP_master, label)`. |
 | `secure/src/hw/flash.rs` | Bank-2 writes, ICACHE invalidate, `pin_attempts_{read,bump,reset}` on page 124, admin-page (125) wipe-flag. |
 | `secure/src/hw/tamp.rs` | TAMP (Trezor-port). Log-only by default; under `tamp-wipe` (production) escalates to `tzic::trigger_intrusion_wipe`. |
 | `secure/src/hw/consumption_mask.rs` | TIM2 CH1 PWM on PA5, randomised duty cycle. |
@@ -1160,9 +1196,37 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
   pages-0..3/32-KiB layout is legacy bench-only; Draft 1.1 proposes pages 0..4
   but leaves geometry, both-bank protection, factory, and silicon gates open.
 
+## External review models (adversarial review / planning / advisory)
+
+Two **non-Claude** models are wired on this box and may be used freely for **adversarial review, design
+critique, planning, and advisory** roles — especially on FV/crypto-modeling decisions, before committing to a
+multi-session approach, and as a second opinion on any claim you are about to bank as fact.
+
+| Model | How to invoke | Notes |
+|-------|---------------|-------|
+| **GPT-5.6** | `mcp__codex__codex` MCP tool — pass `prompt`, `cwd`, `sandbox: "read-only"`, `approval-policy: "never"` | Agent with repo access; reads files itself. Long reviews get backgrounded (>120 s) and notify on completion. |
+| **Kimi K3** | CLI: `export PATH="$HOME/.kimi-code/bin:$PATH"; kimi -p "<prompt>"` (run from the target repo) | **NOT an MCP.** `--auto` is INCOMPATIBLE with `-p` (hard error). Agent with repo access; verbose — redirect to a file and read the tail. Very long runs: use `run_in_background`. |
+
+**How to use them well** (learned 2026-07-19, when they jointly killed an unsound EasyCrypt reduction design
+before it cost multiple sessions):
+
+- Give them the **file paths and line numbers** and tell them explicitly to *read the actual code, not trust
+  your summary* — their value comes from checking your framing against source.
+- Ask them to **attack a specific decision**, state the failure mode you most fear, and demand a prioritized
+  list of holes + a recommended action + "where is my read too optimistic". Vague "review this" wastes them.
+- Say **"do not modify any file"** (both are agents and will edit if allowed), then `git status` afterwards.
+- **Run both and compare.** Convergence on a disqualifier is strong evidence; divergence is where the real
+  information is (in the 2026-07-19 review both found the same fatal flaw, but only one found the better fix,
+  and only the other found the deeper foundations problem).
+- **Verify their load-bearing citations yourself** before acting — treat their output as a lead, not a fact.
+
+The `advisor` tool (stronger Claude reviewer, sees the full transcript) is complementary: use it for
+calibration/honesty-of-claims and approach selection; use GPT-5.6 / Kimi K3 when you need an *independent*
+model to check domain reasoning against the source.
+
 ## Work tracking
 
-After completing implementation tasks, check `docs/work-todo.md` and tick off matching items; add a row to the Completion Log with the date + one-line summary.
+Action tracking lives on **GitHub Issues** (repo `EthereumPhone/PQ1`). `docs/work-todo.md` and `docs/production-todo.md` were retired 2026-07-19: their open items were migrated to issues labelled `source:work-todo` / `source:production-todo` (plus `priority:*`, `surface:*`, `ship-blocker`), and the full pre-migration content is archived at `docs/archive/work-todo-retired-2026-07-19.md` and `docs/archive/production-todo-retired-2026-07-19.md`. After completing implementation tasks, close the matching issue with the evidence (commit, tests, receipts) in the close comment. Historical `work-todo #N` / section references in this and other docs resolve through the archive copy.
 
 **Docs hygiene — amend, don't duplicate.** Before creating a new doc, `grep`/`find` over `docs/` + `contracts/verification/docs/` (and the "Deep-dive docs" list below) for one that already covers the topic and update *that* instead. This repo has many overlapping docs (`STATUS.md`, `FV_VALUE_AND_GAPS.md`, `THE_CLAIM.md`, the `docs/*-sota-*.md` surveys, per-subsystem status/postmortem files), and a parallel new doc almost always duplicates an existing one and drifts stale. Prefer additive dated `UPDATE <date>` notes + a snapshot-date bump over rewriting (preserves the honest history the FV docs depend on). Create a new doc only when no existing one fits the scope.
 
@@ -1263,7 +1327,7 @@ On every boot, before trusting the SE050:
 
 - **Current lifecycle split (work-todo #36):** the factory burns the per-device OTP master and uses it to install the device's transport SCP03/admin/PBS credentials plus the required SE structure, policy, and attestation state. It then ships at RDP-0 so the owner can verify flash and option bytes before first power. It does not install the final pairing credentials, perform the BHK first write, create the wallet seed, or set RDP-2.
 - On first field boot, after pre-power verification, the **secure app early-boot** candidate self-locks RDP-2 and performs the BHK first write. It then replaces SE050 transport credentials with unsalted BHK-derived final SCP03/admin credentials and replaces the OPTIGA transport PBS with a final value derived from the per-die DHUK plus a fresh TRNG salt persisted in the page-127 journal, before the seed wizard. The FSBL only authenticates and hands off the selected slot.
-- That candidate is implemented behind `rdp2-self-lock`, but the authenticated handoff, authenticate-before-rotate rule, old/new/KVN recovery proof, exact E140 ordering, silicon receipts, and production approval remain OPEN. This document does not authorize an irreversible action; follow `docs/production-todo.md` and work-todo #36.
+- That candidate is implemented behind `rdp2-self-lock`, but the authenticated handoff, authenticate-before-rotate rule, old/new/KVN recovery proof, exact E140 ordering, silicon receipts, and production approval remain OPEN. This document does not authorize an irreversible action; follow the `EthereumPhone/PQ1` production gates (labels `source:production-todo`, `ship-blocker`) and work-todo #36.
 - The storage boundary is: flash page 126 holds only the DHUK-wrapped BHK; page 127 owns the first-boot journal and non-secret OPTIGA salt; final SE050 SCP03/admin material derives from the BHK and has no standalone flash key blob.
 - Create the PIN-auth and seed objects only during the reviewed first-field ceremony after the final secure-channel rotation.
 - Pin the SE050 unique ID to U585 Secure flash.
@@ -1480,7 +1544,7 @@ Say this out loud to yourself before every commit:
 - Clean-room facility. No network on provisioning stations.
 - HSM-backed generation of per-device SCP03 keys, or EdgeLock 2GO.
 - Provisioning logs never contain secret material. Audit every log statement.
-- Factory acceptance proves only the authorized RDP-0 transport/attestation state. First-field acceptance, after owner verification, separately proves the RDP-2 self-lock, BHK first write, final secure-channel rotation, and seed-wizard completion.
+- Factory acceptance is a completion-flag check (`is_provisioned` + OTP sentinel read over probe-rs), not cryptographic per-unit attestation — a malicious provisioning station can forge it. Real per-unit attestation (SE050 ECKey attestation, #22 / S-G) is unbuilt. First-field acceptance, after owner verification, separately proves the RDP-2 self-lock, BHK first write, final secure-channel rotation, and seed-wizard completion.
 - Tamper-evident packaging between facility and user.
 - A provisioning station compromise compromises every device that passed through it during the compromise window. Have a plan.
 
@@ -1650,8 +1714,8 @@ Current design addresses **E partially** (wipe flag) and **F partially**
 - Bundle A also surfaces: **SLH-DSA verify-after-sign is insufficient**
   per RFC 9814 + Genêt TCHES 2023. A single fault during signing
   produces a signature that often still verifies. Double-compute on
-  disjoint SRAM is mandatory. Tracked in work-todo.md #18, not in
-  this doc (out of brownout scope).
+  disjoint SRAM is mandatory. Tracked on `EthereumPhone/PQ1` (label
+  `source:work-todo`, item #18), not in this doc (out of brownout scope).
 - Bundle C surfaces: **we are currently signing with OptRand = 0**.
   That enables PRF(SK.seed) horizontal-DPA recovery in few traces.
   Fresh TRNG per signature required. Tracked in #18.
@@ -2107,7 +2171,7 @@ Addresses: residual risk at A, B, C even if Stages 1-4 have a bug.
 - **TAMP peripheral full config** — external tamper pins, temperature
   monitor, voltage monitor. Wallet-enclosure-design-dependent.
 - **Signed firmware update with brownout-safe flashing** — tracked
-  separately (`docs/work-todo.md` items 14/15/16).
+  separately on `EthereumPhone/PQ1` (label `source:work-todo`, items 14/15/16).
 
 ## Testing methodology
 
@@ -2273,7 +2337,7 @@ At the end of the roadmap the following will hold:
 This document consolidates findings from 4 parallel AI deep-research
 sessions (bundles A, B, C, D — prompt E has not yet run) into a single
 actionable reference. It is *not* the code; it is the distilled plan.
-Implementation tasks track in `docs/work-todo.md` items #18-22.
+Implementation tasks track on `EthereumPhone/PQ1` (label `source:work-todo`, items #18-22).
 
 Raw research results live under `docs/security/research-bundles/results/`. Each
 finding below cites the responsible bundle plus any verification caveats.
@@ -2289,7 +2353,7 @@ factory-reset design see `docs/secure-elements/se050-factory-reset.md`.
 
 This is a dated synthesis, not a current priority list. Resolved or superseded
 items are marked in place; current authority lives in `docs/STATUS.md` and
-`docs/production-todo.md`.
+the `EthereumPhone/PQ1` issue tracker (label `source:production-todo`).
 
 1. **SLH-DSA verify-after-sign is inadequate**. Current code assumes
    signing the blob, re-verifying, and failing closed is enough. Per
@@ -2752,8 +2816,9 @@ change to work-todo #20 scope.
 > is exclusively the DHUK-wrapped SE050 BHK when `bhk` is enabled, and no
 > persistent firmware-update failure counter remains. The historical route
 > below that reused the OTP master as a final root is rejected for production.
-> Current lifecycle and rollback authority stays with `docs/production-todo.md`,
-> `docs/STATUS.md`, and the production-fenced rollback architecture record.
+> Current lifecycle and rollback authority stays with the `EthereumPhone/PQ1`
+> production items (label `source:production-todo`), `docs/STATUS.md`, and the
+> production-fenced rollback architecture record.
 
 **Threat context.** The OPTIGA Trust M pairing-secret flow that landed
 during early bring-up (`setup_pbs_no_handshake`, `hw/huk.rs`, flash page
@@ -2783,6 +2848,17 @@ secure_aes}/stm32u5/` shows Trezor stacks three keys:
 | **DHUK** | Factory-fused 256-bit per-chip key in ST silicon | At wafer test (ST) | SAES-only (`CRYP_KEYSEL_HW`); never in memory | Yes |
 | **BHK** | 32 B of device TRNG in HDP-protected flash page, loaded into TAMP backup registers at boot | First boot, on-device | SAES-only after `TAMP_SECCFGR.BHKLOCK`; software can't read post-boot | Yes (regeneration = factory reset) |
 | **OTP master** | 32 B of device TRNG in flash OTP block | First boot, on-device (`secret_keys.c:177-194`) | Readable by secure-world firmware | Yes (OTP is permanent per silicon) |
+
+> **PQSigner current state (2026-07-20):** the BHK row above is Trezor's
+> architecture; in PQSigner the HDP hide-protect layer is *deferred*, not
+> current. The ship profile leaves HDP disabled (`HDP1EN = HDP2EN = 0`;
+> nothing in `secure/src` writes `SECWM1R2`/`SECHDPCR`, and
+> `verify_ship_profile` has no HDP field), so the implemented
+> `bhk`-feature BHK sits in *ordinary* bank-1 flash page 126
+> (`0x0C0F_C000`), DHUK-wrapped — a flash dump exposes only the wrapped
+> blob. HDP1 (enable + `HDP1_PEND` covering the FSBL + `HDP1_ACCDIS` at
+> boot-exit) is the tracked deferred item (`EthereumPhone/PQ1` issue #39);
+> when it lands it also joins `verify_ship_profile`.
 
 Trezor derives per-purpose keys (OPTIGA pairing, TROPIC01 pairing,
 storage salt, NRF auth, MCU device-auth) from the OTP master via HMAC.
@@ -3032,8 +3108,9 @@ posture, excluding the on-chain verifier work for a SHAKE migration.
 
 ## 5. What this doc is NOT
 
-- Not a code specification — see `docs/work-todo.md` for actionable
-  tasks with file paths, and the code itself once implemented.
+- Not a code specification — see the `EthereumPhone/PQ1` issue tracker
+  (label `source:work-todo`) for actionable tasks, and the code itself once
+  implemented.
 - Not a threat model — see `docs/security/HARDENING.md` and `CLAUDE.md`
   invariants. This doc documents *mitigations* surfaced by research,
   not the overall threat taxonomy.
@@ -3264,29 +3341,26 @@ impl WalletStore for DualSecureElement {
         // real one.
         secure_log!("[DUAL/duress] start");
         let mut half_o = self.generate_split_half()?;
-        let half_e = xor_32(entropy, &half_o);
+        let mut half_e = xor_32(entropy, &half_o);
 
         if let Err(e) = self.optiga.provision_duress(&half_o, master_secret, vk, bootstrap_vk, duress_pin) {
             secure_log!("[DUAL/duress] optiga.provision_duress FAILED: {:?}", e);
             half_o.zeroize();
             crate::fi::zeroize_barrier();
-            let mut he = half_e;
-            he.zeroize();
+            half_e.zeroize();
             return Err(e);
         }
         if let Err(e) = self.se050.provision_duress(&half_e, master_secret, vk, bootstrap_vk, duress_pin) {
             secure_log!("[DUAL/duress] se050.provision_duress FAILED: {:?}", e);
             half_o.zeroize();
             crate::fi::zeroize_barrier();
-            let mut he = half_e;
-            he.zeroize();
+            half_e.zeroize();
             return Err(e);
         }
 
         half_o.zeroize();
         crate::fi::zeroize_barrier();
-        let mut he = half_e;
-        he.zeroize();
+        half_e.zeroize();
         crate::fi::zeroize_barrier();
         secure_log!("[DUAL/duress] Provisioned decoy: entropy XOR-split across OPTIGA + SE050");
         Ok(())
@@ -4104,6 +4178,8 @@ mod cmd_offchain_sync;
 mod cmd_request_unlock;
 mod cmd_sign_offchain;
 mod cmd_sign_userop;
+#[cfg(feature = "erc7730-forced-blind")]
+mod cmd_sign_userop_forced;
 mod cmd_sign_userop_batch;
 #[cfg(feature = "e2e-test")]
 mod cmd_test_pin_lockout;
@@ -4293,6 +4369,31 @@ compile_error!(
      bounds NS/secure hangs; trusted-UI waits remain limited by the 120 s \
      secure inactivity timer. Build both worlds through `make release`, which \
      enables the matching NS heartbeat feature."
+);
+
+// Forced blind adds signing authority and therefore has a narrower production
+// configuration than ordinary clear signing. `iwdg` implies the exact
+// STM32U585 Secure-alias implementation and the compile-time-pinned
+// GTZC1_TZSC_SECCFGR1 bit-7 image in `sau.rs`; `ui-lcd` implies the physical
+// GPIO buttons. P73S/Bloom are unconditional generated roots and the positive
+// feature itself co-embeds P73K, so there is no permissive runtime artifact
+// selector to fence here. The canonical production bundle separately keeps
+// this feature forbidden until implementation review and #79 silicon closure.
+#[cfg(all(
+    feature = "mode-production",
+    feature = "erc7730-forced-blind",
+    any(
+        not(feature = "stm32u585"),
+        not(feature = "iwdg"),
+        not(feature = "ui-lcd"),
+    ),
+))]
+compile_error!(
+    "ERC7730_FORCED_BLIND_PRODUCTION_PREREQUISITES: mode-production + \
+     erc7730-forced-blind requires stm32u585, iwdg with Secure-only \
+     GTZC1 bit-7 attribution/Secure alias, and the physical ui-lcd/button \
+     backend. P73S/Bloom/P73K remain fixed generated artifacts. This source \
+     fence is not #79 CPU/GPDMA silicon-denial evidence."
 );
 
 // Dedicated guard: `otp-hardcoded-master-key` + `optiga-lock-operational` is
@@ -4505,6 +4606,14 @@ compile_error!(
      e2e-test auto-provisions a FIXED test mnemonic + PIN and short-circuits \
      every secure-side confirm()/enter_pin() — never a shipping image. Build \
      hardware-test images with `stm32u585,e2e-test` (no mode-production)."
+);
+
+#[cfg(all(
+    feature = "mode-production",
+    feature = "erc7730-nested-calldata-test-fixture"
+))]
+compile_error!(
+    "mode-production cannot activate the synthetic ERC-7730 nested-calldata enrollment"
 );
 #[cfg(all(feature = "mode-production", feature = "dev-testkey"))]
 compile_error!(
@@ -4743,7 +4852,7 @@ compile_error!(
 // per-device derived transport keys (`se050-derived-scp03`), not
 // the published AN12436 factory keyset. Without the feature,
 // `scp03::load_platform_keys` returns `PLATFORM_{ENC,MAC,DEK}` — the public
-// SE050E OEF-0xA921 constants — and `establish()` derives the session keys from
+// SE050C2 OEF-0xA201 constants — and `establish()` derives the session keys from
 // them, so a logic analyzer on I2C1 reconstructs `s_enc`/`s_rmac` from the
 // on-wire SCP03 handshake challenges and DECRYPTS `half_E` (the SE050 seed share)
 // out of every unlock. `scp03_logic.rs` says it outright: such a channel is
@@ -5050,6 +5159,41 @@ pub fn unlock_with_master(master: [u8; 32]) {
     state::with_state(|s| s.mark_unlocked(master));
 }
 
+/// Install a master secret after a genuine successful PIN verification and,
+/// when the default-off forced-blind feature is selected, arm exactly one
+/// volatile forced attempt.
+///
+/// This is deliberately separate from [`unlock_with_master`] and
+/// [`set_e2e_unlocked`].  First-boot auto-unlock, provisioning/test helpers,
+/// and every other non-PIN unlock must remain Disarmed.  The three current
+/// callers sit immediately inside successful `gated_unlock` result arms;
+/// host source-call-graph tests pin that exclusivity.
+#[inline(never)]
+pub(crate) fn unlock_after_verified_pin(master: [u8; 32]) -> u32 {
+    state::with_state(|s| {
+        s.mark_unlocked(master);
+
+        #[cfg(feature = "erc7730-forced-blind")]
+        {
+            let armed = s.forced_attempt.arm_forced_attempt_after_pin();
+            // Fail-in: only the exact OK sentinel preserves the newly
+            // unlocked session.  A bad/invalid/readback-faulted arm destroys
+            // the secret and returns the Hamming-distant failure sentinel.
+            if armed == crate::fi::OK_SENTINEL {
+                return crate::fi::OK_SENTINEL;
+            }
+            s.zeroize_sensitive();
+            crate::fi::FAIL_SENTINEL
+        }
+
+        #[cfg(not(feature = "erc7730-forced-blind"))]
+        {
+            // Feature-off semantics are the pre-existing generic unlock.
+            crate::fi::OK_SENTINEL
+        }
+    })
+}
+
 /// Gated unlock — every PIN verify MUST go through this.
 ///
 /// Wraps the raw `WalletStore::unlock` with the MCU-side attempt
@@ -5064,7 +5208,11 @@ pub fn unlock_with_master(master: [u8; 32]) {
 ///      attacker who reliably cuts power mid-verify could brute-
 ///      force without burning MCU attempts.
 ///   3. Call `WalletStore::unlock`. On `Ok`, erase the counter
-///      (fresh start); on `Err`, leave the bump committed.
+///      (fresh start); on `Err`, leave the bump committed. If the
+///      erase itself fails, refuse with `InternalError` (fail-closed)
+///      rather than release the master with the counter still charged
+///      — a swallowed reset failure would drift a correct-PIN device
+///      toward a spurious lockout/wipe (F17/SCAFI-5).
 ///   4. If the flash bump itself fails (PROGERR or post-write
 ///      readback mismatch), refuse the attempt with
 ///      `InternalError`. Prevents the "glitch flash writes to
@@ -5199,20 +5347,31 @@ pub unsafe fn gated_unlock(
             // observer notices the latency, the secret is already gone),
             // so we skip the duress_pad. The downstream Err arm returns
             // PinLocked WITHOUT resetting page-124 (the wipe is terminal).
+            //
+            // F26/LIFE-1 (cut point B): FAIL-IN shape. The decoy release
+            // — the attacker's bypass target under coercion — is the
+            // EXPLICIT conditional riding the Hamming-distant sentinel
+            // (which double-reads the mode byte with a wait_random
+            // between); the wipe is the fall-through. A skipped/garbled
+            // branch or a faulted read lands on WIPE, never on decoy.
+            // The read itself is fail-closed (`is_duress_wipe_mode`:
+            // only a pristine-blank QW means decoy).
             #[cfg(feature = "stm32u585")]
-            let wipe_mode = crate::hw::flash::is_duress_wipe_mode();
+            let open_decoy = crate::fi::check_true_into_sentinel(|| {
+                !crate::hw::flash::is_duress_wipe_mode()
+            });
             #[cfg(not(feature = "stm32u585"))]
-            let wipe_mode = false;
-            if wipe_mode {
+            let open_decoy = crate::fi::check_true_into_sentinel(|| true);
+            if open_decoy == crate::fi::OK_SENTINEL {
+                se.duress_pad(pin);
+                Ok(m)
+            } else {
                 use zeroize::Zeroize;
                 m.zeroize();
                 crate::fi::zeroize_barrier();
                 secure_log!("[NSC] duress=wipe configured — wiping device");
                 let _ = se.factory_reset_admin();
                 Err(UnlockError::PinLocked)
-            } else {
-                se.duress_pad(pin);
-                Ok(m)
             }
         }
         Err(_) => se.unlock(pin),
@@ -5246,8 +5405,25 @@ pub unsafe fn gated_unlock(
 
     match result {
         Ok(master) if verdict == crate::fi::OK_SENTINEL => {
+            // F17/SCAFI-5: do NOT swallow a page-124 reset failure.
+            // The pre-commit above charged the counter BEFORE the SE
+            // verify; a silently-failed reset leaves it charged after
+            // a CORRECT PIN, so N good unlocks accumulate N markers →
+            // spurious 10-attempt lockout → trigger_lockout_wipe (a
+            // silent self-brick with no diagnostic). FAIL-IN like the
+            // bump gate above: the refusal is the fall-through, the
+            // `Ok(master)` release rides on the Hamming-distant
+            // sentinel. Nothing was stamped into SecureState yet, so
+            // failing closed here costs only a retry.
             #[cfg(feature = "stm32u585")]
-            let _ = crate::hw::flash::pin_attempts_reset();
+            {
+                let reset_result = crate::hw::flash::pin_attempts_reset();
+                let reset_ok =
+                    crate::fi::check_true_into_sentinel(|| reset_result.is_ok());
+                if reset_ok != crate::fi::OK_SENTINEL {
+                    return Err(UnlockError::InternalError);
+                }
+            }
             Ok(master)
         }
         Ok(_) => {
@@ -5861,15 +6037,17 @@ pub extern "cmse-nonsecure-entry" fn nsc_fw_abort() -> u32 {
 /// CMD_GET_WALLET_ADDRESS — compute CREATE2-predicted wallet address for
 /// `account_index` (0..=255). Account 0 is the legacy single-account
 /// derivation; higher indices yield independent on-chain wallets from
-/// the same BIP-39 seed.
+/// the same BIP-39 seed. `show = 1` routes the derived address through
+/// the trusted-OLED confirm (#472) before any NS-bound write.
 #[cfg(feature = "stm32u585")]
 #[no_mangle]
 pub extern "cmse-nonsecure-entry" fn nsc_get_wallet_address(
     out_ptr: u32,
     account_index: u32,
+    show: u32,
 ) -> u32 {
     secure_log!("[NSC] get_wallet_address (acct={})", account_index);
-    let args = GatewayArgs { arg0: out_ptr, arg1: account_index, arg2: 0 };
+    let args = GatewayArgs { arg0: out_ptr, arg1: account_index, arg2: show };
     let r = unsafe { cmd_get_wallet_address::run(&args) };
     secure_log!("[NSC] get_wallet_address -> {}", r);
     r

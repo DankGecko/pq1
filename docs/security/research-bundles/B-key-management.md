@@ -150,7 +150,9 @@ order, and silicon receipts remain OPEN.
 // (and `Se050::rotate_scp03_keys`) keep working unchanged.
 pub use crate::scp03_logic::{
     aes128_cbc_decrypt, aes128_cbc_encrypt, aes128_ecb_encrypt, build_put_key_apdu, cmac_aes128,
-    keys_are_factory_default, KEY_VERSION, PLATFORM_DEK, PLATFORM_ENC, PLATFORM_MAC,
+    keys_are_factory_default, verify_put_key_response, TransportAuthProof,
+    AUTH_CTX_ADMIN_TRANSPORT, AUTH_CTX_PBS_TRANSPORT, AUTH_CTX_SCP03_TRANSPORT, KEY_VERSION,
+    PLATFORM_DEK, PLATFORM_ENC, PLATFORM_MAC, PUT_KEY_APDU_LEN,
 };
 use crate::scp03_logic::{
     build_derivation_data, kdf, DD_CARD_CRYPTOGRAM, DD_HOST_CRYPTOGRAM, DD_S_ENC, DD_S_MAC,
@@ -968,7 +970,26 @@ const RANDOM_LEN: usize = 32;
 #[derive(Debug)]
 pub enum ShieldError {
     NotActive,
-    HandshakeFailed,
+    /// The handshake did not complete for **transport** reasons: a PRL
+    /// transceive failed, or a frame was short/malformed/oversized. The
+    /// exchange never reached the point of proving anything.
+    ///
+    /// **This tells you NOTHING about the PBS** (work-todo D1 follow-up). It
+    /// must not be read as "the pairing secret is wrong", because the caller
+    /// that asks that question — `rotate_pbs_to_salted`'s resume probe —
+    /// answers "not rotated yet" by **rewriting E140**, the operation that
+    /// bricked the bench chip (`docs/secure-elements/optiga-brick-postmortem.md`).
+    HandshakeTransport,
+    /// The exchange completed and the OPTIGA's `SlaveFinished` did **not**
+    /// authenticate under the session keys we derived from the loaded PBS —
+    /// CCM MAC failure, or a `random_S` / `master_seq` echo mismatch after a
+    /// successful decrypt.
+    ///
+    /// This is an **authoritative** verdict: the chip answered, and the answer
+    /// proves our PBS is not the one it holds. Directly analogous to
+    /// `Se050Error::Scp03` (cryptogram mismatch) as opposed to
+    /// `Se050Error::Transport`, which is the split this mirrors.
+    HandshakeRejected,
     DecryptFailed,
     BufferOverflow,
     NoPbs,
@@ -1284,7 +1305,8 @@ impl ShieldedConnection {
             Ok(n) => n,
             Err(e) => {
                 secure_log!("[OPTIGA/shield] MasterHello transceive FAILED: {:?}", e);
-                return Err(ShieldError::HandshakeFailed);
+                // Transport: the chip may not even have seen MasterHello.
+                return Err(ShieldError::HandshakeTransport);
             }
         };
 
@@ -1304,7 +1326,8 @@ impl ShieldedConnection {
                 "[OPTIGA/shield] SlaveHello too short ({} < {}), bytes=[{:02x}{:02x}{:02x}{:02x}...]",
                 n, SLAVE_HELLO_LEN, resp[0], resp[1], resp[2], resp[3]
             );
-            return Err(ShieldError::HandshakeFailed);
+            // Truncated/garbled reply — a framing fault, not a PBS verdict.
+            return Err(ShieldError::HandshakeTransport);
         }
         let mut random_s = [0u8; RANDOM_LEN];
         random_s.copy_from_slice(
@@ -1355,7 +1378,7 @@ impl ShieldedConnection {
         let mut resp2 = [0u8; 128];
         secure_log!("[OPTIGA/shield] sending MasterFinished ({}B)", msg_len);
         let n2 = ifx.transceive_prl(&finished_msg[..msg_len], &mut resp2)
-            .map_err(|_| ShieldError::HandshakeFailed)?;
+            .map_err(|_| ShieldError::HandshakeTransport)?;
         secure_log!(
             "[OPTIGA/shield] MasterFinished response n={}, SCTR={:02x}",
             n2, resp2[0]
@@ -1365,11 +1388,12 @@ impl ShieldedConnection {
         // Format: SCTR(0x08) | master_seq(4 BE) | ct(36) | MAC(8) = 49 B.
         // See `ifx_i2c_presentation_layer.c:559-607`.
         if n2 < SC_HEADER_LEN + CCM_TAG_LEN {
-            return Err(ShieldError::HandshakeFailed);
+            // Short frame — framing fault, no PBS evidence.
+            return Err(ShieldError::HandshakeTransport);
         }
         if resp2[0] != SCTR_HANDSHAKE_FINISHED {
             secure_log!("[OPTIGA/shield] SlaveFinished SCTR unexpected: {:02x}", resp2[0]);
-            return Err(ShieldError::HandshakeFailed);
+            return Err(ShieldError::HandshakeTransport);
         }
         let master_seq = u32::from_be_bytes([resp2[1], resp2[2], resp2[3], resp2[4]]);
         secure_log!("[OPTIGA/shield] master_seq={:#010x}", master_seq);
@@ -1396,7 +1420,8 @@ impl ShieldedConnection {
                 slave_pt_len,
                 slave_plain.len()
             );
-            return Err(ShieldError::HandshakeFailed);
+            // Oversized frame — malformed transport, no PBS evidence.
+            return Err(ShieldError::HandshakeTransport);
         }
         let dec_aad = Self::build_aad(SCTR_HANDSHAKE_FINISHED, master_seq, slave_pt_len as u16);
 
@@ -1409,12 +1434,17 @@ impl ShieldedConnection {
         );
         if !ok {
             secure_log!("[OPTIGA/shield] SlaveFinished decrypt FAILED");
-            return Err(ShieldError::HandshakeFailed);
+            // CCM MAC failure under keys derived from the loaded PBS: the chip
+            // holds a different PBS. THIS is the authoritative "wrong PBS".
+            return Err(ShieldError::HandshakeRejected);
         }
 
         // Plaintext of SlaveFinished must be `random_S (32) || master_seq (4 BE)`.
         if slave_pt_len < 36 {
-            return Err(ShieldError::HandshakeFailed);
+            // Authenticated (MAC passed) but the wrong shape — the chip is
+            // speaking our session keys, so this is a chip/protocol fault, not
+            // a transport one.
+            return Err(ShieldError::HandshakeRejected);
         }
         let mut diff: u8 = 0;
         for i in 0..RANDOM_LEN {
@@ -1422,14 +1452,14 @@ impl ShieldedConnection {
         }
         if diff != 0 {
             secure_log!("[OPTIGA/shield] SlaveFinished random_S mismatch");
-            return Err(ShieldError::HandshakeFailed);
+            return Err(ShieldError::HandshakeRejected);
         }
         let echoed_master_seq = u32::from_be_bytes([
             slave_plain[32], slave_plain[33], slave_plain[34], slave_plain[35],
         ]);
         if echoed_master_seq != master_seq {
             secure_log!("[OPTIGA/shield] SlaveFinished master_seq mismatch");
-            return Err(ShieldError::HandshakeFailed);
+            return Err(ShieldError::HandshakeRejected);
         }
 
         // Session established. Subsequent protected records use the
@@ -1810,7 +1840,7 @@ const FLASH_SECBOOTADD0R_OFF: u32 = 0x4C;
 /// option-byte authority remain open until their reviewed ceremony and silicon
 /// receipts close.
 #[allow(dead_code)]
-pub const FSBL_BASE_ADDR: u32 = flash_policy::BANK1_BASE;
+pub const FSBL_BASE_ADDR: u32 = pqsigner_geometry::BANK1_BASE;
 
 // The pure RDP/SECBOOTADD0 decode + its host unit tests live in the
 // host-compiled `sphincs_tz_shared::lockdown` (this whole `hw` module is
@@ -2332,7 +2362,8 @@ unsafe fn obl_launch() -> ! {
 //                  "unprovisioned" from this page's perspective.
 
 /// Base address of the SE050 admin-state page (page 125).
-pub const ADMIN_PAGE_ADDR: u32 = 0x0C0F_A000;
+pub const ADMIN_PAGE_ADDR: u32 =
+    pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, ADMIN_PAGE_NUM as u8);
 const ADMIN_PAGE_NUM: u32 = 125;
 
 // Page-125 layout: QW0 (offset 0) is unused on v6 chips (the former
@@ -2415,6 +2446,13 @@ pub fn is_wipe_armed() -> bool {
 // but before the wizard sets the mode falls back to decoy (loses no funds),
 // matching the wipe-flag convention. Same QW lifecycle — `erase_admin_page`
 // (wipe finish) clears it back to decoy, and the next wizard re-collects.
+//
+// F26/LIFE-1 (cut point B): the READ is fail-closed — anything OTHER than
+// the pristine-blank byte (0xFF) means wipe. Only a deliberately-blank QW
+// (never armed, or cleanly cleared by `erase_admin_page`) selects decoy;
+// the armed 0x00 AND every unknown/torn/glitch pattern select the
+// destruction path, so an ambiguous read can never silently downgrade the
+// user's chosen protection to the decoy.
 const DURESS_WIPE_MODE_OFFSET: u32 = 32;
 const DURESS_WIPE_MODE_SET: u8 = 0x00;
 
@@ -2437,11 +2475,16 @@ pub unsafe fn arm_duress_wipe_mode() -> Result<(), ()> {
 /// Returns true iff the device is configured to WIPE on a duress-PIN
 /// unlock (vs the default: open the decoy wallet). Read by
 /// `nsc::gated_unlock` in the duress-match branch.
+///
+/// FAIL-CLOSED (F26/LIFE-1): true unless the byte reads the
+/// pristine-blank `0xFF`. The armed value (`DURESS_WIPE_MODE_SET`)
+/// and any unknown/torn pattern both read as wipe — only a
+/// deliberately-blank QW opens the decoy.
 #[cfg(feature = "duress-pin")]
 pub fn is_duress_wipe_mode() -> bool {
     let src = (ADMIN_PAGE_ADDR + DURESS_WIPE_MODE_OFFSET) as *const u8;
     // SAFETY: fixed in-flash address inside page 125; memory-mapped read.
-    unsafe { read_volatile(src) == DURESS_WIPE_MODE_SET }
+    unsafe { read_volatile(src) != 0xFF }
 }
 
 // ---------------------------------------------------------------------------
@@ -2494,7 +2537,8 @@ pub fn is_duress_wipe_mode() -> bool {
 // writes without drama. If future chips exhibit the same issue
 // at page 124, we have page 123 still in reserve.
 
-const PIN_ATTEMPTS_PAGE_ADDR: u32 = 0x0C0F_8000;
+const PIN_ATTEMPTS_PAGE_ADDR: u32 =
+    pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, PIN_ATTEMPTS_PAGE_NUM as u8);
 const PIN_ATTEMPTS_PAGE_NUM: u32 = 124;
 
 /// Maximum counter capacity supported by the current layout. Bigger
@@ -2878,6 +2922,13 @@ pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {
     })
 }
 
+/// First byte after flash bank 2 (NS alias `0x0810_0000`, 128 × 8 KiB).
+const BANK2_END: u32 = pqsigner_geometry::BANK2_BASE
+    + pqsigner_geometry::PAGES_PER_BANK as u32 * pqsigner_geometry::PAGE_SIZE;
+/// First byte after flash bank 1 (secure alias `0x0C00_0000`).
+const BANK1_END: u32 = pqsigner_geometry::BANK1_BASE
+    + pqsigner_geometry::PAGES_PER_BANK as u32 * pqsigner_geometry::PAGE_SIZE;
+
 /// Program one quad-word to bank 2 at `addr`. Unlike
 /// `write_quadword`, this routes through NSCR so the NS watermark is
 /// honoured. `addr` must be inside bank-2 (`0x0810_0000..0x0820_0000`)
@@ -2891,7 +2942,7 @@ pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {
 /// # Safety
 /// Same shape as [`write_quadword`] but targets bank 2.
 unsafe fn write_ns_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    debug_assert!(addr >= 0x0810_0000 && addr < 0x0820_0000);
+    debug_assert!(addr >= pqsigner_geometry::BANK2_BASE && addr < BANK2_END);
     debug_assert_eq!(addr & 0xF, 0);
 
     cortex_m::interrupt::free(|_| {
@@ -3050,10 +3101,10 @@ pub unsafe fn erase_slot(slot: Slot) -> Result<(), ()> {
 /// Commits 16 bytes to flash at `addr`. Caller must ensure the address
 /// is inside the inactive A/B slot and currently erased.
 pub unsafe fn write_slot_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    if (0x0810_0000..0x0820_0000).contains(&addr) {
+    if (pqsigner_geometry::BANK2_BASE..BANK2_END).contains(&addr) {
         // SAFETY: forwarded contract; bank-2 dispatch.
         unsafe { write_ns_quadword_verified(addr, data) }
-    } else if (0x0C00_0000..0x0C10_0000).contains(&addr) {
+    } else if (pqsigner_geometry::BANK1_BASE..BANK1_END).contains(&addr) {
         // SAFETY: forwarded contract; bank-1 dispatch.
         unsafe { write_quadword_verified(addr, data) }
     } else {
@@ -3096,7 +3147,8 @@ pub unsafe fn write_slot_quadword_verified(addr: u32, data: &[u8; 16]) -> Result
 // device lifetime, ÷ 512 per cycle = ~6500 erase cycles — within the
 // 10,000-cycle minimum endurance the STM32U585 datasheet specifies.
 
-const OFFCHAIN_PAGE_ADDR: u32 = 0x0C0F_6000;
+const OFFCHAIN_PAGE_ADDR: u32 =
+    pqsigner_geometry::page_addr(pqsigner_geometry::Bank::One, OFFCHAIN_PAGE_NUM as u8);
 const OFFCHAIN_PAGE_NUM: u32 = 123;
 const OFFCHAIN_QW_SIZE: u32 = 16;
 const OFFCHAIN_CAPACITY: u32 = 512; // 8 KB / 16
@@ -3494,6 +3546,102 @@ fn distinct_slot_count_capped() -> usize {
     n
 }
 
+/// Strict, read-only page-123 projection for the optional forced-blind
+/// preflight. Unlike the legacy readers, this path accepts only one canonical
+/// append prefix followed by erased QWs: an unknown record, a nonblank record
+/// after the first blank, or more than the lifetime slot cap is fatal. It
+/// computes the exact compacted live-QW count without erasing or repairing the
+/// page and binds the receipt to every byte read.
+///
+/// # Safety
+///
+/// Reads the secure flash mapping at `OFFCHAIN_PAGE_ADDR`. The caller must
+/// serialize the scan with page-123 mutators.
+#[cfg(feature = "erc7730-forced-blind")]
+#[inline(never)]
+pub unsafe fn forced_capacity_snapshot(
+    requested_slot: &[u8; 8],
+) -> Result<crate::offchain_state::ForcedCapacitySnapshot, crate::offchain_state::ForcedCapacityError>
+{
+    use sha2::{Digest, Sha256};
+
+    const CAP: usize = crate::offchain_state::MAX_DISTINCT_SLOTS;
+    let mut keys = [[0u8; 8]; CAP];
+    let mut type_masks = [0u8; CAP];
+    let mut distinct_live = 0usize;
+    let mut blank_qws = 0usize;
+    let mut saw_blank = false;
+    let mut slot_present = false;
+    let mut state = Sha256::new();
+    state.update(b"PQSigner/offchain-state/page123-capacity/v1");
+
+    for index in 0..OFFCHAIN_CAPACITY {
+        let base = (OFFCHAIN_PAGE_ADDR + index * OFFCHAIN_QW_SIZE) as *const u8;
+        let mut raw = [0u8; OFFCHAIN_QW_SIZE as usize];
+        for (offset, byte) in raw.iter_mut().enumerate() {
+            // SAFETY: index < 512 and offset < 16 stay inside page 123.
+            *byte = unsafe { read_volatile(base.add(offset)) };
+        }
+        state.update(raw);
+
+        if raw.iter().all(|byte| *byte == 0xFF) {
+            saw_blank = true;
+            blank_qws += 1;
+            continue;
+        }
+        if saw_blank {
+            return Err(crate::offchain_state::ForcedCapacityError::InvalidProjection);
+        }
+
+        let type_mask = match raw[8] {
+            OFFCHAIN_TYPE_COUNT => 0b001,
+            OFFCHAIN_TYPE_USEROP => 0b010,
+            OFFCHAIN_TYPE_USEROP_SIGS => 0b100,
+            _ => {
+                return Err(crate::offchain_state::ForcedCapacityError::InvalidProjection);
+            }
+        };
+        let mut slot_key = [0u8; 8];
+        slot_key.copy_from_slice(&raw[..8]);
+        slot_present |= &slot_key == requested_slot;
+
+        let mut existing = None;
+        for (slot_index, key) in keys[..distinct_live].iter().enumerate() {
+            if *key == slot_key {
+                existing = Some(slot_index);
+                break;
+            }
+        }
+        let slot_index = match existing {
+            Some(slot_index) => slot_index,
+            None => {
+                if distinct_live == CAP {
+                    return Err(crate::offchain_state::ForcedCapacityError::InvalidProjection);
+                }
+                let slot_index = distinct_live;
+                keys[slot_index] = slot_key;
+                distinct_live += 1;
+                slot_index
+            }
+        };
+        type_masks[slot_index] |= type_mask;
+    }
+
+    let projected_live_qws = type_masks[..distinct_live]
+        .iter()
+        .map(|mask| mask.count_ones() as usize)
+        .sum();
+    let mut state_sha256 = [0u8; 32];
+    state_sha256.copy_from_slice(&state.finalize());
+    Ok(crate::offchain_state::ForcedCapacitySnapshot {
+        state_sha256,
+        distinct_live,
+        projected_live_qws,
+        blank_qws,
+        slot_present,
+    })
+}
+
 /// Append a journal entry, compacting first if the page is full and
 /// self-healing the page if it inherited unwritable garbage from the
 /// pre-all-C10 per-slot state.
@@ -3784,7 +3932,21 @@ pub unsafe fn offchain_count_register_slot(slot_key: &[u8; 8]) -> Result<(), ()>
     }
     let qw = entry_qw(slot_key, OFFCHAIN_TYPE_USEROP, 0);
     // SAFETY: forwarded contract.
-    unsafe { write_entry(&qw) }
+    unsafe { write_entry(&qw)? };
+    // FI hardening (F16/SCAFI-4): read-back + sentinel-gated re-check,
+    // mirroring the `offchain_count_bump` / `userop_sigs_bump` twins —
+    // a suppressed write or a value-faulted entry (wrong slot key) must
+    // not report success. `write_quadword_verified` only proves the QW
+    // landed AS GIVEN, not that `entry_qw` produced the intended value.
+    if !offchain_count_is_registered(slot_key) {
+        return Err(());
+    }
+    if crate::fi::check_true_into_sentinel(|| offchain_count_is_registered(slot_key))
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 /// Bump the off-chain sig counter to `new_count`. Reverts via `Err(())`
@@ -3876,7 +4038,23 @@ pub unsafe fn offchain_count_promote_to(slot_key: &[u8; 8], target: u64) -> Resu
     }
     let qw = entry_qw(slot_key, OFFCHAIN_TYPE_COUNT, target);
     // SAFETY: forwarded contract.
-    unsafe { write_entry(&qw) }
+    unsafe { write_entry(&qw)? };
+    // FI hardening (F16/SCAFI-4): read-back + sentinel-gated re-check,
+    // mirroring `offchain_count_bump` — a suppressed write or a
+    // value-faulted entry (wrong slot key or count) must fail, not
+    // silently leave the local view below the on-chain high-water mark.
+    // `write_quadword_verified` only proves the QW landed AS GIVEN, not
+    // that `entry_qw` produced the intended value.
+    let post = offchain_count_read(slot_key);
+    if post != target {
+        return Err(());
+    }
+    if crate::fi::check_true_into_sentinel(|| offchain_count_read(slot_key) == target)
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 /// Update the last_userop_count snapshot for `slot_key`. Idempotent if
@@ -3927,7 +4105,23 @@ pub unsafe fn last_userop_count_set(slot_key: &[u8; 8], count: u64) -> Result<()
     }
     let qw = entry_qw(slot_key, OFFCHAIN_TYPE_USEROP, count);
     // SAFETY: forwarded contract.
-    unsafe { write_entry(&qw) }
+    unsafe { write_entry(&qw)? };
+    // FI hardening (F16/SCAFI-4): read-back + sentinel-gated re-check,
+    // mirroring the `offchain_count_bump` / `userop_sigs_bump` twins —
+    // a suppressed write or a value-faulted entry (wrong slot key or
+    // count) must not report success. `write_quadword_verified` only
+    // proves the QW landed AS GIVEN, not that `entry_qw` produced the
+    // intended value.
+    let post = last_userop_count_read(slot_key);
+    if post != count {
+        return Err(());
+    }
+    if crate::fi::check_true_into_sentinel(|| last_userop_count_read(slot_key) == count)
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 /// Read the durable per-slot tally of Type-2 (slot-key) UserOp signatures

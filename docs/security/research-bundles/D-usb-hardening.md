@@ -903,7 +903,15 @@ impl Transport {
                 None
             }
             FrameOutcome::Dropped => {
-                self.rx_start_frame = None;
+                // Clear the reassembly deadline only when the drop also
+                // killed the stream (desync abort / invalid first frame).
+                // A FOREIGN-channel frame is dropped while the owner's
+                // stream survives — clearing the deadline here would let
+                // one injected frame disarm `check_rx_timeout` for a
+                // stalled owner indefinitely (GPT-5.6 wave finding).
+                if self.rx.rx_expected() == 0 {
+                    self.rx_start_frame = None;
+                }
                 None
             }
         }
@@ -1212,8 +1220,9 @@ const CHAIN_BUF_LEN_SIGN: usize = SIGN_USEROP_HEADER_LEN
     // CoW order trailer: 2-byte length + canonical + two ERC-20 bundles.
     + 2
     + COW_ORDER_TRAILER_MAX_LEN
-    // ERC-7730 clear-signing descriptor trailer (Phase 3): 2-byte
-    // length + bundle (up to ERC7730_MAX_TRAILER_LEN = 5130 B). Sits
+    // ERC-7730 clear-signing descriptor trailer: 2-byte length plus
+    // either one legacy bundle or a two-bundle proof set (up to
+    // ERC7730_MAX_TRAILER_LEN = 10268 B). Sits
     // between self-attest and names per the wire-format ordering in
     // `docs/archive/handoff-erc7730-phase3.md` §"Canonical wire formats".
     + 2
@@ -1342,9 +1351,10 @@ const FW_VERSION: [u8; 3] = [0x03, 0x00, 0x00];
 // Capability bits (reported by GET_DEVICE_INFO).
 // ---------------------------------------------------------------------------
 
-const CAP_SIGN_USEROP: u32 = 1 << 0; // the one sign command
 // Bit 1 (CAP_FLASH_NEXT_Q) is retired — post-C10-cutover the firmware
 // is stateless for slot selection; the companion drives rotation.
+// Bit 2 advertises the versioned ERC-7730 proof-set envelope. Both live bits
+// are sourced from pqsigner-proto through sphincs-tz-shared.
 
 // ---------------------------------------------------------------------------
 // Response wrapper
@@ -1565,7 +1575,7 @@ impl CommandRouter {
         RESP_BUF[p..p + 16].fill(0); // device_uid placeholder
         p += 16;
 
-        let caps = CAP_SIGN_USEROP;
+        let caps = DEVICE_CAPABILITIES;
         RESP_BUF[p..p + 4].copy_from_slice(&caps.to_be_bytes());
         p += 4;
 
@@ -1642,18 +1652,30 @@ impl CommandRouter {
     /// sender for this device's bootstrap C10 pubkey at `account_index`.
     /// Requires unlock.
     ///
-    /// APDU body layout: 4 bytes big-endian `account_index` (0..=255).
-    /// An empty body is accepted as `account_index == 0` so legacy
-    /// companion builds that pre-date multi-account derivation still
-    /// see their original single wallet.
+    /// APDU body layout: 4 bytes big-endian `account_index` (0..=255),
+    /// optionally followed by a 1-byte `show` flag (PROTOCOL_VERSION
+    /// 0x0202+): `0` (or absent) returns the address with no trusted-UI
+    /// round-trip; `1` first shows the address on the device OLED behind
+    /// a physical confirm (#472) — a user cancel fails closed with
+    /// `UserRejected` and no address bytes. Any flag value above 1 is
+    /// rejected. An empty body is accepted as `account_index == 0` so
+    /// legacy companion builds that pre-date multi-account derivation
+    /// still see their original single wallet.
     unsafe fn cmd_get_wallet_address(&self, data: &[u8]) -> Response {
-        let account_index = match data.len() {
-            0 => 0u32,
-            4 => u32::from_be_bytes([data[0], data[1], data[2], data[3]]),
+        let (account_index, show) = match data.len() {
+            0 => (0u32, 0u32),
+            4 => (u32::from_be_bytes([data[0], data[1], data[2], data[3]]), 0u32),
+            5 => {
+                let flag = u32::from(data[4]);
+                if flag > 1 {
+                    return self.sw_response(SW_WRONG_DATA);
+                }
+                (u32::from_be_bytes([data[0], data[1], data[2], data[3]]), flag)
+            }
             _ => return self.sw_response(SW_WRONG_LENGTH),
         };
         let mut addr = [0u8; 20];
-        let status = nsc_api::get_wallet_address(&mut addr, account_index);
+        let status = nsc_api::get_wallet_address(&mut addr, account_index, show);
         if status != NscStatus::Ok as u32 {
             return self.nsc_status_to_response(status);
         }
@@ -2431,6 +2453,61 @@ Host → Device:  GET_RESPONSE
 Device → Host:  [remaining bytes] SW=0x9000
 ```
 
+### Hard bounds: chain lifetime, drain deadlines, reassembly timeout
+
+The firmware bounds every multi-frame exchange so a stalled or hostile
+host cannot pin the single-session router lease (findings X17-UC1, F2,
+F11). All clocks tick at the USB SOF cadence (1 frame ≈ 1 ms).
+
+- **Command-chain total lifetime — 30 s**
+  (`ChainState::CHAIN_TIMEOUT_FRAMES = 30_000`,
+  `shared/src/apdu_framing.rs`). A chained upload (P1=0x80 … P1=0x00)
+  must complete within 30 s of its first block. This is a
+  total-exchange deadline, NOT an idle timeout: sending more blocks
+  does not extend it. On expiry the device silently resets the chain
+  and releases the session lease. A late P1=0x80 block is then accepted
+  as the FIRST block of a brand-new chain, and a following P1=0x00
+  block executes the truncated accumulation — the secure parsers reject
+  truncated payloads, so the host sees a late error SW (e.g. 0x6700 /
+  0x6A80) from the final block rather than a chain-abort signal at the
+  moment of expiry. Retry guidance: finish a chain well inside 30 s;
+  after any long pause or late failure, resend the entire chain from
+  block 0 — never try to resume a stale chain.
+
+- **GET_RESPONSE drain idle timeout — 30 s**
+  (`PENDING_TIMEOUT_FRAMES`, `nonsecure/src/usb/commands.rs`). Each
+  successful GET_RESPONSE resets this clock; 30 s of host silence
+  scrubs the pending response and releases the lease. Host-visible
+  effect: the next GET_RESPONSE returns SW 0x6985. Retry guidance:
+  re-issue the original command and drain without long pauses.
+
+- **GET_RESPONSE drain absolute deadline — 120 s**
+  (`PENDING_ABS_TIMEOUT_FRAMES`, same file). NOT reset by drain
+  activity: a drain must complete within 120 s of its first chunk
+  regardless of keepalives. Host-visible effect on expiry is the same
+  as the idle timeout (pending data scrubbed; next GET_RESPONSE →
+  0x6985). A worst-case legitimate drain (17 initCode chunks; a full
+  12,556-byte signing response) needs far less even at seconds per
+  round-trip, so 0x6985 mid-drain means the exchange is dead — restart
+  the command from scratch.
+
+- **Single-session router lease (F11)**
+  (`router_lease_allows`, `shared/src/apdu_framing.rs`). While any
+  chain or drain is live, APDUs arriving on a different HID channel are
+  refused with SW 0x6985 without disturbing the owning channel's state.
+  The lease releases when the exchange completes or one of the
+  deadlines above fires. Guidance: one host session at a time — a
+  second app or channel must wait out at most the bounds above.
+
+- **Transport RX reassembly timeout — 5 s**
+  (`RX_REASSEMBLY_TIMEOUT_FRAMES = 5000`,
+  `nonsecure/src/usb/transport.rs`). Once the first HID frame of an
+  APDU arrives, its continuation frames must complete within 5 s or the
+  partial reassembly is scrubbed. Host-visible effect: no response at
+  all — the device silently drops the partial APDU. Retry guidance:
+  send an APDU's HID frames back-to-back; after any gap over 5 s,
+  resend the whole APDU starting at sequence 0.
+
 ## Instruction Set
 
 > **Source of truth.** Authoritative INS values live in `proto/src/lib.rs`
@@ -2452,7 +2529,7 @@ After the all-C10 cutover, the v2 protocol exposes the following commands:
 | 0x62 | SIGN_OFFCHAIN          | Yes      | 0x00/0x80  |
 | 0x63 | OFFCHAIN_STATUS        | No       | 0          |
 | 0x70 | FW_BEGIN               | Yes      | 0x00/0x80  |
-| 0x71 | FW_CHUNK               | Yes      | 0x00/0x80  |
+| 0x71 | FW_CHUNK               | No       | 0          |
 | 0x72 | FW_COMMIT              | No       | 0          |
 | 0x73 | FW_STATUS              | No       | 0          |
 | 0x74 | FW_ABORT               | No       | 0          |
@@ -2580,15 +2657,27 @@ from the wizard UI, not from GET_STATUS.
 
 ### 0x01 GET_DEVICE_INFO
 
-Returns a versioning + capability header. Reports `ep_version = 0x0006`
-(EntryPoint v0.6) and `sig_param_set = 2` (SPHINCS+C10,
-`C10_SIG_LEN = 4008`).
+Returns a versioning + capability header. Bytes 0–1 are
+`protocol_version` (u16 BE) = `PROTOCOL_VERSION` from `proto/src/lib.rs`,
+currently **0x0202** (see §Protocol version history below). Reports
+`ep_version = 0x0006` (EntryPoint v0.6) and `sig_param_set = 2`
+(SPHINCS+C10, `C10_SIG_LEN = 4008`). Capability bit 0 is
+`CAP_SIGN_USEROP`; bit 1 is retired and remains clear; bit 2 is
+`CAP_ERC7730_PROOF_SET`. A companion may emit the versioned two-bundle
+ERC-7730 envelope only when bit 2 is set. Do not infer that support from the
+three `fw_version` bytes: they are currently a fixed placeholder rather than
+the running image identity.
 
 ### 0x60 GET_WALLET_ADDRESS
 
 Input: empty for legacy `account_index = 0`, or `[account_index u32 BE]` for
 accounts `0..=255`. No chain id is accepted; wallet addresses are chain-
-independent by design.
+independent by design. Protocol 0x0202+ additionally accepts a trailing
+`[show u8]` flag: `0` behaves as absent; `1` paints the full EIP-55 address
+on the device OLED behind a physical confirm before the bytes are returned
+(#472 — user cancel yields `0x6982` and no address); any flag above 1 is
+rejected with `0x6A80`. Firmware < 0x0202 rejects the 5-byte body with
+`0x6700`, so gate the flag on the GET_DEVICE_INFO report.
 Output: 20-byte CREATE2-predicted ERC-1967 proxy address.
 First call after unlock takes <1 s (master keygen); cached afterwards.
 
@@ -2629,7 +2718,7 @@ format:
 | `OFFCHAIN_KIND_RAW32`           | 0     | 32 companion-supplied opaque bytes; firmware wraps via Solady nested EIP-712 and displays `! BLIND RAW32`. Never translate a typed-data request into this kind. |
 | `OFFCHAIN_KIND_PERSONAL_SIGN`   | 1     | UTF-8 message ≤ `MAX_OFFCHAIN_PERSONAL_SIGN_LEN`; firmware applies EIP-191 prefix + wraps.    |
 | `OFFCHAIN_KIND_EIP712_TYPED`    | 2     | EIP-712 typed-data (see below) — Phase 4 of the ERC-7730 rollout.                              |
-| `OFFCHAIN_KIND_EIP712_TYPED_V3` | 3     | EIP-712 typed-data plus nested encodeData records; see the canonical companion guide §6.5.   |
+| `OFFCHAIN_KIND_EIP712_TYPED_V3` | 3     | EIP-712 typed-data plus descriptor-selected nested/string display witnesses; see the canonical companion guide §6.5. |
 
 `RAW32` is a deliberately loud blind-sign tier, not evidence that the device
 understands a user's intent. A hostile companion can submit the final hash of
@@ -2723,6 +2812,29 @@ longer dispatched (or are reserved for backwards-compat probing):
 | 0x6D00 | INS not supported |
 | 0x6E00 | CLA not supported |
 | 0x6F00 | Internal error |
+
+## Protocol version history
+
+Current `PROTOCOL_VERSION` (GET_DEVICE_INFO bytes 0–1): **0x0202**
+(`proto/src/lib.rs`).
+
+- **0x0202 — GET_WALLET_ADDRESS `show` flag (#472):** INS 0x60 accepts
+  an optional trailing flag byte; `show = 1` displays the derived
+  address on the device OLED behind a physical confirm before it is
+  returned (see §0x60 GET_WALLET_ADDRESS).
+- **0x0201 — GET_STATUS layout bump (#440):** the 0x02 GET_STATUS
+  response shrank from 5 bytes on the wire (3 data bytes + SW) to
+  4 bytes (2 data bytes + SW). The leading `provisioned` byte was
+  removed (finding X17-UC2) because it was a constant-1 that reported
+  even blank devices as provisioned. Firmware reporting 0x0201 or
+  later always speaks the 2-byte `[locked][pin_remaining]` layout
+  (see §0x02 GET_STATUS).
+- **0x0200 ambiguity window:** the layout change originally shipped
+  WITHOUT a `PROTOCOL_VERSION` bump, so a 0x0200 report cannot
+  distinguish pre- from post-change firmware. Pre-production only,
+  with the companion shipped in lockstep. Companions MUST parse the
+  current 2-byte layout and SHOULD treat any 0x0200 device as
+  ambiguous vintage.
 
 
 
