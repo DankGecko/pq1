@@ -40,17 +40,38 @@ Code SLOC = non-blank, non-comment-only lines. **Rust unit tests are inline (`#[
 
 | Area | Path | Code SLOC |
 |---|---|---:|
-| Secure world (TrustZone-S) — total | `secure/src` | 53,311 |
-| · NSC gateway (NS→S boundary) | `secure/src/nsc` | 5,929 |
-| · tx decode + trusted display + EIP-712 | `secure/src/tx` | 8,867 |
-| · SE drivers (OPTIGA + SE050) | `secure/src/{optiga,se050}` | 6,132 |
-| · HW drivers (SAES/HASH/flash/OTP/TAMP/RNG/PKA/USB) | `secure/src/hw` | 4,622 |
-| · remainder (main, sau/GTZC, crypto, state, offchain, fw_update, dual_se, ui, …) | `secure/src/*` | remeasure |
-| SPHINCS+C10 crypto core (written from scratch) | `sphincs-c10` | 1,168 |
-| Pure-logic crates ¹ | proto, tx-core, aa, domain, tx, erc7730, bip39 ², hal, shared, fi | 8,428 |
-| Nonsecure world — USB-HID / APDU v2 router | `nonsecure` | 3,551 |
-| Legacy bench bootloader (production-ineligible) + FW-update manifest | `fsbl` + `fw-manifest` | 810 |
-| **On-device subtotal** | | **remeasure before engagement** |
+| Secure world (TrustZone-S) — total | `secure/src` | 91,079 |
+| · NSC gateway (NS→S boundary) | `secure/src/nsc` | 10,599 |
+| · tx decode + trusted display + EIP-712 | `secure/src/tx` | 15,215 |
+| · SE drivers (OPTIGA + SE050) | `secure/src/{optiga,se050}` | 6,914 |
+| · HW drivers (SAES/HASH/flash/OTP/TAMP/RNG/PKA/USB) | `secure/src/hw` | 5,036 |
+| · trusted UI (LCD, PIN entry, confirm, seed wizard) | `secure/src/ui` | 2,412 |
+| · remainder (main, sau/GTZC, crypto, state, offchain, fw_update, dual_se, …) | `secure/src/*` | 50,903 |
+| SPHINCS+C10 crypto core (written from scratch) | `sphincs-c10` | 1,665 |
+| Pure-logic crates ¹ | proto, tx-core, aa, domain, tx, erc7730, bip39 ², hal, shared, fi | 35,619 |
+| · of which ERC-7730 clear-signing | `pqsigner-erc7730/src` | 22,923 |
+| A/B rollback core + flash geometry registry | `rollback`, `geometry` | 4,112 |
+| Nonsecure world — USB-HID / APDU v2 router | `nonsecure` | 4,467 |
+| Legacy bench bootloader (production-ineligible) + FW-update manifest | `fsbl` + `fw-manifest` | 1,874 |
+| **On-device subtotal** | | **138,816** |
+
+> **Measured 2026-07-31, and re-measurable.** Every figure above is
+> non-blank, non-comment-only Rust lines, produced by exactly:
+> `find <path> -name '*.rs' -print0 | xargs -0 cat | grep -vcE '^[[:space:]]*(//|$)'`
+> Re-run it before an engagement rather than trusting this table.
+>
+> **Why the method is stated.** The previous version of this table (secure
+> world 53,311, sphincs-c10 1,168, pure-logic 8,428) was stale by roughly
+> 2.6x and carried two literal `remeasure` cells, with no record of how the
+> original numbers were produced — so nobody could tell drift from a
+> different counting convention. An external reviewer repeated those figures
+> as current repo state in July 2026. A scope table an auditor prices work
+> from must be either fresh or obviously re-derivable; this one is now both.
+>
+> The largest single line is not the signer: it is `pqsigner-erc7730`
+> (22,923 SLOC of clear-signing descriptor interpretation, host-runnable and
+> fuzzed). Scope an engagement accordingly — the attack surface is dominated
+> by decoders, not by crypto.
 
 ¹ all `no_std`, no-heap, host-testable; the secure world re-exports them through thin shims.
 ² 2,048 of bip39's 2,466 lines are the BIP-39 English wordlist (data, not logic).

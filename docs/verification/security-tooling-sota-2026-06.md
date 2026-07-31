@@ -113,7 +113,20 @@ the whole "minus" design*: the independent **poqeth** verifier (AsiaCCS'25, `rus
 at the **full NIST 2^64 budget** (h=63,d=10) costs **~5.2–13.4 M gas** for a full on-chain SPHINCS+
 verify (keccak) — ~100× C10. The reduced signature budget (2^16–2^20 cap) is exactly what buys the
 ~115 K. poqeth also has **no audit and no machine-checked verification** (only paper protocol
-proofs) → PQ-Signer's verity + Kontrol/KEVM track is a real differentiator. *Caveats:* poqeth hashes
+proofs) → PQ-Signer's verity + Kontrol/KEVM track is a real differentiator.
+
+**UPDATE 2026-07-31 — do not quote `~115 K` as our on-chain cost.** That figure is the
+`SPHINCS-` paper's C10 *row*, i.e. a published estimate for the verify primitive, and it is
+correctly cited as such above. It is **not** what this wallet costs on chain. Our own measured
+numbers, from `contracts/smart-wallet/AUDIT_2026-05-18.md:34` (mirrored in
+`AUDIT_PREP_CHECKLIST.md:124`): **verifier alone 180,306 gas; real-signature `validateUserOp`
+229,830 gas** — 2x the paper row, and still well inside mainstream bundler caps. The note is
+here because an external security review in July 2026 read `~115 K` out of this file and
+restated it as our measured on-chain verification cost, twice, and then reasoned about
+ERC-7562/bundler compatibility from it. Cite the AUDIT figure for anything about *this*
+deployment; cite the paper row only when comparing parameter sets.
+
+*Caveats:* poqeth hashes
 with the keccak opcode vs PQ-Signer's SHA-256 precompile (expect a higher per-hash constant), and
 its Naysayer/optimistic mode (~694 K) conflicts with the fully-on-chain `validateUserOp` model.
 **Licensing:** the `SPHINCS-` main repo has **no LICENSE = all-rights-reserved** (source-visible,
