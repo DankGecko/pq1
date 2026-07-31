@@ -23,6 +23,7 @@ pub fn run(
     pubkey_path: &Path,
     expected_version: u32,
     minimum_version: u32,
+    require_erc8176_verified: bool,
     status_out: Option<&Path>,
     forced_eligible_out: Option<&Path>,
 ) -> Result<()> {
@@ -33,6 +34,7 @@ pub fn run(
     let authenticated = authenticate_bundle(bundle_path, pubkey_path)?;
     let (report, status, forced_eligible) =
         build_report(&authenticated, expected_version, minimum_version)?;
+    enforce_required_provenance(&status, require_erc8176_verified)?;
 
     if forced_eligible_out.is_some() && forced_eligible.is_none() {
         bail!("authenticated bundle has no ERC-7730 forced-eligible set to extract");
@@ -58,6 +60,24 @@ fn validate_policy_configuration(expected_version: u32, minimum_version: u32) ->
     if expected_version < minimum_version {
         bail!(
             "invalid firmware-version policy: expected version {expected_version} is below minimum {minimum_version}"
+        );
+    }
+    Ok(())
+}
+
+fn enforce_required_provenance(
+    status_bytes: &[u8; CATALOGUE_STATUS_V1_LEN],
+    require_erc8176_verified: bool,
+) -> Result<()> {
+    if !require_erc8176_verified {
+        return Ok(());
+    }
+    let status = CatalogueStatusV1::from_bytes(status_bytes)
+        .map_err(|error| anyhow::anyhow!("authenticated ERC-7730 status is invalid: {error:?}"))?;
+    if status.provenance != CatalogueProvenance::Erc8176Verified {
+        bail!(
+            "authenticated ERC-7730 catalogue provenance is dev-unattested; \
+             --require-erc8176-verified requires erc8176-verified"
         );
     }
     Ok(())
@@ -291,11 +311,13 @@ mod tests {
         pubkey: PathBuf,
     }
 
-    fn status_fixture() -> [u8; CATALOGUE_STATUS_V1_LEN] {
+    fn status_fixture_with_provenance(
+        provenance: CatalogueProvenance,
+    ) -> [u8; CATALOGUE_STATUS_V1_LEN] {
         CatalogueStatusV1::new(
             1,
             pqsigner_erc7730::ir::SCHEMA_VER,
-            CatalogueProvenance::DevUnattested,
+            provenance,
             4,
             1_024,
             8,
@@ -310,6 +332,10 @@ mod tests {
         )
         .expect("fixture status is canonical")
         .to_bytes()
+    }
+
+    fn status_fixture() -> [u8; CATALOGUE_STATUS_V1_LEN] {
+        status_fixture_with_provenance(CatalogueProvenance::DevUnattested)
     }
 
     fn signed_fixture() -> &'static SignedFixture {
@@ -340,7 +366,13 @@ mod tests {
     }
 
     fn make_signed_fixture(forced_eligible: Option<Vec<u8>>) -> SignedFixture {
-        let status = status_fixture();
+        make_signed_fixture_with_status(status_fixture(), forced_eligible)
+    }
+
+    fn make_signed_fixture_with_status(
+        status: [u8; CATALOGUE_STATUS_V1_LEN],
+        forced_eligible: Option<Vec<u8>>,
+    ) -> SignedFixture {
         let mut secure = vec![0xa5; 64];
         secure.extend_from_slice(&status);
         if let Some(bytes) = &forced_eligible {
@@ -606,6 +638,7 @@ mod tests {
             &packed.pubkey,
             VERSION_A,
             VERSION_A - 1,
+            false,
             Some(&same_output),
             Some(&same_output),
         )
@@ -639,6 +672,7 @@ mod tests {
             &packed.pubkey,
             VERSION_A,
             VERSION_A - 1,
+            false,
             Some(&status_path),
             Some(&forced_path),
         )
@@ -734,6 +768,7 @@ mod tests {
             &packed.pubkey,
             VERSION_A,
             VERSION_A - 1,
+            false,
             Some(&status_path),
             Some(&forced_path),
         )
@@ -782,11 +817,63 @@ mod tests {
             &packed.pubkey,
             VERSION_A,
             VERSION_A - 1,
+            false,
             Some(&status_path),
             None,
         )
         .unwrap();
         assert_eq!(std::fs::read(status_path).unwrap(), fixture.status);
+    }
+
+    #[test]
+    fn required_verified_provenance_refuses_dev_before_write_and_accepts_verified() {
+        let dev = signed_fixture();
+        let packed_dev = pack_fixture(&dev.secure, Some(dev.status), "ignored", "{}");
+        let output_dir = tempfile::tempdir().unwrap();
+        let dev_status_path = output_dir.path().join("must-not-exist-dev-status.bin");
+        let error = run(
+            &packed_dev.bundle,
+            &packed_dev.pubkey,
+            VERSION_A,
+            VERSION_A - 1,
+            true,
+            Some(&dev_status_path),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("--require-erc8176-verified requires erc8176-verified"),
+            "got: {error}"
+        );
+        assert!(!dev_status_path.exists());
+
+        let verified_status = status_fixture_with_provenance(CatalogueProvenance::Erc8176Verified);
+        let verified = make_signed_fixture_with_status(verified_status, None);
+        let packed_verified = pack_fixture_for(
+            &verified,
+            verified.manifest,
+            &verified.secure,
+            Some(verified.status),
+            None,
+            "ignored",
+            "{}",
+        );
+        let verified_status_path = output_dir.path().join("verified-status.bin");
+        run(
+            &packed_verified.bundle,
+            &packed_verified.pubkey,
+            VERSION_A,
+            VERSION_A - 1,
+            true,
+            Some(&verified_status_path),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(verified_status_path).unwrap(),
+            verified.status
+        );
     }
 
     #[test]

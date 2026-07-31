@@ -10,6 +10,7 @@
 //!   secure/data/erc7730-registry/ercs/**/*.json
 //!   secure/data/erc7730-e2e/*.json
 //!   secure/data/erc7730/policy.toml
+//!   secure/data/erc7730-e2e/policy.toml
 //!
 //! Writes (checked into the repo):
 //!   tools/companion-stub/erc20_db.bin   (host-side; companion app)
@@ -150,6 +151,10 @@ fn main() {
             std::process::exit(1);
         });
     let erc7730_e2e_dir = root.join("secure/data/erc7730-e2e");
+    // Keep synthetic fixture authority permanently separate from the
+    // production policy/snapshot. A future production flip must not make E2E
+    // descriptors depend on real auditor evidence or inherit its authority.
+    let erc7730_e2e_policy = erc7730_e2e_dir.join("policy.toml");
 
     // The full DB blobs live on the HOST (companion app), never in
     // the firmware image — exactly like the selectors / ERC-7730
@@ -392,8 +397,8 @@ fn main() {
     // gate.
     let erc7730_e2e_res = erc7730::build_e2e_db_with_policy_override_and_erc20_capabilities(
         &erc7730_e2e_dir,
-        &erc7730_policy,
-        force_production,
+        &erc7730_e2e_policy,
+        false,
         registry_root.as_deref(),
         &erc20_e2e_res.capabilities,
     )
@@ -483,7 +488,8 @@ const DB_ROOTS_HEADER: &str = "\
 //! secure/data/names.json, secure/data/selectors.json,
 //! secure/data/erc7730-registry/registry/**/*.json,
 //! secure/data/erc7730-registry/ercs/**/*.json,
-//! secure/data/erc7730-e2e/*.json, and secure/data/erc7730/policy.toml.
+//! secure/data/erc7730-e2e/*.json, secure/data/erc7730/policy.toml, and
+//! secure/data/erc7730-e2e/policy.toml.
 //! DO NOT EDIT BY HAND.
 //!
 //! None of the host-side Merkle DB blobs ship in the firmware image. The ERC20 /

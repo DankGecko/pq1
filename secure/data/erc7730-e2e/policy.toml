@@ -1,0 +1,49 @@
+# ERC-8176 attestation policy for the ERC-7730 descriptor pipeline.
+#
+# This file is the QUALITY GATE for `dbgen::erc7730`. Phase 1 deliberately
+# does NOT verify ERC-8176 attestations on-device — secp256k1 / ERC-1271
+# verification would violate the firmware-wide "no classical signer
+# anywhere" invariant (#5 in CLAUDE.md). Instead, every descriptor that
+# enters a shipping `ERC7730_DESCRIPTORS_ROOT` MUST be verified at *host build
+# time*. The firmware then trusts the root and its generated provenance fence.
+#
+# Production behaviour (`allow_unattested_dev_descriptors = false`):
+#   * Currently FAILS CLOSED: real ERC-8176 EAS record fetching and
+#     signature/identity verification are not implemented in dbgen.
+#   * An obsolete descriptor-embedded `attestations` array is never accepted
+#     as production evidence.
+#   * Future production support must verify ≥ `min_attesters` distinct EAS
+#     records from `trusted_attesters`, bind each to the exact `erc8176_hash`,
+#     and only then emit `Provenance: erc8176-verified`.
+#
+# Pre-production behaviour (`allow_unattested_dev_descriptors = true`):
+#   * `min_attesters` is effectively ignored.
+#   * `trusted_attesters` is also ignored.
+#   * Every descriptor still has to parse cleanly + fit `MAX_IR_LEN` +
+#     satisfy on-device strictness (printable-ASCII metadata, BE
+#     headers, etc.).
+#   * CI MUST reject shipping firmware with this flag on — same pattern
+#     as `e2e-test` / `otp-hardcoded-master-key`. The xtask `--check`
+#     mode + `make prod-erc7730-provenance-check` enforce this independently
+#     of the firmware-rollback quarantine.
+#
+# Today's production-shaped catalogue is compiled from the vendored upstream
+# registry, but it carries no verified Ledger / Fireblocks / Sourcify EAS
+# records. We therefore stay explicitly dev-unattested until the verifier and
+# attestation ecosystem exist.
+
+min_attesters = 2
+
+# Placeholder CAIP-2 identities. Replace with real attester addresses
+# (Ledger, Fireblocks, Sourcify) when wiring to the upstream registry.
+# Each entry is a CAIP-2 string: `eip155:<chain_id>:<0x-address>`.
+trusted_attesters = [
+    "eip155:1:0x0000000000000000000000000000000000000001",  # placeholder for Ledger
+    "eip155:1:0x0000000000000000000000000000000000000002",  # placeholder for Fireblocks
+    "eip155:1:0x0000000000000000000000000000000000000003",  # placeholder for Sourcify
+]
+
+# The attestation chain is not wired. Do not merely flip this to `false`: dbgen
+# will reject that configuration until real ERC-8176 verification is
+# implemented. Release gates require generated provenance `erc8176-verified`.
+allow_unattested_dev_descriptors = true

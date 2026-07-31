@@ -101,7 +101,12 @@ release gates remain unchanged.
   hash. Companion preflight can therefore prove that its catalogue matches one
   authenticated firmware release. Its report is explicitly compatibility-only:
   it cannot set `erc8176_attestation=true`, authorize a production root, or
-  compensate for missing auditor evidence.
+  compensate for missing auditor evidence. Production-oriented callers may
+  pass `--require-erc8176-verified`; `fwsign` then rejects an authenticated
+  `dev-unattested` P73S before writing sidecars, and the companion helper
+  forwards and independently checks that requirement. This is a provenance
+  class gate over signed build output, not a second attestation verifier or a
+  production/rollback/shipment grant.
 - **Deliberate limitations:** snapshot v1 supports offchain EAS-v2 attestations
   by EOAs only. It rejects contract/code-bearing signers (including ERC-1271 and
   EIP-7702), does not fetch data, decide consensus finality, select real
@@ -111,6 +116,30 @@ release gates remain unchanged.
   with an approved production policy, manifest, artifacts, and root ceremony.
 
 ## Current coverage (400-leaf catalogue snapshot, measured 2026-07)
+
+### UPDATE 2026-07-31 — first real candidate batch, still below threshold
+
+The current PQ1 catalogue has 365 leaves and 214 unique resolved ERC-8176
+descriptor hashes. A fresh `make erc8176-coverage` query still returned only
+the three old schema records (two eligible) and zero PQ1 matches.
+
+Upstream now has two unmerged, blocked, and unreviewed candidate PRs:
+[`#2764`](https://github.com/ethereum/clear-signing-erc7730-registry/pull/2764)
+registers Patrick Collins / Cyfrin with signer
+`0x3846c3A30E62075Fa916216b35EF04B8F53931f6`, and
+[`#2765`](https://github.com/ethereum/clear-signing-erc7730-registry/pull/2765)
+adds 181 offchain EAS-v2 signature files. A read-only validation recovered the
+same signer from all 181 canonical signatures, but only three of their resolved
+descriptor hashes match the exact descriptor bytes currently shipped by PQ1.
+The remaining signatures bind newer or otherwise different upstream descriptor
+bytes. One candidate signer cannot satisfy PQ1's two-distinct-attester policy,
+so **zero PQ1 descriptors are production-admissible** from this batch.
+
+This is useful rehearsal evidence, not auditor approval. The merged upstream
+default branch still contains only `auditors/README.md` and no signature files;
+PQ1 has not endorsed the candidate identity, selected a second auditor, pinned
+a checkpoint/snapshot, or authorized a production root. The canonical policy
+and release status therefore remain `dev-unattested`.
 
 `make erc8176-coverage` (the live result distinguishes all returned records
 from the eligible, unrevoked, unexpired subset used for threshold arithmetic):

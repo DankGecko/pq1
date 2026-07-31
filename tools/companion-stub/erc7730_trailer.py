@@ -349,6 +349,7 @@ def _authenticated_release_status(
     pubkey: str,
     expected_version: int,
     minimum_version: int,
+    require_erc8176_verified: bool,
 ) -> tuple[bytes, bytes | None, dict]:
     """Run fwsign privately and consume its exact authenticated P73S/P73K."""
     with tempfile.TemporaryDirectory(prefix="pqsigner-erc7730-status-") as temp_dir:
@@ -365,6 +366,8 @@ def _authenticated_release_status(
             "--minimum-version",
             str(minimum_version),
         ]
+        if require_erc8176_verified:
+            base_command.append("--require-erc8176-verified")
 
         def invoke(extra_args: list[str]) -> dict:
             try:
@@ -400,6 +403,15 @@ def _authenticated_release_status(
             status_raw = status_path.read_bytes()
         except OSError as exc:
             raise ValueError(f"fwsign did not emit authenticated P73S status: {exc}") from exc
+        if (
+            require_erc8176_verified
+            and parse_catalogue_status(status_raw)["provenance"]
+            != PROVENANCE_ERC8176_VERIFIED
+        ):
+            raise ValueError(
+                "authenticated ERC-7730 catalogue provenance is dev-unattested; "
+                "--require-erc8176-verified requires erc8176-verified"
+            )
         validated = _validate_release_metadata(
             report,
             status_raw,
@@ -1257,6 +1269,14 @@ def main() -> int:
         help="minimum accepted firmware version required with --bundle",
     )
     ap.add_argument(
+        "--require-erc8176-verified",
+        action="store_true",
+        help=(
+            "require the authenticated P73S to carry erc8176-verified provenance; "
+            "refuses dev-unattested releases before catalogue use"
+        ),
+    )
+    ap.add_argument(
         "--known-calls-bloom",
         required=True,
         help="path to the exact firmware-pinned known-call Bloom bytes",
@@ -1327,6 +1347,8 @@ def main() -> int:
                 "--compatibility-report requires authenticated --bundle mode; "
                 "test-only loose status has no release authority"
             )
+        if args.require_erc8176_verified:
+            ap.error("--require-erc8176-verified may only be used with --bundle")
     if args.compatibility_report and args.list:
         ap.error("--compatibility-report and --list are mutually exclusive")
 
@@ -1338,6 +1360,7 @@ def main() -> int:
                 pubkey=args.pubkey,
                 expected_version=args.expected_firmware_version,
                 minimum_version=args.minimum_firmware_version,
+                require_erc8176_verified=args.require_erc8176_verified,
             )
         else:
             # Explicitly test-only: production/list/trailer callers must start

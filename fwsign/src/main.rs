@@ -215,6 +215,12 @@ enum Cmd {
         /// caller policy check, not proof of the device's OTP rollback floor.
         #[arg(long)]
         minimum_version: u32,
+        /// Require the authenticated P73S receipt to carry
+        /// `erc8176-verified` provenance. Refuses before writing sidecars.
+        /// This remains a catalogue-provenance check, not production,
+        /// rollback, installed-device, or shipment authority.
+        #[arg(long)]
+        require_erc8176_verified: bool,
         /// Optional path for the exact authenticated 256-byte P73S receipt.
         /// Written only after every authentication and version check passes.
         #[arg(long)]
@@ -381,6 +387,7 @@ fn main() -> anyhow::Result<()> {
             pubkey,
             expected_version,
             minimum_version,
+            require_erc8176_verified,
             status_out,
             forced_eligible_out,
         } => subcommands::erc7730_release_metadata::run(
@@ -388,6 +395,7 @@ fn main() -> anyhow::Result<()> {
             &pubkey,
             expected_version,
             minimum_version,
+            require_erc8176_verified,
             status_out.as_deref(),
             forced_eligible_out.as_deref(),
         ),

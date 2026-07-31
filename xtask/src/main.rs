@@ -65,7 +65,7 @@ Subcommands:
       writing the file (used by CI to diff against the checked-in copy).
 
   gen-erc7730-descriptors [--check]
-                          [--input-dir PATH] [--policy PATH]
+                          [--input-dir PATH] [--policy PATH] [--e2e-policy PATH]
                           [--out-binary PATH] [--out-review PATH]
                           [--e2e-input-dir PATH] [--e2e-out-binary PATH]
                           [--known-calls-out PATH]
@@ -76,7 +76,9 @@ Subcommands:
       Compile the production ERC-7730 catalogue from
       `secure/data/erc7730-registry/registry` plus
       `secure/data/erc7730-registry/ercs`, and the E2E catalogue from
-      `secure/data/erc7730-e2e`, against `secure/data/erc7730/policy.toml`.
+      `secure/data/erc7730-e2e`. Production uses
+      `secure/data/erc7730/policy.toml`; E2E uses its separate, permanently
+      dev-unattested `secure/data/erc7730-e2e/policy.toml`.
       Build their Merkle trees and emit:
         tools/companion-stub/erc7730_db.bin
         tools/companion-stub/erc7730_db_e2e.bin
@@ -314,6 +316,7 @@ fn is_solidity_string_safe(bytes: &[u8]) -> bool {
 const ERC7730_DEFAULT_INPUT: &str = "secure/data/erc7730-registry/registry";
 const ERC7730_DEFAULT_POLICY: &str = "secure/data/erc7730/policy.toml";
 const ERC7730_DEFAULT_E2E_INPUT: &str = "secure/data/erc7730-e2e";
+const ERC7730_DEFAULT_E2E_POLICY: &str = "secure/data/erc7730-e2e/policy.toml";
 const ERC20_DEFAULT_INPUT: &str = "secure/data/erc20.json";
 const ERC20_DEFAULT_E2E_INPUT: &str = "secure/data/erc20-e2e.json";
 const ERC20_DEFAULT_OUT: &str = "tools/companion-stub/erc20_db.bin";
@@ -443,6 +446,7 @@ struct Erc7730Args {
     check: bool,
     input_dir: Option<PathBuf>,
     policy: Option<PathBuf>,
+    e2e_policy: Option<PathBuf>,
     out_binary: Option<PathBuf>,
     out_review: Option<PathBuf>,
     e2e_input_dir: Option<PathBuf>,
@@ -456,8 +460,10 @@ struct Erc7730Args {
 }
 
 fn validate_erc7730_probe_output_isolation(args: &Erc7730Args) -> Result<(), String> {
-    let uses_custom_inputs =
-        args.input_dir.is_some() || args.policy.is_some() || args.e2e_input_dir.is_some();
+    let uses_custom_inputs = args.input_dir.is_some()
+        || args.policy.is_some()
+        || args.e2e_input_dir.is_some()
+        || args.e2e_policy.is_some();
     if args.check || !uses_custom_inputs {
         return Ok(());
     }
@@ -507,6 +513,12 @@ fn parse_erc7730_args(args: &[String]) -> Result<Erc7730Args, String> {
                 i += 1;
                 out.policy = Some(PathBuf::from(
                     args.get(i).ok_or("--policy requires a value")?,
+                ));
+            }
+            "--e2e-policy" => {
+                i += 1;
+                out.e2e_policy = Some(PathBuf::from(
+                    args.get(i).ok_or("--e2e-policy requires a value")?,
                 ));
             }
             "--out-binary" => {
@@ -625,6 +637,7 @@ fn build_erc7730_catalogues(
     policy: &Path,
     registry_root: Option<&Path>,
     e2e_input_dir: &Path,
+    e2e_policy: &Path,
 ) -> Result<Erc7730CatalogueBuild, String> {
     let prod_erc20 = load_production_erc20_capability_input(workspace_root)?;
     let e2e_erc20 =
@@ -639,7 +652,7 @@ fn build_erc7730_catalogues(
     .map_err(|e| format!("prod build failed: {e}"))?;
     let e2e = dbgen::erc7730::build_e2e_db_with_policy_override_and_erc20_capabilities(
         e2e_input_dir,
-        policy,
+        e2e_policy,
         false,
         None,
         &e2e_erc20.capabilities,
@@ -688,6 +701,9 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     let e2e_input_dir = parsed
         .e2e_input_dir
         .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_E2E_INPUT));
+    let e2e_policy = parsed
+        .e2e_policy
+        .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_E2E_POLICY));
     let e2e_out_binary = parsed
         .e2e_out_binary
         .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_E2E_OUT));
@@ -759,6 +775,7 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         &policy,
         registry_root.as_deref(),
         &e2e_input_dir,
+        &e2e_policy,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -2328,10 +2345,23 @@ mod tests {
         .expect("write E2E descriptor");
 
         let policy = workspace_root().join(ERC7730_DEFAULT_POLICY);
+        let e2e_policy = root.join("e2e-policy.toml");
+        let e2e_policy_bytes = concat!(
+            "min_attesters = 2\n",
+            "trusted_attesters = []\n",
+            "allow_unattested_dev_descriptors = true\n",
+        );
+        std::fs::write(&e2e_policy, e2e_policy_bytes).expect("write distinct E2E policy");
 
-        let generated =
-            build_erc7730_catalogues(root, &prod_input, &policy, Some(&registry_root), &e2e_input)
-                .expect("xtask catalogue build");
+        let generated = build_erc7730_catalogues(
+            root,
+            &prod_input,
+            &policy,
+            Some(&registry_root),
+            &e2e_input,
+            &e2e_policy,
+        )
+        .expect("xtask catalogue build");
         assert!(generated.prod_skips.is_empty());
 
         let prod_erc20 = dbgen::erc20::build_db(&root.join(ERC20_DEFAULT_INPUT))
@@ -2410,13 +2440,16 @@ mod tests {
 
         let expected_e2e = dbgen::erc7730::build_db_with_erc20_capabilities(
             &e2e_input,
-            &policy,
+            &e2e_policy,
             &e2e_erc20.capabilities,
         )
         .expect("direct E2E build");
         assert_eq!(generated.e2e.root, expected_e2e.root);
         assert_eq!(generated.e2e.blob, expected_e2e.blob);
         assert_eq!(generated.e2e.leaf_count, expected_e2e.leaf_count);
+        let expected_e2e_policy_sha256: [u8; 32] = Sha256::digest(e2e_policy_bytes).into();
+        assert_eq!(generated.e2e.policy_sha256, expected_e2e_policy_sha256);
+        assert_ne!(generated.prod.policy_sha256, generated.e2e.policy_sha256);
         assert_eq!(generated.e2e_erc20.blob, e2e_erc20.blob);
         assert_eq!(generated.e2e_erc20.receipt.db_root, e2e_erc20.root);
 

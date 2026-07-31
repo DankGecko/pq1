@@ -146,6 +146,7 @@ def make_forced_eligible(tuples: list[tuple[int, bytes, bytes]]) -> bytes:
 def make_fixture(
     variant: int = 0,
     forced_tuples: tuple[tuple[int, bytes, bytes], ...] = (),
+    provenance: int = trailer.PROVENANCE_DEV_UNATTESTED,
 ) -> tuple[bytes, bytes, bytes]:
     clear_tuples = fixture_clear_tuples(variant)
     known_tuples = clear_tuples + list(forced_tuples)
@@ -189,7 +190,7 @@ def make_fixture(
     status[6:8] = trailer.STATUS_LEN.to_bytes(2, "big")
     status[8:12] = trailer.CATALOGUE_VERSION.to_bytes(4, "big")
     status[12] = trailer.IR_SCHEMA_VERSION
-    status[13] = trailer.PROVENANCE_DEV_UNATTESTED
+    status[13] = provenance
     status[16:20] = entry_count.to_bytes(4, "big")
     status[20:24] = len(blob).to_bytes(4, "big")
     status[24:28] = len(known_tuples).to_bytes(4, "big")
@@ -591,7 +592,9 @@ class CatalogueVerificationTests(unittest.TestCase):
         )
 
     def test_cli_combined_release_mode_uses_exact_private_status_output(self) -> None:
-        status, blob, bloom = make_fixture()
+        status, blob, bloom = make_fixture(
+            provenance=trailer.PROVENANCE_ERC8176_VERIFIED
+        )
         release = make_release_report(status, 17, 16)
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -610,6 +613,7 @@ class CatalogueVerificationTests(unittest.TestCase):
                 "#!/usr/bin/env python3\n"
                 "import json, pathlib, sys\n"
                 f"status = pathlib.Path({str(status_source)!r}).read_bytes()\n"
+                "assert '--require-erc8176-verified' in sys.argv\n"
                 "out = pathlib.Path(sys.argv[sys.argv.index('--status-out') + 1])\n"
                 "out.write_bytes(status)\n"
                 f"print(json.dumps({release!r}, sort_keys=True, separators=(',', ':')))\n",
@@ -635,6 +639,7 @@ class CatalogueVerificationTests(unittest.TestCase):
                     "17",
                     "--minimum-firmware-version",
                     "16",
+                    "--require-erc8176-verified",
                     "--compatibility-report",
                 ],
                 stdout=subprocess.PIPE,
@@ -650,6 +655,36 @@ class CatalogueVerificationTests(unittest.TestCase):
             combined["authenticated_release"]["firmware"]["firmware_version"],
             17,
         )
+
+    def test_authenticated_release_independently_refuses_dev_provenance(self) -> None:
+        status, _blob, _bloom = make_fixture()
+        release = make_release_report(status, 17, 16)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            status_source = root / "source-status.bin"
+            fake_fwsign = root / "fake-fwsign"
+            status_source.write_bytes(status)
+            fake_fwsign.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, pathlib, sys\n"
+                f"status = pathlib.Path({str(status_source)!r}).read_bytes()\n"
+                "assert '--require-erc8176-verified' in sys.argv\n"
+                "out = pathlib.Path(sys.argv[sys.argv.index('--status-out') + 1])\n"
+                "out.write_bytes(status)\n"
+                f"print(json.dumps({release!r}, sort_keys=True, separators=(',', ':')))\n",
+                encoding="utf-8",
+            )
+            fake_fwsign.chmod(0o755)
+
+            with self.assertRaisesRegex(ValueError, "requires erc8176-verified"):
+                trailer._authenticated_release_status(
+                    fwsign_bin=str(fake_fwsign),
+                    bundle="ignored-bundle",
+                    pubkey="ignored-pubkey",
+                    expected_version=17,
+                    minimum_version=16,
+                    require_erc8176_verified=True,
+                )
 
     def test_cli_authenticated_release_extracts_and_proves_p73k_partition(self) -> None:
         forced_tuples = fixture_forced_tuples()
