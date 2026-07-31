@@ -40,10 +40,21 @@ on:
   push:
     branches: [master]
     paths: &wfsec_paths
-      - '.github/workflows/**'
-      - '.github/dependabot.yml'
-      - '.github/CODEOWNERS'
+      # `.github/**`, not just `workflows/**`: the invisible-unicode gate
+      # registered in scripts/gate_enforcement.json declares it polices the
+      # whole `.github` tree (issue templates and any future agent config are
+      # just as executable-by-a-reader as a workflow), and
+      # scripts/check_gate_enforcement.py FAILS the build if a gate's trigger
+      # does not cover the surface it claims — the F1 class: a gate that is
+      # green-when-run but never runs on the diff it polices.
+      - '.github/**'
       - '.gitleaks.toml'
+      - 'scripts/check_invisible_unicode.py'
+      - 'scripts/gate_enforcement.json'
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
+      - '.claude/**'
+      - '.cursorrules'
       - 'contracts/smart-wallet/.github/workflows/**'
   pull_request:
     paths: *wfsec_paths
@@ -116,6 +127,26 @@ jobs:
       # dangerous-triggers) is a static audit.
       - name: zizmor (repo-root workflows — hard gate at medium+)
         run: zizmor --offline --min-severity medium --format plain .github/workflows/
+
+      # Invisible-Unicode gate. Sits in THIS workflow rather than its own
+      # because it polices the same class of thing: content that a reviewer
+      # cannot see. Zero-width runs are how the 2026 TrapDoor campaign hid
+      # payloads inside the `CLAUDE.md`/`.cursorrules` files coding agents
+      # execute; bidi overrides are Trojan Source (CVE-2021-42574). Neither
+      # shows up in `git diff`.
+      #
+      # The self-test runs FIRST and is not decoration: it plants five payload
+      # classes and asserts each fires, plus three benign inputs that must stay
+      # silent. If the scanner is ever broken into always-returning-clean, this
+      # step goes red instead of quietly certifying nothing.
+      #
+      # Invoked through `make` rather than calling the script directly, for two
+      # reasons: local and CI then run byte-identical commands, and
+      # scripts/check_gate_enforcement.py can only verify a gate is actually
+      # wired if the workflow invokes its declared `make` target. A gate that is
+      # green-when-run but never runs is the exact failure that check exists for.
+      - name: invisible-unicode (zero-width + Trojan Source)
+        run: make invisible-unicode
 
   workflow-lint-contracts:
     name: zizmor (report-only — inert contracts subtree)

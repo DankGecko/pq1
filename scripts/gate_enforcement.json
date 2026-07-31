@@ -1,5 +1,5 @@
 {
-  "_comment": "verify-gate-enforcement manifest \u2014 closes catalog class G1 (gate-enforcement vacuity) from docs/verification/fv-adversarial-review-playbook.md Part A2. Each soundness/anti-vacuity gate declares WHAT source surface it polices, WHICH workflow must run it, and its ENFORCEMENT level. check_gate_enforcement.py asserts the live CI wiring matches \u2014 a gate that is green-when-run but never RUNS on the diff it polices (wrong `paths:` filter, `continue-on-error`, workflow_dispatch-only, or unwired) is exactly as dangerous as a hollow proof (the 2026-07-01 F1 finding: verify-ledger-consistency never fired on AXIOM_STATUS.json-only edits). enforcement: 'per_pr_blocking' = must run on push/pull_request, non-continue-on-error, and the trigger `paths:` must COVER polices_paths; 'nightly' = must be invoked by a scheduled workflow; 'local_documented' = deliberately not CI-gated (a NOTE, never a failure) \u2014 must carry a `why`. polices_paths are repo-relative prefixes/globs the gate is responsible for.",
+  "_comment": "verify-gate-enforcement manifest — closes catalog class G1 (gate-enforcement vacuity) from docs/verification/fv-adversarial-review-playbook.md Part A2. Each soundness/anti-vacuity gate declares WHAT source surface it polices, WHICH workflow must run it, and its ENFORCEMENT level. check_gate_enforcement.py asserts the live CI wiring matches — a gate that is green-when-run but never RUNS on the diff it polices (wrong `paths:` filter, `continue-on-error`, workflow_dispatch-only, or unwired) is exactly as dangerous as a hollow proof (the 2026-07-01 F1 finding: verify-ledger-consistency never fired on AXIOM_STATUS.json-only edits). enforcement: 'per_pr_blocking' = must run on push/pull_request, non-continue-on-error, and the trigger `paths:` must COVER polices_paths; 'nightly' = must be invoked by a scheduled workflow; 'local_documented' = deliberately not CI-gated (a NOTE, never a failure) — must carry a `why`. polices_paths are repo-relative prefixes/globs the gate is responsible for.",
   "workflows_dir": ".github/workflows",
   "gates": [
     {
@@ -211,7 +211,7 @@
       ],
       "runs_in": "lean-extracted.yml",
       "enforcement": "per_pr_blocking",
-      "note": "\u00a733 Aeneas-extracted no-sorry/no-sorryAx gate. per-PR on extracted/**; the Rust SOURCE crates the extraction mirrors are covered by the extract-* regen-diff sweep (nightly, below). Enrolled 2026-07-02 (was absent \u2014 extracted-F1)."
+      "note": "§33 Aeneas-extracted no-sorry/no-sorryAx gate. per-PR on extracted/**; the Rust SOURCE crates the extraction mirrors are covered by the extract-* regen-diff sweep (nightly, below). Enrolled 2026-07-02 (was absent — extracted-F1)."
     },
     {
       "id": "verify-extract-differential",
@@ -222,7 +222,7 @@
       ],
       "runs_in": "lean-extracted.yml",
       "enforcement": "nightly",
-      "note": "executes extracted-Lean vs executed-Rust (signed_preimage, 6 vectors) \u2014 the only layer catching a consistently-wrong translation. Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow \u2014 extracted-F1)."
+      "note": "executes extracted-Lean vs executed-Rust (signed_preimage, 6 vectors) — the only layer catching a consistently-wrong translation. Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow — extracted-F1)."
     },
     {
       "id": "verify-extraction-freshness",
@@ -253,7 +253,7 @@
         "contracts/verification/extracted/**"
       ],
       "enforcement": "local_documented",
-      "why": "F1 (2026-07-16): the REAL regen check \u2014 re-runs charon->aeneas + diff for every extract-* target. Needs the \u00a733 toolchain in ~/.local/share/pqsigner-lean (charon nightly-2026.06.08 + aeneas nightly-2026.06.10), which cannot run on a stock CI runner, so it stays LOCAL. The per-PR CI protection is the toolchain-free verify-extraction-freshness sha256 tripwire (above)."
+      "why": "F1 (2026-07-16): the REAL regen check — re-runs charon->aeneas + diff for every extract-* target. Needs the §33 toolchain in ~/.local/share/pqsigner-lean (charon nightly-2026.06.08 + aeneas nightly-2026.06.10), which cannot run on a stock CI runner, so it stays LOCAL. The per-PR CI protection is the toolchain-free verify-extraction-freshness sha256 tripwire (above)."
     },
     {
       "id": "verify-lean4checker",
@@ -273,7 +273,7 @@
       ],
       "runs_in": "lean-extracted.yml",
       "enforcement": "nightly",
-      "note": "vendored-spec fidelity (the ADRS version bridge). Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow \u2014 extracted-F1)."
+      "note": "vendored-spec fidelity (the ADRS version bridge). Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow — extracted-F1)."
     },
     {
       "id": "verify-extracted-heavy",
@@ -328,7 +328,7 @@
         "contracts/smart-wallet/src/**"
       ],
       "enforcement": "local_documented",
-      "why": "a LOCAL end-to-end convenience bundle (kernel + audit + lints + forge + Halmos/Certora advisory), NOT a single CI job. Its dead nested workflow (contracts/.github/... \u2014 GitHub never ran it) was removed 2026-07-02 (F1). Its constituent gates ARE per-PR: verify-build/audit/fv-lints/ledger-consistency/storage-mutators (lean-fv.yml), verify-transcription (a31-transcription.yml), forge test + codehash-freeze (ci.yml); the Halmos/Kontrol legs are verify-bytecode (also local_documented)."
+      "why": "a LOCAL end-to-end convenience bundle (kernel + audit + lints + forge + Halmos/Certora advisory), NOT a single CI job. Its dead nested workflow (contracts/.github/... — GitHub never ran it) was removed 2026-07-02 (F1). Its constituent gates ARE per-PR: verify-build/audit/fv-lints/ledger-consistency/storage-mutators (lean-fv.yml), verify-transcription (a31-transcription.yml), forge test + codehash-freeze (ci.yml); the Halmos/Kontrol legs are verify-bytecode (also local_documented)."
     },
     {
       "id": "verify-hw-assumptions",
@@ -461,9 +461,24 @@
       "runs_in": "ci.yml",
       "enforcement": "per_pr_blocking",
       "note": "CI boots the combined secure/nonsecure image under QEMU and requires the unified-sign E2E sentinel, including positive ERC-7730 clear-sign rendering and cross-deployment hard refusal."
+    },
+    {
+      "id": "invisible-unicode",
+      "make": "make invisible-unicode",
+      "polices_paths": [
+        "CLAUDE.md",
+        "AGENTS.md",
+        ".claude/**",
+        ".cursorrules",
+        ".github/**",
+        "scripts/check_invisible_unicode.py"
+      ],
+      "runs_in": "workflow-security.yml",
+      "enforcement": "per_pr_blocking",
+      "note": "Zero-width (U+200B..U+200F/U+FEFF) and bidi override/isolate (U+202A..U+202E, U+2066..U+2069) codepoints are invisible to git diff and to code review. Two attacks share that mechanism: TrapDoor-style poisoning of the AI-instruction files every coding agent executes, and Trojan Source (CVE-2021-42574). Baseline 2026-07-31 is ZERO hits over 3841 tracked text files with NO allowlist — the two pre-existing hits were fixed, not exempted, because an allowlist here is a place to hide the payload. Carries a two-sided self-test (5 payload classes fire, 3 benign inputs stay silent); ordinary non-ASCII is deliberately allowed or the gate would be red on day one and disabled by the end of the week."
     }
   ],
   "_completeness_waived": {
-    "verify-gate-enforcement": "the G1 lint itself (this checker); it runs in ci.yml and does not police a proof surface \u2014 it polices the manifest. Waiving avoids self-reference."
+    "verify-gate-enforcement": "the G1 lint itself (this checker); it runs in ci.yml and does not police a proof surface — it polices the manifest. Waiving avoids self-reference."
   }
 }

@@ -3928,6 +3928,13 @@ optiga-oid-ceremony: ## Fail closed if a live doc carries a stale (destructive) 
 	python3 scripts/check_optiga_oid_ceremony.py
 
 SEMGREP ?= $(shell command -v semgrep 2>/dev/null || echo $(HOME)/.venvs/semgrep/bin/semgrep)
+invisible-unicode: ## Refuse zero-width / bidi-override codepoints in tracked text files
+	@echo "==> invisible-unicode: zero-width + Trojan-Source bidi scan"
+	@echo "    (self-test first — a gate nobody has watched fail is a gate"
+	@echo "     nobody knows works)"
+	python3 scripts/check_invisible_unicode.py --self-test
+	python3 scripts/check_invisible_unicode.py
+
 invariant-gates: ## Local invariant gates (cargo-deny + semgrep + transcription)
 	@echo "==> [1/5] supply-chain (deps): cargo deny check advisories bans sources"
 	@echo "    bans=invariant #5 (no classical signer); advisories=real CVEs"

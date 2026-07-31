@@ -888,7 +888,11 @@ fn negative_ascii_filter_must_reject_non_printable_bytes() {
     // Attack: a hostile DB row (e.g. an ERC-20 token name) contains
     // a UTF-8 lookalike or a control byte. Without the 0x20..=0x7e
     // gate, those bytes would land on the OLED and the user could
-    // confirm a transfer to "U‍SDC" thinking it was "USDC".
+    // confirm a transfer to "U\u{200d}SDC" (a zero-width joiner spliced
+    // into the middle) thinking it was "USDC". Written as an ESCAPE
+    // rather than a raw invisible codepoint so the byte cannot survive a
+    // copy-paste unnoticed, and so check_invisible_unicode.py needs no
+    // allowlist to stay green.
     let null_byte = ref_ascii_filter(&[b'A', 0x00, b'B']);
     assert_eq!(&null_byte[..3], b"A?B", "NUL byte must be replaced with '?'");
     let high_bit = ref_ascii_filter(&[b'X', 0xFF, b'Y']);
