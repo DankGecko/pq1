@@ -1738,7 +1738,8 @@ fn second_bump_with_prior_consumed_residue_recovers() {
     let committed_binding = binding(PhysicalSlot::A, 6, committed_roles);
     let snap = bank
         .snapshot(FENCE, Some(active_binding))
-        .with_committed_plan_binding(1, committed_binding);
+        .with_committed_plan_binding(1, committed_binding)
+        .expect("test snapshot capacity");
     match floor::decode_floor(&snap) {
         FloorView::Recovering(p) => assert_eq!(p.target(), 6),
         other => panic!(
@@ -1768,6 +1769,27 @@ fn phantom_binding_without_any_stage_record_is_unknown() {
         FloorView::Unknown(floor::FloorFault::ConflictingCompletion) => {}
         other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
     }
+}
+
+#[test]
+fn ninth_committed_plan_binding_fails_closed_not_panics() {
+    // R19-1: with_committed_plan_binding returns None on overflow
+    // (fail-closed, never panics).
+    let mut snap = Bank::new().snapshot(FENCE, None);
+    let roles = [
+        (0, PlanRole::Witness),
+        (1, PlanRole::Witness),
+        (2, PlanRole::Witness),
+        (3, PlanRole::Witness),
+    ];
+    for group in 1..=floor::MAX_COMPLETE_RECORDS as u32 {
+        snap = snap
+            .with_committed_plan_binding(group, binding(PhysicalSlot::A, 6, roles))
+            .expect("capacity within MAX_COMPLETE_RECORDS");
+    }
+    assert!(snap
+        .with_committed_plan_binding(9, binding(PhysicalSlot::A, 6, roles))
+        .is_none());
 }
 
 #[test]
@@ -1910,7 +1932,8 @@ fn first_bump_phantom_committed_binding_is_unknown() {
     ];
     let snap = bank
         .snapshot(FENCE, Some(binding(PhysicalSlot::A, 2, roles)))
-        .with_committed_plan_binding(1, binding(PhysicalSlot::A, 2, roles));
+        .with_committed_plan_binding(1, binding(PhysicalSlot::A, 2, roles))
+        .expect("test snapshot capacity");
     match floor::decode_floor(&snap) {
         FloorView::Unknown(floor::FloorFault::ConflictingCompletion) => {}
         other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
@@ -1963,7 +1986,9 @@ fn two_generation_residue_recovers_third_bump() {
     let snap = bank
         .snapshot(FENCE, Some(binding(PhysicalSlot::A, 8, g3_roles)))
         .with_committed_plan_binding(1, binding(PhysicalSlot::A, 6, g1_roles))
-        .with_committed_plan_binding(2, binding(PhysicalSlot::A, 7, g2_roles));
+        .expect("test snapshot capacity")
+        .with_committed_plan_binding(2, binding(PhysicalSlot::A, 7, g2_roles))
+        .expect("test snapshot capacity");
     match floor::decode_floor(&snap) {
         FloorView::Recovering(p) => {
             assert_eq!(p.target(), 7);
@@ -1990,7 +2015,8 @@ fn binding_keyed_to_uncommitted_group_is_unknown() {
     ];
     let snap = bank
         .snapshot(FENCE, None)
-        .with_committed_plan_binding(9, binding(PhysicalSlot::A, 6, roles));
+        .with_committed_plan_binding(9, binding(PhysicalSlot::A, 6, roles))
+        .expect("test snapshot capacity");
     match floor::decode_floor(&snap) {
         FloorView::Unknown(floor::FloorFault::ConflictingCompletion) => {}
         other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
@@ -2020,7 +2046,9 @@ fn duplicate_keyed_committed_binding_is_unknown() {
     let snap = bank
         .snapshot(FENCE, None)
         .with_committed_plan_binding(1, binding(PhysicalSlot::A, 6, roles))
-        .with_committed_plan_binding(1, binding(PhysicalSlot::A, 6, roles));
+        .expect("test snapshot capacity")
+        .with_committed_plan_binding(1, binding(PhysicalSlot::A, 6, roles))
+        .expect("test snapshot capacity");
     match floor::decode_floor(&snap) {
         FloorView::Unknown(floor::FloorFault::OverlappingRoleMap { index: 1 }) => {}
         other => panic!(
@@ -2060,7 +2088,9 @@ fn overlapping_committed_role_maps_are_unknown() {
     let snap = bank
         .snapshot(FENCE, None)
         .with_committed_plan_binding(1, binding(PhysicalSlot::A, 6, g1_roles))
-        .with_committed_plan_binding(2, binding(PhysicalSlot::A, 7, g2_roles));
+        .expect("test snapshot capacity")
+        .with_committed_plan_binding(2, binding(PhysicalSlot::A, 7, g2_roles))
+        .expect("test snapshot capacity");
     match floor::decode_floor(&snap) {
         FloorView::Unknown(floor::FloorFault::OverlappingRoleMap { index: 0 }) => {}
         other => panic!(
@@ -2114,7 +2144,9 @@ fn active_plan_overlapping_committed_role_map_is_unknown() {
     let snap = bank
         .snapshot(FENCE, Some(binding(PhysicalSlot::A, 8, g3_roles)))
         .with_committed_plan_binding(1, binding(PhysicalSlot::A, 6, g1_roles))
-        .with_committed_plan_binding(2, binding(PhysicalSlot::A, 7, g2_roles));
+        .expect("test snapshot capacity")
+        .with_committed_plan_binding(2, binding(PhysicalSlot::A, 7, g2_roles))
+        .expect("test snapshot capacity");
     match floor::decode_floor(&snap) {
         FloorView::Unknown(floor::FloorFault::OverlappingRoleMap { index: 0 }) => {}
         other => panic!(

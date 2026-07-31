@@ -340,19 +340,19 @@ impl FloorSnapshot {
     }
 
     /// Attach one completed plan binding for `group` (R16-1/R17-1). At
-    /// most [`MAX_COMPLETE_RECORDS`] keyed bindings.
+    /// most [`MAX_COMPLETE_RECORDS`] keyed bindings; returns `None` on
+    /// overflow (fail-closed, never panics).
     pub fn with_committed_plan_binding(
         mut self,
         group: u32,
         binding: StageBinding,
-    ) -> FloorSnapshot {
-        assert!(
-            self.committed_plan_count < MAX_COMPLETE_RECORDS,
-            "committed plan binding capacity"
-        );
+    ) -> Option<FloorSnapshot> {
+        if self.committed_plan_count >= MAX_COMPLETE_RECORDS {
+            return None;
+        }
         self.committed_plan_bindings[self.committed_plan_count] = Some((group, binding));
         self.committed_plan_count += 1;
-        self
+        Some(self)
     }
 
     /// The completed plan bindings keyed by group.
