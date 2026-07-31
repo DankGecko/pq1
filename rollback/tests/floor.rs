@@ -1056,3 +1056,83 @@ fn completable_witnesses_with_complete_marker_cell_recovers() {
         other => panic!("expected Recovering, got {}", view_name(&other)),
     }
 }
+
+// ---------------------------------------------------------------------------
+// R12-1 / R12-2
+// ---------------------------------------------------------------------------
+
+#[test]
+fn second_epoch_bump_with_persisted_stage_residue_recovers() {
+    // R12-1 regression: after the first bump completes, STAGEACT(g1)
+    // residue persists forever. The next bank —
+    // COMPLETE(g1,t1) + STAGEACT(g1) + STAGEACT(g2) with the global
+    // binding describing candidate 2 — must decode Recovering(g2),
+    // never Unknown(ConflictingCompletion).
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(5, 1));
+    }
+    bank.clean(encode_complete_record(1));
+    bank.clean(encode_stage_record(1)); // residue from the first bump
+    bank.clean(encode_stage_record(2)); // the active second bump
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(6, 2));
+    }
+    bank.virgin();
+    bank.route1(false);
+    // The global stage binding describes candidate 2 (t = 6), NOT the
+    // committed group's t = 5 — this must not matter. (Roles match the
+    // actual cell indices: g2 floor records at 6–8, reserved virgin 9.)
+    let roles = [
+        (6, PlanRole::Witness),
+        (7, PlanRole::Witness),
+        (8, PlanRole::Witness),
+        (9, PlanRole::Reserved),
+    ];
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, roles))) {
+        FloorView::Recovering(p) => {
+            assert_eq!(p.target(), 6);
+            assert_eq!(p.group(), 2);
+        }
+        FloorView::Unknown(FloorFault::ConflictingCompletion) => {
+            panic!("R12-1 regression: stage residue blocked the second bump")
+        }
+        other => panic!("expected Recovering(g2), got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn contradictory_binding_without_active_stage_is_unknown() {
+    // R12-1 companion: residue only (no active stage) AND a global
+    // binding contradicting the committed target → Unknown.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(1)); // residue, no active stage
+    bank.route1(false);
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, COMPLETABLE_ROLES))) {
+        FloorView::Unknown(FloorFault::ConflictingCompletion) => {}
+        other => panic!("expected ConflictingCompletion, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn route1_read_with_bank_index_is_unknown() {
+    // R12-2: a Route-1-position read carrying a BANK index is never a
+    // Route-1 marker, even at a plausible address.
+    let mut bank = steady_bank(5, 1);
+    let mut snap = bank.snapshot(FENCE_OK, None);
+    let bank_indexed = probe_at(
+        &mut bank.b,
+        5,
+        canonical_cell_addr(5),
+        ProbeScript::Clean(ERASED),
+    );
+    snap.route1_mut()[0] = FloorCell {
+        read: bank_indexed,
+        durability: CLEAN,
+        launch: NO_LAUNCH,
+    };
+    match decode_floor(&snap) {
+        FloorView::Unknown(FloorFault::NonCanonicalMap(MapFault::AddressMismatch { index: 5 })) => {}
+        other => panic!("expected AddressMismatch, got {}", view_name(&other)),
+    }
+}

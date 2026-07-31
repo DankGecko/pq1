@@ -59,6 +59,10 @@ pub const fn canonical_cell_addr(index: u16) -> u32 {
     OTP_ROLLBACK_BANK_BASE + index as u32 * 16
 }
 
+/// The canonical physical QW indices of the two Route-1 markers
+/// (bank-1 page 64 / page 122 first QWs).
+pub const ROUTE1_QW_INDICES: [u16; 2] = [60, 61];
+
 /// The canonical absolute address of Route-1 marker `which` (0 or 1).
 pub const fn canonical_route1_addr(which: usize) -> u32 {
     pqsigner_geometry::page_addr(
@@ -817,6 +821,14 @@ fn validate_physical_map(snapshot: &FloorSnapshot) -> Result<(), FloorFault> {
     }
     for (j, cell) in snapshot.route1().iter().enumerate() {
         if let FreshQwRead::Clean(qw) = &cell.read {
+            // R12-2: the Route-1 read must carry its canonical INDEX
+            // too, mirroring the bank loop — a bank-indexed QW is never
+            // a Route-1 marker.
+            if qw.index() != ROUTE1_QW_INDICES[j] {
+                return Err(FloorFault::NonCanonicalMap(MapFault::AddressMismatch {
+                    index: qw.index(),
+                }));
+            }
             check(&mut seen, &mut n_seen, &mut epoch, qw, canonical_route1_addr(j))?;
         }
     }
@@ -995,27 +1007,21 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     }
     let committed: Option<(u32, u32)> = committed_list[..n_committed].last().copied();
 
-    // R10-1: a stage record for an already-committed group is
-    // SUPERSEDED maintenance residue when its identity MATCHES the
-    // committed group (§11 L3810, L1152: after exact authoritative
-    // COMPLETE, optional close/compaction is maintenance, not
-    // progress). Superseded records are not active stages at all (they
-    // do not interact with the R8-2 cursor rule). Genuinely
-    // incompatible stage/completion evidence keeps rejecting.
+    // R10-1 + R12-1: a stage record for an already-committed group is
+    // SUPERSEDED maintenance residue BY CONSTRUCTION (§11 L3810, L1152:
+    // after exact authoritative COMPLETE, optional close/compaction is
+    // maintenance, not progress). OTP is one-way, so residue persists
+    // forever; its identity needs NO comparison against the CURRENT
+    // candidate's global stage binding — the AliasedGroup rule already
+    // pins each group's records to that group's single target.
+    // Superseded records are not active stages at all (they do not
+    // interact with the R8-2 cursor rule).
     let mut active_stages: [u32; MAX_STAGE_RECORDS] = [0; MAX_STAGE_RECORDS];
     let mut n_active = 0usize;
+    let mut n_superseded = 0usize;
     for &g in &stages[..n_stage] {
-        if let Some(&(_, committed_t)) = committed_list[..n_committed].iter().find(|&&(cg, _)| cg == g)
-        {
-            // Matching identity requires the stage binding to target
-            // exactly the committed target.
-            let binding_matches = snapshot
-                .stage_binding()
-                .is_some_and(|b| b.e().checked_sub(1) == Some(committed_t));
-            if !binding_matches {
-                return FloorView::Unknown(FloorFault::ConflictingCompletion);
-            }
-            // Superseded: not an active stage.
+        if committed_list[..n_committed].iter().any(|&(cg, _)| cg == g) {
+            n_superseded += 1; // residue: not an active stage
         } else {
             active_stages[n_active] = g;
             n_active += 1;
@@ -1023,6 +1029,17 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
     }
     let stages = active_stages;
     let n_stage = n_active;
+    // The ONLY remaining conflict class: residue WITHOUT an active
+    // stage, where the global binding contradicts the committed target.
+    // With an active stage present, the binding belongs to that stage
+    // and is validated in the active arm below.
+    if n_active == 0 && n_superseded > 0 {
+        if let (Some(b), Some((_, committed_t))) = (snapshot.stage_binding(), committed) {
+            if b.e().checked_sub(1) != Some(committed_t) {
+                return FloorView::Unknown(FloorFault::ConflictingCompletion);
+            }
+        }
+    }
 
     // Floor records belonging to NO group context are orphan roles: any
     // record whose group has neither COMPLETE nor STAGE evidence forces
