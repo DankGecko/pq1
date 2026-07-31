@@ -1212,9 +1212,23 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
             }
             // Floor records belonging to NO group context were already
             // rejected by the hoisted orphan-role check above.
-            let t = match t_val {
+            // R15-3: with ZERO surviving floor witnesses (a power cut
+            // immediately after STAGEACT — a LEGAL boundary, since stage
+            // activation precedes the first role program), the target
+            // derives from the authenticated binding. Any witnessed
+            // record MUST agree with the binding's target.
+            let binding_t = match binding.e().checked_sub(1) {
                 Some(t) => t,
-                None => 0,
+                None => return FloorView::Unknown(FloorFault::AmbiguousStage),
+            };
+            let t = match t_val {
+                Some(t) => {
+                    if t != binding_t {
+                        return FloorView::Unknown(FloorFault::AmbiguousStage);
+                    }
+                    t
+                }
+                None => binding_t,
             };
             // FROZEN-OTP-API-3 L1009: `T > F` and checked `T == E - 1`.
             if t == 0 || t <= prior_f || t > crate::arm_token::T_MAX || binding.e().checked_sub(1) != Some(t) {

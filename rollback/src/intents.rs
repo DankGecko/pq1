@@ -222,6 +222,11 @@ fn reverify_artifact<B: RollbackBackend>(
     expect: ArtifactExpectation,
 ) -> Result<(), IntentError> {
     let id = artifact.identity();
+    // R15-2: terminal-authoritative artifacts are re-probed through the
+    // terminal-only path (no PENDING acquisition at all).
+    if expect == ArtifactExpectation::Robust {
+        return reverify_robust(backend, artifact);
+    }
     let recheck = backend
         .reverify_artifact(id)
         .ok_or(IntentError::ArtifactDrift)?;
@@ -256,6 +261,7 @@ fn reverify_artifact<B: RollbackBackend>(
         }
     };
     match expect {
+        ArtifactExpectation::Robust => unreachable!("handled above"),
         ArtifactExpectation::PendingCandidate => {
             for (read, _, launch) in [&recheck.terminal_c0, &recheck.terminal_c1] {
                 if crate::qw_read::BlankVirgin::prove(read, *launch).is_none() {
@@ -295,46 +301,68 @@ fn reverify_artifact<B: RollbackBackend>(
             }
             Ok(())
         }
-        ArtifactExpectation::Robust => {
-            let key_digest = artifact.key().digest();
-            match crate::journal::decode_terminal_set(
-                &recheck.terminal_c0.0,
-                recheck.terminal_c0.1,
-                recheck.terminal_c0.2,
-                &recheck.terminal_c1.0,
-                recheck.terminal_c1.1,
-                recheck.terminal_c1.2,
-                artifact.key(),
-            ) {
-                crate::journal::TerminalSetOutcome::Full(set)
-                    if set.evidence_key() == &key_digest => {}
-                _ => return Err(IntentError::ArtifactDrift),
-            }
-            // R8-3: a robust row also requires state-appropriate
-            // InstallGenerationEvidence (§6.2 L2174–2178). Re-run the
-            // generation decode with terminal evidence (full or
-            // qualified surviving), bound to the artifact's key.
-            let gen = crate::lifecycle::decode_install_generation(
-                artifact,
-                crate::lifecycle::AttributedRead {
-                    read: &recheck.install_id.0,
-                    durability: recheck.install_id.1,
-                    launch: recheck.install_id.2,
-                },
-                crate::lifecycle::AttributedRead {
-                    read: &recheck.install_id_inv.0,
-                    durability: recheck.install_id_inv.1,
-                    launch: recheck.install_id_inv.2,
-                },
-                Some(fw_manifest::v6::LaterLifecycleEvidence::Terminal),
-                Some(trio_epoch),
-            );
-            // R9-2: same reconstructed-id equality on the Robust arm.
-            match gen {
-                Some(g) if g.install_id() == id.install_id => Ok(()),
-                _ => Err(IntentError::ArtifactDrift),
-            }
-        }
+    }
+}
+
+/// The Robust recheck (R15-2): terminal-only acquisition (no PENDING
+/// probe), terminal-only canonical validation (R14-4), terminal set +
+/// install generation against the artifact's sealed key.
+fn reverify_robust<B: RollbackBackend>(
+    backend: &mut B,
+    artifact: &VerifiedArtifact,
+) -> Result<(), IntentError> {
+    let id = artifact.identity();
+    let recheck = backend
+        .reverify_terminal(id)
+        .ok_or(IntentError::ArtifactDrift)?;
+    if recheck.identity != *id {
+        return Err(IntentError::ArtifactDrift);
+    }
+    let trio_epoch = match crate::lifecycle::canonical_terminal_reads(
+        id,
+        &recheck.terminal_c0.0,
+        &recheck.terminal_c1.0,
+    ) {
+        Some(epoch) => epoch,
+        None => return Err(IntentError::ArtifactDrift),
+    };
+    let key_digest = artifact.key().digest();
+    match crate::journal::decode_terminal_set(
+        &recheck.terminal_c0.0,
+        recheck.terminal_c0.1,
+        recheck.terminal_c0.2,
+        &recheck.terminal_c1.0,
+        recheck.terminal_c1.1,
+        recheck.terminal_c1.2,
+        artifact.key(),
+    ) {
+        crate::journal::TerminalSetOutcome::Full(set)
+            if set.evidence_key() == &key_digest => {}
+        _ => return Err(IntentError::ArtifactDrift),
+    }
+    // R8-3: a robust row also requires state-appropriate
+    // InstallGenerationEvidence (§6.2 L2174–2178). Re-run the
+    // generation decode with terminal evidence (full or qualified
+    // surviving), bound to the artifact's key.
+    let gen = crate::lifecycle::decode_install_generation(
+        artifact,
+        crate::lifecycle::AttributedRead {
+            read: &recheck.install_id.0,
+            durability: recheck.install_id.1,
+            launch: recheck.install_id.2,
+        },
+        crate::lifecycle::AttributedRead {
+            read: &recheck.install_id_inv.0,
+            durability: recheck.install_id_inv.1,
+            launch: recheck.install_id_inv.2,
+        },
+        Some(fw_manifest::v6::LaterLifecycleEvidence::Terminal),
+        Some(trio_epoch),
+    );
+    // R9-2: same reconstructed-id equality on the Robust arm.
+    match gen {
+        Some(g) if g.install_id() == id.install_id => Ok(()),
+        _ => Err(IntentError::ArtifactDrift),
     }
 }
 

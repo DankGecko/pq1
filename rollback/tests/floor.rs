@@ -1210,3 +1210,78 @@ fn committed_group_with_unmapped_uncertain_cell_is_unknown() {
         other => panic!("expected UncertainQw, got {}", view_name(&other)),
     }
 }
+
+// ---------------------------------------------------------------------------
+// R15-3: zero-witness stage derives its target from the binding
+// ---------------------------------------------------------------------------
+
+#[test]
+fn zero_witness_stage_with_full_virgin_plan_recovers() {
+    // A power cut immediately after STAGEACT (before the first role
+    // program) is a LEGAL boundary: with the authenticated binding and
+    // full virgin plan capacity the stage is Recovering(T), not Unknown.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(2));
+    // No floor records for the stage; every plan cell is Reserved virgin.
+    for _ in 0..4 {
+        bank.virgin();
+    }
+    bank.route1(false);
+    let roles = [
+        (5, PlanRole::Reserved),
+        (6, PlanRole::Reserved),
+        (7, PlanRole::Reserved),
+        (8, PlanRole::Reserved),
+    ];
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, roles))) {
+        FloorView::Recovering(p) => assert_eq!(p.target(), 6),
+        other => panic!("expected Recovering(6), got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn witnessed_record_disagreeing_with_binding_is_unknown() {
+    // The stage's only witnessed floor record contradicts the
+    // authenticated binding's target.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(2));
+    bank.clean(encode_floor_record(9, 2)); // t=9, but the binding says 6
+    for _ in 0..3 {
+        bank.virgin();
+    }
+    bank.route1(false);
+    let roles = [
+        (5, PlanRole::Witness),
+        (6, PlanRole::Reserved),
+        (7, PlanRole::Reserved),
+        (8, PlanRole::Reserved),
+    ];
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, roles))) {
+        FloorView::Unknown(FloorFault::AmbiguousStage) => {}
+        other => panic!("expected AmbiguousStage, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn zero_witness_stage_with_insufficient_virgins_is_dead() {
+    // Zero witnesses and no reserved capacity: the plan is
+    // mathematically dead → Aborted (completion fence proven).
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(2));
+    bank.add(ProbeScript::AmbiguousOrFault);
+    bank.add(ProbeScript::AmbiguousOrFault);
+    bank.add(ProbeScript::AmbiguousOrFault);
+    bank.add(ProbeScript::AmbiguousOrFault);
+    bank.route1(false);
+    let roles = [
+        (5, PlanRole::Consumed),
+        (6, PlanRole::Consumed),
+        (7, PlanRole::Consumed),
+        (8, PlanRole::Consumed),
+    ];
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, roles))) {
+        FloorView::Aborted(p) => assert_eq!(p.failed_target(), 6),
+        FloorView::Recovering(_) => panic!("a dead zero-witness plan must not recover"),
+        other => panic!("expected Aborted, got {}", view_name(&other)),
+    }
+}

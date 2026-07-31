@@ -13,25 +13,17 @@ use pqsigner_rollback::lifecycle::{decode_lifecycle, LifecycleState, MalformedRe
 const F: u32 = GOLDEN_T; // floor == golden T for the passing rows
 
 /// Plant + acquire the arm token THROUGH the TerminalFirst capability
-/// (R14-3: TAMP evidence is read only after both terminal QWs).
+/// (R14-3 + R15-1: TAMP evidence is read only after both terminal QWs,
+/// and reaches the decoder only as sealed TokenEvidence).
 fn token_for(
     b: &mut TestBackend,
     tf: &pqsigner_rollback::lifecycle::TerminalFirst,
     art: &pqsigner_rollback::evidence::VerifiedArtifact,
     state: ArmState,
-) -> ArmToken {
+) -> pqsigner_rollback::lifecycle::TokenEvidence {
     let binding = binding_of(art);
     b.set_arm_token(Some(ArmToken::encode(state, &binding)));
-    let words = tf.read_arm_token(b).expect("token planted");
-    ArmToken::decode_and_bind(
-        &words,
-        binding.slot,
-        &binding.install_id,
-        &binding.manifest_digest,
-        &binding.secure_hash,
-        &binding.nonsecure_hash,
-    )
-    .expect("token binds")
+    tf.read_arm_token(b).expect("token planted")
 }
 
 #[test]
@@ -220,27 +212,25 @@ fn malformed_binding_mismatched_token() {
     let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    // Token for a DIFFERENT install id.
+    // Token for a DIFFERENT install id (via the test-scaffold mint —
+    // the honest path mints only through the capability).
     let bad_token = {
         let mut binding = binding_of(&art);
         binding.install_id = [0x11; 16];
-        let words = ArmToken::encode(ArmState::ArmReady, &binding);
-        ArmToken::decode_and_bind(
-            &words,
-            binding.slot,
-            &binding.install_id,
-            &binding.manifest_digest,
-            &binding.secure_hash,
-            &binding.nonsecure_hash,
-        )
-        .unwrap()
+        pqsigner_rollback::lifecycle::TokenEvidence::for_test(ArmToken::encode(
+            ArmState::ArmReady,
+            &binding,
+        ))
     };
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     match decode_lifecycle(art, gen, &tf, &pd, Some(bad_token), F)
     {
-        LifecycleState::Malformed(MalformedReason::TokenBindingMismatch) => {}
-        other => panic!("expected Malformed(TokenBindingMismatch), got {}", row_name(&other)),
+        // R15-1: the sealed evidence is decoded against THIS artifact
+        // inside decode_lifecycle — a mismatched install id now fails at
+        // the binding stage, before the tuple comparison.
+        LifecycleState::Malformed(MalformedReason::MissingOrMalformedToken) => {}
+        other => panic!("expected Malformed(MissingOrMalformedToken), got {}", row_name(&other)),
     }
 }
 

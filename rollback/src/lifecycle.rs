@@ -29,6 +29,49 @@ pub struct AttributedRead<'a> {
     pub launch: LaunchAttribution,
 }
 
+/// Sealed arm-token evidence (R15-1): the 24 TAMP words minted ONLY
+/// through [`TerminalFirst::read_arm_token`] — `pub(crate)`
+/// constructor, so `decode_lifecycle`'s probation branch can never be
+/// handed a caller-synthesized bound token. The backend-writer-side raw
+/// `ArmToken::encode`/`decode_and_bind` stays public; the
+/// decode-lifecycle surface requires this sealed evidence.
+pub struct TokenEvidence {
+    words: [u32; crate::arm_token::TOKEN_WORDS],
+}
+
+impl TokenEvidence {
+    pub(crate) fn from_words(words: [u32; crate::arm_token::TOKEN_WORDS]) -> TokenEvidence {
+        TokenEvidence { words }
+    }
+
+    /// Decode + bind the sealed words against the artifact's fields.
+    pub fn decode_and_bind(
+        &self,
+        expected_slot: fw_manifest::v6::PhysicalSlot,
+        install_id: &[u8; 16],
+        manifest_digest: &[u8; 32],
+        secure_hash: &[u8; 32],
+        nonsecure_hash: &[u8; 32],
+    ) -> Result<crate::arm_token::ArmToken, crate::arm_token::TokenError> {
+        crate::arm_token::ArmToken::decode_and_bind(
+            &self.words,
+            expected_slot,
+            install_id,
+            manifest_digest,
+            secure_hash,
+            nonsecure_hash,
+        )
+    }
+
+    /// TEST-SCAFFOLD mint (feature-gated): adversarial tests inject
+    /// crafted token words through this. The honest path remains
+    /// `TerminalFirst::read_arm_token` only.
+    #[cfg(feature = "test-backend")]
+    pub fn for_test(words: [u32; crate::arm_token::TOKEN_WORDS]) -> TokenEvidence {
+        TokenEvidence { words }
+    }
+}
+
 /// Sealed probation evidence (R13-1b): a PENDING read minted ONLY by
 /// [`TerminalFirst::probe_pending`]. `pub(crate)` constructor — no
 /// other public path exists, so probation evidence can only exist as
@@ -142,8 +185,8 @@ impl TerminalFirst {
     pub fn read_arm_token<B: crate::backend::RollbackBackend>(
         &self,
         backend: &mut B,
-    ) -> Option<[u32; crate::arm_token::TOKEN_WORDS]> {
-        backend.read_arm_token()
+    ) -> Option<TokenEvidence> {
+        backend.read_arm_token().map(TokenEvidence::from_words)
     }
 
     /// TEST-SCAFFOLD constructor (feature-gated): adversarial tests
@@ -371,7 +414,7 @@ pub fn decode_lifecycle(
     generation: Option<InstallGenerationEvidence>,
     terminals: &TerminalFirst,
     pending: &PendingEvidence,
-    token: Option<ArmToken>,
+    token: Option<TokenEvidence>,
     floor: u32,
 ) -> LifecycleState {
     let (terminal_c0, terminal_c1) = terminals.terminals();
@@ -499,8 +542,24 @@ pub fn decode_lifecycle(
             if !generation_matches(&generation, &artifact, true, trio_epoch) {
                 return LifecycleState::Malformed(MalformedReason::BadInstallGeneration);
             }
+            // R15-1: the token evidence is sealed capability output;
+            // it is decoded and bound HERE, against this artifact.
+            let id = artifact.identity();
             let token = match token {
-                Some(token) => token,
+                Some(evidence) => match evidence.decode_and_bind(
+                    id.slot,
+                    &id.install_id,
+                    &id.manifest_digest,
+                    &id.secure_hash,
+                    &id.nonsecure_hash,
+                ) {
+                    Ok(token) => token,
+                    Err(_) => {
+                        return LifecycleState::Malformed(
+                            MalformedReason::MissingOrMalformedToken,
+                        )
+                    }
+                },
                 None => {
                     return LifecycleState::Malformed(MalformedReason::MissingOrMalformedToken)
                 }

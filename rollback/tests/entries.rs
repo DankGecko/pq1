@@ -130,17 +130,9 @@ fn pending_row(
         ProbeScript::Clean(ERASED),
         ProbeScript::Clean(fw_manifest::v6::QW_PENDING),
     );
-    // R14-3: the token evidence is acquired THROUGH the capability.
-    let words = tf.read_arm_token(backend).expect("token planted");
-    let tok = ArmToken::decode_and_bind(
-        &words,
-        binding.slot,
-        &binding.install_id,
-        &binding.manifest_digest,
-        &binding.secure_hash,
-        &binding.nonsecure_hash,
-    )
-    .unwrap();
+    // R14-3 + R15-1: the token evidence is acquired THROUGH the
+    // capability and passed sealed; decode_lifecycle binds it.
+    let tok = tf.read_arm_token(&mut *backend).expect("token planted");
     let gen = Some(full_generation(backend, &art, 23, 24));
     backend.set_artifact_script(slot, pending_script(slot, r, e, install_id));
     let row = decode_lifecycle(art, gen, &tf, &pd, Some(tok), m.security_epoch - 1);
@@ -1097,15 +1089,6 @@ fn probation_surviving_install_generation_candidate_hands_off() {
         .expect("manifest verifies");
     let binding = binding_of(&art);
     backend.set_arm_token(Some(ArmToken::encode(ArmState::ArmReady, &binding)));
-    let tok = ArmToken::decode_and_bind(
-        &ArmToken::encode(ArmState::ArmReady, &binding),
-        binding.slot,
-        &binding.install_id,
-        &binding.manifest_digest,
-        &binding.secure_hash,
-        &binding.nonsecure_hash,
-    )
-    .unwrap();
     let (tf, pd) = probe_journal(
         &mut backend,
         &art,
@@ -1113,6 +1096,7 @@ fn probation_surviving_install_generation_candidate_hands_off() {
         ProbeScript::Clean(ERASED),
         ProbeScript::Clean(fw_manifest::v6::QW_PENDING),
     );
+    let tok = tf.read_arm_token(&mut backend).expect("token planted");
     // Surviving generation: id half exact, inv half indeterminate
     // (durability-ambiguous), with later-lifecycle evidence.
     let idq = probe_at(&mut backend, 4, art.identity().install_id_qw_address(), ProbeScript::Clean(INSTALL_ID));
@@ -1356,6 +1340,12 @@ fn recheck_rejects_terminals_at_another_artifacts_addresses() {
         fn reverify_artifact(&mut self, identity: &pqsigner_rollback::evidence::ArtifactIdentity) -> Option<ArtifactRecheck> {
             self.reverify_impl(identity)
         }
+        fn reverify_terminal(
+            &mut self,
+            identity: &pqsigner_rollback::evidence::ArtifactIdentity,
+        ) -> Option<pqsigner_rollback::backend::TerminalRecheck> {
+            self.inner.reverify_terminal(identity)
+        }
     }
 
     let p = pass();
@@ -1506,15 +1496,8 @@ fn cross_epoch_install_halves_are_rejected_in_both_decode_paths() {
     );
     let tok = {
         let binding = binding_of(&art);
-        ArmToken::decode_and_bind(
-            &ArmToken::encode(ArmState::ArmReady, &binding),
-            binding.slot,
-            &binding.install_id,
-            &binding.manifest_digest,
-            &binding.secure_hash,
-            &binding.nonsecure_hash,
-        )
-        .unwrap()
+        b8.set_arm_token(Some(ArmToken::encode(ArmState::ArmReady, &binding)));
+        tf.read_arm_token(&mut b8).expect("token planted")
     };
     match decode_lifecycle(art, gen, &tf, &pd, Some(tok), GOLDEN_T) {
         pqsigner_rollback::lifecycle::LifecycleState::Malformed(
@@ -1650,4 +1633,52 @@ fn degraded_repair_epoch_bump_requires_receipt() {
         ),
         Err(IntentError::MissingPreflight)
     ));
+}
+
+// ---------------------------------------------------------------------------
+// R15-2: terminal-authoritative recheck never reads PENDING
+// ---------------------------------------------------------------------------
+
+#[test]
+fn robust_recheck_succeeds_with_faulting_pending_qw() {
+    // A faulting PENDING QW (ECC double-bit) must be irrelevant to a
+    // terminal-authoritative artifact: the Robust recheck path never
+    // probes it. A probation candidate is still rejected.
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+
+    // (a) Robust leg: boot_accepted_from_aborted with a faulting PENDING QW.
+    let failed = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES);
+    let proof = dead_proof(GOLDEN_T - 1, failed);
+    let boot = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1);
+    let intent = CheckedAbortedAcceptedIntent::new(proof, boot).expect("intent");
+    let mut backend = TestBackend::new(7);
+    backend.set_floor_script(dead_floor_script(GOLDEN_T - 1, binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, DEAD_ROLES)));
+    let mut script = robust_script(PhysicalSlot::B, GOLDEN_R + 1, GOLDEN_E - 1, INSTALL_ID);
+    script.pending.outcome = ProbeScript::Uncorrectable; // ECCD on PENDING
+    backend.set_artifact_script(PhysicalSlot::B, script);
+    assert!(
+        boot_accepted_from_aborted(&mut backend, intent).is_ok(),
+        "robust recheck must never read PENDING (R15-2)"
+    );
+
+    // (b) PendingCandidate leg: same faulting PENDING → ArtifactDrift.
+    let steady = steady_proof_at(GOLDEN_T);
+    let fallback = accepted_artifact(&p, &mut setup, PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E);
+    let mut backend = TestBackend::new(7);
+    let row = pending_row(&p, &mut backend, PhysicalSlot::A, GOLDEN_R, GOLDEN_E, ArmState::ArmReady, INSTALL_ID);
+    let intent =
+        CheckedSteadyProbationIntent::new(steady, fallback, row, None).expect("intent");
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
+    backend.set_artifact_script(
+        PhysicalSlot::B,
+        robust_script(PhysicalSlot::B, GOLDEN_R - 1, GOLDEN_E, INSTALL_ID),
+    );
+    let mut script = pending_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E, INSTALL_ID);
+    script.pending.outcome = ProbeScript::Uncorrectable; // ECCD on PENDING
+    backend.set_artifact_script(PhysicalSlot::A, script);
+    assert_eq!(
+        arm_probation_from_steady(&mut backend, intent).unwrap_err(),
+        IntentError::ArtifactDrift
+    );
 }

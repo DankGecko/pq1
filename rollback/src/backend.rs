@@ -101,6 +101,23 @@ pub struct ArtifactRecheck {
     pub install_id_inv: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
 }
 
+/// Terminal-only artifact recheck (R15-2): the terminal QWs and
+/// install-identity halves, NO PENDING probe — the physical acquisition
+/// for terminal-authoritative (Robust) artifacts never touches the
+/// PENDING field at all.
+pub struct TerminalRecheck {
+    /// Identity re-derived from the re-probed, re-verified manifest.
+    pub identity: crate::evidence::ArtifactIdentity,
+    /// `QW_CONFIRMED_0` fresh read + attributions.
+    pub terminal_c0: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
+    /// `QW_CONFIRMED_1` fresh read + attributions.
+    pub terminal_c1: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
+    /// `QW_INSTALL_ID` fresh read + attributions.
+    pub install_id: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
+    /// `QW_INSTALL_ID_INV` fresh read + attributions.
+    pub install_id_inv: (crate::qw_read::FreshQwRead, crate::qw_read::Durability, crate::qw_read::LaunchAttribution),
+}
+
 /// The mutation surface the six entries may touch. Deliberately narrow:
 /// token transitions and floor-plan begin/resume ONLY — there is no
 /// generic write method, so an entry physically cannot reach manifests,
@@ -138,6 +155,13 @@ pub trait RollbackBackend {
         &mut self,
         identity: &crate::evidence::ArtifactIdentity,
     ) -> Option<ArtifactRecheck>;
+
+    /// Terminal-only variant for terminal-authoritative (Robust)
+    /// artifacts (R15-2): never probes the PENDING QW.
+    fn reverify_terminal(
+        &mut self,
+        identity: &crate::evidence::ArtifactIdentity,
+    ) -> Option<TerminalRecheck>;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +172,7 @@ pub trait RollbackBackend {
 mod scripted {
     use super::{
         ArmTransitionPermit, ArtifactRecheck, FloorBeginPermit, FloorResumePermit, Mutation,
-        RollbackBackend,
+        RollbackBackend, TerminalRecheck,
     };
     use crate::floor::{
         self, CompletionLaunchEvidence, EpochBumpReceipt, FloorView, StageBinding,
@@ -557,6 +581,66 @@ mod scripted {
                 terminal_c0,
                 terminal_c1,
                 pending,
+                install_id: install,
+                install_id_inv: install_inv,
+            })
+        }
+
+        fn reverify_terminal(
+            &mut self,
+            identity: &crate::evidence::ArtifactIdentity,
+        ) -> Option<TerminalRecheck> {
+            // R15-2: never reads the PENDING QW. Duplicate the manifest
+            // leg of reverify_artifact, minus the pending probe.
+            let idx = match identity.slot {
+                fw_manifest::v6::PhysicalSlot::A => 0,
+                fw_manifest::v6::PhysicalSlot::B => 1,
+            };
+            let (page, pk_seed, pk_root, t_c0, t_c1, iid, iid_inv) = {
+                let script = self.artifact_scripts[idx].as_ref()?;
+                (
+                    script.page,
+                    script.pk_seed,
+                    script.pk_root,
+                    script.terminal_c0,
+                    script.terminal_c1,
+                    script.install_id,
+                    script.install_id_inv,
+                )
+            };
+            let m = fw_manifest::v6::parse_and_validate(&page, identity.slot).ok()?;
+            if !m.stored_digest_matches() {
+                return None;
+            }
+            if !m.verify_with_embedded_key(&pk_seed, &pk_root) {
+                return None;
+            }
+            let ProbeScript::Clean(install_id) = iid.outcome else {
+                return None;
+            };
+            if let ProbeScript::Clean(inv) = iid_inv.outcome {
+                let mut complement = [0u8; 16];
+                for (i, b) in complement.iter_mut().enumerate() {
+                    *b = !install_id[i];
+                }
+                if inv != complement {
+                    return None;
+                }
+            }
+            let derived = crate::evidence::ArtifactIdentity::derive(&m, install_id)?;
+
+            let mk = |b: &mut Self, index: u16, addr: u32, s: &JournalQwScript| {
+                assert!(b.script(index, addr, s.outcome));
+                (b.fresh_probe(index, addr), s.durability, s.launch)
+            };
+            let terminal_c0 = mk(self, 40, derived.confirmed_0_qw_address, &t_c0);
+            let terminal_c1 = mk(self, 41, derived.confirmed_1_qw_address, &t_c1);
+            let install = mk(self, 43, derived.install_id_qw_address(), &iid);
+            let install_inv = mk(self, 44, derived.install_id_inv_qw_address(), &iid_inv);
+            Some(TerminalRecheck {
+                identity: derived,
+                terminal_c0,
+                terminal_c1,
                 install_id: install,
                 install_id_inv: install_inv,
             })
