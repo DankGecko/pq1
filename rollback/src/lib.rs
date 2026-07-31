@@ -50,6 +50,14 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+// The fake/scripted backend is host-test scaffolding only; enabling it
+// for a bare-metal build is a hard error (same fence style as
+// secure/src/nsc/mod.rs).
+#[cfg(all(feature = "test-backend", target_os = "none"))]
+compile_error!(
+    "test-backend must never be enabled for bare-metal/production builds"
+);
+
 pub mod arm_token;
 pub mod backend;
 pub mod evidence;

@@ -438,7 +438,10 @@ pub fn probe_journal(
         }
     };
     let tf = TerminalFirst::probe(b, id, 30, attr(&c0), 31, attr(&c1));
-    let pd_read = probe_at(b, 32, id.pending_qw_address, pd);
+    // R11-3: the PENDING read is minted THROUGH the capability — it
+    // cannot precede the terminal probes.
+    assert!(b.script(32, id.pending_qw_address, pd));
+    let pd_read = tf.probe_pending(b, 32, id.pending_qw_address);
     (tf, pd_read)
 }
 

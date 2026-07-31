@@ -77,6 +77,20 @@ impl TerminalFirst {
         )
     }
 
+    /// Acquire PENDING evidence — ONLY through this capability
+    /// (R11-3): the probation branch's reads are minted by the
+    /// capability itself, so terminal-first acquisition is enforced by
+    /// construction, not convention. (Token evidence is separately
+    /// bound via `ArmToken::decode_and_bind`.)
+    pub fn probe_pending<P: crate::qw_read::FreshArrayProbe>(
+        &self,
+        backend: &mut P,
+        index: u16,
+        addr: u32,
+    ) -> FreshQwRead {
+        backend.fresh_probe(index, addr)
+    }
+
     /// TEST-SCAFFOLD constructor (feature-gated): adversarial tests
     /// inject mis-addressed or cross-epoch terminal reads through this.
     #[cfg(feature = "test-backend")]

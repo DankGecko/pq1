@@ -35,12 +35,25 @@ pub struct ArtifactIdentity {
     pub nonsecure_hash: [u8; 32],
 }
 
+// R11-4: the manifest page assignment is pinned against the registry at
+// compile time — a registry move fails the build instead of drifting
+// silently green.
+const _: () = assert!(matches!(
+    pqsigner_geometry::owner_of(pqsigner_geometry::Bank::One, 5),
+    Some(pqsigner_geometry::Owner::ManifestA)
+));
+const _: () = assert!(matches!(
+    pqsigner_geometry::owner_of(pqsigner_geometry::Bank::One, 6),
+    Some(pqsigner_geometry::Owner::ManifestB)
+));
+
 impl ArtifactIdentity {
     /// Model derivation of the journal QW addresses from the frozen §5
     /// registry: slot A's manifest is bank-1 page 5, slot B's page 6
-    /// (`Owner::ManifestA/B`), and the journal QWs sit at the v6 offsets.
-    /// NOTE (model choice): the legacy bench layout places manifests at
-    /// pages 4/5; this pure core targets the frozen registry layout.
+    /// (`Owner::ManifestA/B`, const-pinned above), and the journal QWs
+    /// sit at the v6 offsets. NOTE (model choice): the legacy bench
+    /// layout places manifests at pages 4/5; this pure core targets the
+    /// frozen registry layout.
     pub fn manifest_page_start(slot: PhysicalSlot) -> u32 {
         let page = match slot {
             PhysicalSlot::A => 5,

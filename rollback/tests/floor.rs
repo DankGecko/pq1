@@ -947,3 +947,112 @@ fn next_generation_stage_still_recovers() {
         other => panic!("expected Recovering, got {}", view_name(&other)),
     }
 }
+
+// ---------------------------------------------------------------------------
+// R11-1 / R11-2
+// ---------------------------------------------------------------------------
+
+#[test]
+fn first_bump_stage_with_anomalous_route1_pair_is_unknown() {
+    // R11-1: route1[0] = exact BASE0 marker, route1[1] = garbage — the
+    // pair is anomalous, so no first-bump stage may bind BASE0, even
+    // though base_proof_ok alone would admit it.
+    let mut bank = Bank::new();
+    bank.clean(encode_stage_record(1));
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(1, 1));
+    }
+    bank.virgin();
+    bank.route1(true); // both exact BASE0 markers, then corrupt one
+    let mut snap = bank.snapshot(FENCE_OK, Some(binding(PhysicalSlot::A, 2, FIRST_BUMP_ROLES)));
+    let garbage = probe_at(
+        &mut bank.b,
+        61,
+        canonical_route1_addr(1),
+        ProbeScript::Clean([0x42; 16]),
+    );
+    snap.route1_mut()[1] = FloorCell {
+        read: garbage,
+        durability: CLEAN,
+        launch: MAY_LAUNCH,
+    };
+    let view = decode_floor(&snap);
+    if matches!(view, FloorView::Recovering(_) | FloorView::Aborted(_)) {
+        panic!("an anomalous Route-1 pair must not admit a first-bump stage");
+    }
+    assert!(matches!(view, FloorView::Unknown(_)), "expected Unknown");
+}
+
+#[test]
+fn first_bump_stage_with_exact_base0_pair_still_recovers() {
+    // R11-1 companion: the exact BASE0 pair still admits the first bump.
+    let mut bank = Bank::new();
+    bank.clean(encode_stage_record(1));
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(1, 1));
+    }
+    bank.virgin();
+    bank.route1(true);
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 2, FIRST_BUMP_ROLES))) {
+        FloorView::Recovering(p) => assert_eq!(p.target(), 1),
+        other => panic!("expected Recovering, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn completable_witnesses_without_complete_marker_cell_is_dead() {
+    // R11-2: exact stage + three witnesses + one Reserved virgin, and
+    // NO other virgin cell for the COMPLETE marker — mathematically
+    // dead even though the witnesses are all present.
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(5, 1));
+    }
+    bank.clean(encode_complete_record(1));
+    bank.clean(encode_stage_record(2));
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(6, 2));
+    }
+    bank.virgin(); // index 8: the ONLY virgin, and it is plan-Reserved
+    // Fill every remaining cell with committed-group records so no free
+    // virgin survives for the COMPLETE marker.
+    for _ in 0..(RESERVED_ROLLBACK_QWS - 9) {
+        bank.clean(encode_floor_record(5, 1));
+    }
+    bank.route1(false);
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, RECOVERING_ROLES))) {
+        FloorView::Aborted(p) => {
+            assert_eq!(p.floor(), 5);
+            assert_eq!(p.failed_target(), 6);
+        }
+        FloorView::Recovering(_) => {
+            panic!("a plan with no COMPLETE-marker cell must never be Recovering")
+        }
+        other => panic!("expected Aborted, got {}", view_name(&other)),
+    }
+}
+
+#[test]
+fn completable_witnesses_with_complete_marker_cell_recovers() {
+    // R11-2 companion: same shape, but one free virgin beyond the
+    // plan-Reserved cell funds the COMPLETE marker.
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(5, 1));
+    }
+    bank.clean(encode_complete_record(1));
+    bank.clean(encode_stage_record(2));
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(6, 2));
+    }
+    bank.virgin(); // index 8: plan-Reserved
+    bank.virgin(); // index 9: free — the COMPLETE marker cell
+    for _ in 0..(RESERVED_ROLLBACK_QWS - 10) {
+        bank.clean(encode_floor_record(5, 1));
+    }
+    bank.route1(false);
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 7, RECOVERING_ROLES))) {
+        FloorView::Recovering(p) => assert_eq!(p.target(), 6),
+        other => panic!("expected Recovering, got {}", view_name(&other)),
+    }
+}

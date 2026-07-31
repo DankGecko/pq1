@@ -1119,9 +1119,11 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
             let (prior_f, prior_group) = match committed {
                 Some((cg, ct)) => (ct, GroupIdentity::Group(cg)),
                 None => {
-                    if !base_proof_ok {
-                        // A first-bump stage may bind BASE0 only through
-                        // the canonical proof (§7.1 L2577–2579).
+                    // R11-1: a first-bump stage may bind BASE0 only
+                    // through the FULL canonical proof — an anomalous
+                    // Route-1 pair is fatal here exactly as on the
+                    // no-stage BASE0 branch (§7.1 L2574–2579).
+                    if route1_anomaly || !base_proof_ok {
                         return FloorView::Unknown(FloorFault::MissingBaseProof);
                     }
                     (0, GroupIdentity::Base0)
@@ -1190,9 +1192,15 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                 }
             }
             // Finite plan: achievable clean witnesses = clean records +
-            // reserved virgin claims (and only those).
+            // reserved virgin claims (and only those). R11-2: the plan
+            // must ALSO leave a canonically-virgin cell for the COMPLETE
+            // marker (the model codec draws STAGEACT/COMPLETE from the
+            // same bank — a plan that can gather the witnesses but has
+            // no marker cell is mathematically dead by construction, and
+            // post-errata Aborted has no new-release path).
             let achievable = clean_records + n_reserved;
-            if achievable >= INITIAL_THRESHOLD {
+            let complete_marker_available = n_virgin > n_reserved;
+            if achievable >= INITIAL_THRESHOLD && complete_marker_available {
                 FloorView::Recovering(RecoveryProof {
                     prior_f,
                     prior_group,
