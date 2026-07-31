@@ -145,8 +145,11 @@ jobs:
       # control must still report insecure (5 secure + 1 insecure).
       - name: cargo-checkct relational CT proof (5 secure + shuffle control)
         run: |
-          eval $(opam env)
-          export PATH="$(dirname "$GITHUB_WORKSPACE")/cargo-checkct/target/release:$PATH"
+          eval "$(opam env)"
+          # Declared and assigned separately: `export X="$(...)"` masks the
+          # command's exit status behind export's own (SC2155).
+          checkct_bin="$(dirname "$GITHUB_WORKSPACE")/cargo-checkct/target/release"
+          export PATH="$checkct_bin:$PATH"
           out=$(cargo-checkct run --dir tools/sca --timeout 300 2>&1 || true)
           echo "$out"
           secure=$(printf '%s\n' "$out" | grep -c 'Program status is : secure')
@@ -301,5 +304,5 @@ jobs:
           echo "MAUDE_LIB=$HOME/.local/bin" >> "$GITHUB_ENV"
       - name: verify-protocol-models (proverif + tamarin — the 8 symbolic models)
         run: |
-          eval $(opam env)
+          eval "$(opam env)"
           make verify-protocol-models PROTOCOL_MODELS=proverif,tamarin

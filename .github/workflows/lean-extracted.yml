@@ -101,7 +101,14 @@ jobs:
       # built from source. Best-effort: a cache miss falls through to a source
       # build rather than failing the job.
       - name: fetch prebuilt mathlib cache
-        run: cd contracts/verification/extracted && lake exe cache get || true
+        # Best-effort: a cache miss must fall through to a source build, not
+        # fail the job. Written as an explicit `if` because `A && B || C` is
+        # not if-then-else — `C` also runs when `A` succeeds and `B` fails,
+        # which is the SC2015 footgun.
+        run: |
+          if cd contracts/verification/extracted; then
+            lake exe cache get || true
+          fi
       # Build the Extracted ranks + run the no-sorry / no-sorryAx axiom gate.
       # GUARANTEED <16 GB: FormatDecimalSpec is carved out of the default target
       # (verified locally 2026-07-07 — this step peaks ~2.3 GB).

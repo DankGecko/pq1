@@ -16,7 +16,13 @@ name: Workflow security (zizmor + actionlint + gitleaks)
 #     steps (24 x medium `artipacked`: the checkout token was being left in
 #     `.git/config` for every subsequent step in the job to reuse).
 #   * actionlint 1.7.7 over `.github/workflows/**` -> 0 findings, modulo one
-#     ignored rule; see the `-ignore` flag below.
+#     ignored rule; see the `-ignore` flag below. NOTE: actionlint shells out to
+#     `shellcheck` when it is on PATH, and GitHub's runner image HAS it. The
+#     first baseline was taken on a box without it and therefore MISSED four
+#     real findings (SC2015 in lean-extracted.yml, SC2046 x2 + SC2155 in
+#     nightly.yml), which promptly turned this gate red on its first CI run.
+#     They are fixed in the same commit that adds this note. If you re-baseline,
+#     install shellcheck first or you will repeat the mistake.
 #   * gitleaks 8.24.0 over the FULL history (4754 commits, 535 MB) with
 #     `.gitleaks.toml` -> 0 findings. 4372 raw hits triaged, all false
 #     positives, all allowlisted by family in that file.
@@ -159,7 +165,15 @@ jobs:
         run: gitleaks git . --no-banner --redact -c .gitleaks.toml --log-opts=--all
 
   dependency-review:
-    name: dependency-review (PR only)
+    # ADVISORY, and not by preference. The action requires the repository's
+    # Dependency graph to be enabled (Settings > Code security), which needs
+    # repo-admin — the maintainer landing this has push+triage only. Without it
+    # the action fails with "Dependency review is not supported on this
+    # repository", which is an availability failure, not a policy violation, and
+    # must not gate merges. Flip it to a hard gate the day the graph is on;
+    # `cargo-deny`/`cargo-vet` remain the authoritative deciders either way.
+    continue-on-error: true
+    name: dependency-review (PR only — advisory until Dependency graph is on)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
