@@ -441,6 +441,71 @@ jobs:
       - name: cargo miri test (FI / tx-core / NS-ptr)
         run: make miri
 
+  slither:
+    # HARD GATE at medium+ severity. This closes the repo's own oldest
+    # self-identified pre-launch action: contracts/smart-wallet/AUDIT_STATIC_ANALYSIS.md
+    # (2026-05-22) said "We do not currently gate CI on a clean slither run.
+    # Pre-launch action: add slither + 4naly3er" and nothing landed for two
+    # months. It also said to add it to contracts/smart-wallet/.github/workflows/
+    # test.yml — a file GitHub never executes, so following the TODO literally
+    # would have produced a check that silently never ran.
+    #
+    # Baseline before it was made blocking: 15 contracts / 102 detectors / 31
+    # findings — ZERO high, three medium, rest informational+low. The three
+    # mediums are triaged INDIVIDUALLY in contracts/smart-wallet/slither.db.json
+    # (Slither's triage database keys on the finding, not the detector), with
+    # the reasoning written out in AUDIT_STATIC_ANALYSIS.md. A new instance of
+    # the same detector elsewhere still fails the build — verified by deleting a
+    # triage entry and watching this go red.
+    name: Slither (contracts static analysis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: install foundry (slither drives `forge build` for this project)
+        uses: foundry-rs/foundry-toolchain@c7450ba673e133f5ee30098b3b54f444d3a2ca2d # v1
+      - name: install slither (pinned)
+        run: pip install "slither-analyzer==0.11.6"
+      # SAME restore as the contracts job, deliberately duplicated rather than
+      # simplified to `forge install`: lib/ is gitignored, the deps are
+      # git-pinned by foundry.lock, and the set must be EXACT. A different lib
+      # set changes the auto-generated remappings, which changes what solc
+      # compiles — so an approximate restore would have slither analysing
+      # something other than what ships.
+      - name: Restore pinned Foundry libs (foundry.lock revs)
+        working-directory: contracts/smart-wallet
+        run: |
+          set -euo pipefail
+          declare -A URL=(
+            [forge-std]=https://github.com/foundry-rs/forge-std
+            [solady]=https://github.com/vectorized/solady
+            [account-abstraction]=https://github.com/eth-infinitism/account-abstraction
+            [openzeppelin-contracts]=https://github.com/openzeppelin/openzeppelin-contracts
+            [p256-verifier]=https://github.com/daimo-eth/p256-verifier
+            [safe-singleton-deployer-sol]=https://github.com/wilsoncusack/safe-singleton-deployer-sol
+            [webauthn-sol]=https://github.com/base-org/webauthn-sol
+          )
+          mkdir -p lib
+          for key in $(jq -r 'keys[]' foundry.lock); do
+            name="${key#lib/}"
+            url="${URL[$name]:-}"
+            if [ -z "$url" ]; then
+              echo "::error::foundry.lock dep '$name' has no URL mapping in ci.yml — add it"; exit 1
+            fi
+            rev=$(jq -r --arg k "$key" '.[$k].rev' foundry.lock)
+            git clone -q "$url" "lib/$name"
+            git -C "lib/$name" -c advice.detachedHead=false checkout -q "$rev"
+            echo "  restored $name @ $rev"
+          done
+      - name: 'slither (config-driven: filter_paths, exclude_dependencies, fail_on=medium)'
+        working-directory: contracts/smart-wallet
+        run: slither .
+
   contracts:
     name: Contracts (forge test)
     runs-on: ubuntu-latest

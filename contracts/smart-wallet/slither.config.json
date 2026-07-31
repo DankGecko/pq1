@@ -1,0 +1,6 @@
+{
+  "filter_paths": "lib/|reference/|test/|script/",
+  "exclude_dependencies": true,
+  "fail_on": "medium",
+  "disable_color": true
+}

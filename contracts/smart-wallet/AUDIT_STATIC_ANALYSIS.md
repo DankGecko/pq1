@@ -20,8 +20,48 @@ slither . --filter-paths "lib/|reference/|test/|script/" \
           --solc-remaps "$(cat remappings.txt | tr '\n' ' ')"
 ```
 
-We do not currently gate CI on a clean slither run. Pre-launch action:
-add slither + 4naly3er to `.github/workflows/test.yml`.
+~~We do not currently gate CI on a clean slither run. Pre-launch action:
+add slither + 4naly3er to `.github/workflows/test.yml`.~~
+
+**LANDED 2026-07-31.** Slither is now a hard CI gate at **medium+ severity**,
+in the `Slither (contracts static analysis)` job of the repository-root
+`.github/workflows/ci.yml`.
+
+> Note the correction to the original TODO: it said to add the gate to
+> `.github/workflows/test.yml`. That file **never runs** — GitHub executes
+> workflows only from the repository-root `.github/workflows/`, so everything
+> under `contracts/smart-wallet/.github/` is inert (see the README there).
+> Landing the gate where the TODO pointed would have produced a check that
+> silently never executed.
+
+Configuration is `slither.config.json` (filter paths, `exclude_dependencies`,
+`fail_on: medium`), so `slither .` from this directory reproduces CI exactly.
+
+### Baseline, and the three triaged findings
+
+First clean run: **15 contracts, 102 detectors, 31 findings — zero High, three
+Medium, the rest Informational/Low.** The three Mediums are suppressed
+*individually* in `slither.db.json` (Slither's triage database, which keys on
+the finding, not the detector) rather than by disabling detectors — so a NEW
+instance of any of these detectors anywhere else still fails the build.
+Verified: removing one entry from the triage DB turns the gate red.
+
+| Finding | Where | Why it is not a defect |
+|---|---|---|
+| `uninitialized-local` — `ok` | `PQSmartWalletFactory.createAccount` L106 | `bool ok;` is assigned in **both** arms of the `try/catch` that follows (`ok = v` / `ok = false`) before its only read. Slither's dataflow does not model try/catch assignment completeness. Note the direction of the residual risk even if it were right: Solidity zero-initialises `bool`, and the read is `if (!ok) revert InvalidFactorySignature()` — so the failure mode is **refusing a valid deploy, never accepting an invalid one.** Fail-closed by construction. |
+| `divide-before-multiply` ×2 | `PQSmartWallet._validateSignature` L406, `_erc1271IsValidSignatureNowCalldata` L606 | `((C10_SIG_LEN + 31) / 32) * 32` is the standard round-up-to-a-32-byte-word idiom, over the **compile-time constant** `C10_SIG_LEN = 4008` (→ 4032). There is no runtime input and the truncation is the *intent*, not a precision bug. |
+
+Suppressions live in `slither.db.json`, deliberately **not** as
+`// slither-disable-next-line` annotations in the contracts: a comment added to
+a `src/` file changes solc's metadata hash, therefore the deployed codehash, and
+would break the codehash-freeze tests (`PinnedCodehashes.t.sol`,
+`DeployedBytecodeReproCheck.t.sol`). An external triage file has no such effect.
+
+### Still open from the original TODO
+
+`4naly3er` and `aderyn` are not yet wired — they are a second and third
+viewpoint with low overlap, and each needs its own baseline triage before it can
+gate. Tracked on the issue this work came from.
 
 ---
 
