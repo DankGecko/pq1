@@ -228,17 +228,32 @@ fn reverify_artifact<B: RollbackBackend>(
     if recheck.identity != *id {
         return Err(IntentError::ArtifactDrift);
     }
-    // R9-3: the recheck applies the SAME canonical-address/one-epoch
-    // validation as decode_lifecycle (R3-2) — exact bytes at another
-    // artifact's QW addresses carry no authority.
-    let trio_epoch = match crate::lifecycle::canonical_journal_reads(
-        id,
-        &recheck.terminal_c0.0,
-        &recheck.terminal_c1.0,
-        &recheck.pending.0,
-    ) {
-        Some(epoch) => epoch,
-        None => return Err(IntentError::ArtifactDrift),
+    // R9-3 + R14-4: canonical validation matches the row's authority
+    // class. A terminal-authoritative (Robust) artifact validates ONLY
+    // its terminal reads (PENDING is "not read; non-authoritative",
+    // R13-1a); a probation candidate validates the full trio.
+    let trio_epoch = match expect {
+        ArtifactExpectation::Robust => {
+            match crate::lifecycle::canonical_terminal_reads(
+                id,
+                &recheck.terminal_c0.0,
+                &recheck.terminal_c1.0,
+            ) {
+                Some(epoch) => epoch,
+                None => return Err(IntentError::ArtifactDrift),
+            }
+        }
+        ArtifactExpectation::PendingCandidate => {
+            match crate::lifecycle::canonical_journal_reads(
+                id,
+                &recheck.terminal_c0.0,
+                &recheck.terminal_c1.0,
+                &recheck.pending.0,
+            ) {
+                Some(epoch) => epoch,
+                None => return Err(IntentError::ArtifactDrift),
+            }
+        }
     };
     match expect {
         ArtifactExpectation::PendingCandidate => {
@@ -641,7 +656,11 @@ impl CheckedRecoveryIntent {
         let target_matches = art.t() == proof.target();
         let slot_matches = art.slot() == proof.candidate_slot();
         let digest_matches = art.identity().manifest_digest == *proof.candidate_digest();
-        if !(target_matches && slot_matches && digest_matches) {
+        // R14-2: the join binds the COMPLETE stable artifact identity —
+        // another install generation of the SAME signed manifest must
+        // never satisfy it.
+        let install_matches = art.install_id() == proof.candidate_install_id();
+        if !(target_matches && slot_matches && digest_matches && install_matches) {
             return Err(RecoveryBlocked);
         }
         // `T > prior_f` is a decoder invariant (checked at decode time).
@@ -992,11 +1011,16 @@ impl CheckedDegradedRepairIntent {
     /// strict `T > F`, and the ordinary same-floor `DegradedConfirmed`
     /// repair (the `F == T` row) is legal, so the Steady arm rejects
     /// only `target.t() < floor`.
+    /// The Steady arm additionally takes the epoch-bump preflight
+    /// receipt (required iff `target.t() > floor`, R14-5: a repaired
+    /// candidate must not consume its one probation shot while
+    /// un-establishable).
     pub fn new(
         floor_proof: FreshFloorProof,
         source: AcceptedArtifact,
         target_row: LifecycleState,
         history: DegradedHistoryEvidence,
+        receipt: Option<EpochBumpReceipt>,
     ) -> Result<Self, IntentError> {
         let (target, token) = match target_row {
             LifecycleState::Pending(row) => row.into_parts(),
@@ -1033,6 +1057,22 @@ impl CheckedDegradedRepairIntent {
             FreshFloorProof::Steady(proof) => {
                 if target.t() < proof.floor() {
                     return Err(IntentError::FloorRegression);
+                }
+                // R14-5: T > F requires the same snapshot-bound
+                // preflight receipt as the ordinary epoch-bump arm
+                // (margin, allocation cursor, digest, candidate);
+                // T == F stays receipt-free.
+                match (crate::floor::classify_t(proof.floor(), target.t()), receipt) {
+                    (crate::floor::TClassification::EpochBump, Some(receipt)) => {
+                        if !receipt_matches(proof, &receipt, target.t(), &target.identity().manifest_digest) {
+                            return Err(IntentError::MissingPreflight);
+                        }
+                    }
+                    (crate::floor::TClassification::EpochBump, None) => {
+                        return Err(IntentError::MissingPreflight);
+                    }
+                    (_, Some(_)) => return Err(IntentError::UnexpectedPreflight),
+                    _ => {}
                 }
             }
         }

@@ -409,7 +409,7 @@ pub const TWIN_INSTALL_ID: [u8; 16] = [
 /// A stage binding with the golden R (model default digest) and an
 /// explicit ordered role plan (R5-3).
 pub fn binding(slot: PhysicalSlot, e: u32, roles: [(u16, PlanRole); 4]) -> StageBinding {
-    StageBinding::new(slot, GOLDEN_R, e, seq(0x99), roles).expect("binding range")
+    StageBinding::new(slot, GOLDEN_R, e, seq(0x99), INSTALL_ID, roles).expect("binding range")
 }
 
 /// Probe the lifecycle journal evidence at the artifact's canonical

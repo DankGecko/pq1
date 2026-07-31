@@ -1161,3 +1161,52 @@ fn group_zero_complete_is_unknown() {
         other => panic!("expected OrphanQw, got {}", view_name(&other)),
     }
 }
+
+// ---------------------------------------------------------------------------
+// R14-1: committed group's completed plan accounts its Consumed cells
+// ---------------------------------------------------------------------------
+
+#[test]
+fn committed_group_with_torn_consumed_cell_stays_steady() {
+    // The DESIGNED degraded-establishment residue: COMPLETE(g1) +
+    // superseded STAGEACT(g1) + a torn cell mapped as an authenticated
+    // Consumed role of the committed group's completed plan → Steady(T).
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(1));
+    bank.add(ProbeScript::Corrected(encode_floor_record(5, 1))); // the torn plan cell
+    bank.route1(false);
+    // The binding describes the completed plan (target = committed t):
+    // the torn cell (index 5) is an authenticated Consumed role.
+    let roles = [
+        (0, PlanRole::Witness),
+        (1, PlanRole::Witness),
+        (2, PlanRole::Witness),
+        (5, PlanRole::Consumed),
+    ];
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 6, roles))) {
+        FloorView::Steady(p) => assert_eq!(p.floor(), 5),
+        other => panic!(
+            "authenticated Consumed residue must not wedge a proven Steady, got {}",
+            view_name(&other)
+        ),
+    }
+}
+
+#[test]
+fn committed_group_with_unmapped_uncertain_cell_is_unknown() {
+    // Same shape, but the torn cell is NOT in the completed plan's map.
+    let mut bank = steady_bank(5, 1);
+    bank.clean(encode_stage_record(1));
+    bank.add(ProbeScript::Corrected(encode_floor_record(5, 1)));
+    bank.route1(false);
+    let roles = [
+        (0, PlanRole::Witness),
+        (1, PlanRole::Witness),
+        (2, PlanRole::Witness),
+        (9, PlanRole::Consumed), // index 9, not the torn cell at 5
+    ];
+    match bank.decode(FENCE_OK, Some(binding(PhysicalSlot::A, 6, roles))) {
+        FloorView::Unknown(FloorFault::UncertainQw { index: 5 }) => {}
+        other => panic!("expected UncertainQw, got {}", view_name(&other)),
+    }
+}

@@ -12,9 +12,17 @@ use pqsigner_rollback::lifecycle::{decode_lifecycle, LifecycleState, MalformedRe
 
 const F: u32 = GOLDEN_T; // floor == golden T for the passing rows
 
-fn token_for(art: &pqsigner_rollback::evidence::VerifiedArtifact, state: ArmState) -> ArmToken {
+/// Plant + acquire the arm token THROUGH the TerminalFirst capability
+/// (R14-3: TAMP evidence is read only after both terminal QWs).
+fn token_for(
+    b: &mut TestBackend,
+    tf: &pqsigner_rollback::lifecycle::TerminalFirst,
+    art: &pqsigner_rollback::evidence::VerifiedArtifact,
+    state: ArmState,
+) -> ArmToken {
     let binding = binding_of(art);
-    let words = ArmToken::encode(state, &binding);
+    b.set_arm_token(Some(ArmToken::encode(state, &binding)));
+    let words = tf.read_arm_token(b).expect("token planted");
     ArmToken::decode_and_bind(
         &words,
         binding.slot,
@@ -80,8 +88,8 @@ fn row_pending() {
     let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let tok = token_for(&art, ArmState::ArmReady);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let tok = token_for(&mut b, &tf, &art, ArmState::ArmReady);
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     match decode_lifecycle(art, gen, &tf, &pd, Some(tok), F) {
         LifecycleState::Pending(row) => {
@@ -97,8 +105,8 @@ fn row_attempted() {
     let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let tok = token_for(&art, ArmState::Attempted);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let tok = token_for(&mut b, &tf, &art, ArmState::Attempted);
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     match decode_lifecycle(art, gen, &tf, &pd, Some(tok), F) {
         LifecycleState::Attempted(row) => assert_eq!(row.token().state(), ArmState::Attempted),
@@ -170,9 +178,9 @@ fn malformed_impossible_writer_order_terminal() {
     let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let tok = token_for(&art, ArmState::ArmReady);
     // CONFIRMED_1 exact with CONFIRMED_0 proven BlankVirgin.
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_CONFIRMED_1), ProbeScript::Clean(QW_PENDING));
+    let tok = token_for(&mut b, &tf, &art, ArmState::ArmReady);
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     match decode_lifecycle(art, gen, &tf, &pd, Some(tok), F) {
         LifecycleState::Malformed(MalformedReason::TerminalRejected(_)) => {}
@@ -185,8 +193,8 @@ fn malformed_torn_terminal_never_falls_through_to_pending() {
     let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let tok = token_for(&art, ArmState::ArmReady);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::AmbiguousOrFault, ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let tok = token_for(&mut b, &tf, &art, ArmState::ArmReady);
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     match decode_lifecycle(art, gen, &tf, &pd, Some(tok), F) {
         LifecycleState::Malformed(_) => {}
@@ -255,8 +263,8 @@ fn malformed_floor_relation_on_probation() {
     let mut b = TestBackend::new(7);
     let p = pass();
     let art = artifact(&p, PhysicalSlot::A);
-    let tok = token_for(&art, ArmState::ArmReady);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
+    let tok = token_for(&mut b, &tf, &art, ArmState::ArmReady);
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     // E <= F on the probation branch.
     match decode_lifecycle(art, gen, &tf, &pd, Some(tok), GOLDEN_E)

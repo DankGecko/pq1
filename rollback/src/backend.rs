@@ -439,6 +439,7 @@ mod scripted {
                         b.r(),
                         b.e(),
                         *b.manifest_digest(),
+                        b.install_id(),
                         *b.roles(),
                     )
                     .expect("script binding was validated")

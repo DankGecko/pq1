@@ -134,6 +134,18 @@ impl TerminalFirst {
         }
     }
 
+    /// Acquire the arm-token evidence for the probation branch —
+    /// through this capability only (R14-3): TAMP words are read only
+    /// AFTER both terminal QWs, mirroring the frozen
+    /// terminal-before-PENDING/TAMP order. The caller still runs
+    /// `ArmToken::decode_and_bind` on the returned words.
+    pub fn read_arm_token<B: crate::backend::RollbackBackend>(
+        &self,
+        backend: &mut B,
+    ) -> Option<[u32; crate::arm_token::TOKEN_WORDS]> {
+        backend.read_arm_token()
+    }
+
     /// TEST-SCAFFOLD constructor (feature-gated): adversarial tests
     /// inject mis-addressed or cross-epoch terminal reads through this.
     #[cfg(feature = "test-backend")]

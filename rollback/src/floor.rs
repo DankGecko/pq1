@@ -159,6 +159,10 @@ pub struct StageBinding {
     r: u32,
     e: u32,
     manifest_digest: [u8; 32],
+    /// The bound candidate's install identity (R14-2: another install
+    /// generation of the SAME signed manifest must never satisfy the
+    /// recovery join).
+    install_id: [u8; 16],
     roles: [(u16, PlanRole); STAGE_PLAN_CELLS],
 }
 
@@ -171,6 +175,7 @@ impl StageBinding {
         r: u32,
         e: u32,
         manifest_digest: [u8; 32],
+        install_id: [u8; 16],
         roles: [(u16, PlanRole); STAGE_PLAN_CELLS],
     ) -> Option<StageBinding> {
         let valid = |v: u32| (fw_manifest::v6::VERSION_MIN..=fw_manifest::v6::VERSION_MAX).contains(&v);
@@ -190,6 +195,7 @@ impl StageBinding {
             r,
             e,
             manifest_digest,
+            install_id,
             roles,
         })
     }
@@ -208,6 +214,11 @@ impl StageBinding {
 
     pub fn manifest_digest(&self) -> &[u8; 32] {
         &self.manifest_digest
+    }
+
+    /// The bound candidate's install identity.
+    pub fn install_id(&self) -> [u8; 16] {
+        self.install_id
     }
 
     /// The ordered per-index role plan.
@@ -387,6 +398,7 @@ pub struct RecoveryProof {
     group: u32,
     candidate_slot: fw_manifest::v6::PhysicalSlot,
     candidate_digest: [u8; 32],
+    candidate_install_id: [u8; 16],
     clean_records: u32,
     snapshot_digest: [u8; 32],
 }
@@ -421,6 +433,11 @@ impl RecoveryProof {
         &self.candidate_digest
     }
 
+    /// The bound candidate's install identity (R14-2).
+    pub fn candidate_install_id(&self) -> [u8; 16] {
+        self.candidate_install_id
+    }
+
     /// Clean active records currently witnessed.
     pub fn clean_records(&self) -> u32 {
         self.clean_records
@@ -442,6 +459,9 @@ pub struct DeadStageProof {
     failed_group: u32,
     failed_slot: fw_manifest::v6::PhysicalSlot,
     failed_digest: [u8; 32],
+    /// The failed generation's install identity (bound at decode).
+    #[allow(dead_code)]
+    failed_install_id: [u8; 16],
     failed_r: u32,
     failed_e: u32,
     aborted_release_high_water: u32,
@@ -739,6 +759,7 @@ fn snapshot_digest(snapshot: &FloorSnapshot) -> [u8; 32] {
             h.update(b.r().to_be_bytes());
             h.update(b.e().to_be_bytes());
             h.update(b.manifest_digest());
+            h.update(b.install_id());
             // The stage's ordered role plan is part of the bound state.
             for &(index, role) in b.roles() {
                 h.update(index.to_be_bytes());
@@ -1066,11 +1087,28 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
         _ => return FloorView::Unknown(FloorFault::AmbiguousStage),
     };
 
-    // Uncertain cells outside any stage plan force Unknown.
+    // R14-1: uncertain cells are NOT unconditionally fatal when no
+    // active stage exists. When the (single) stage binding targets the
+    // committed target, its role map IS the committed group's completed
+    // plan: a cell mapped as an authenticated `Consumed` plan role is
+    // accounted for (the designed degraded-establishment path leaves
+    // exactly that residue). Only UNASSIGNED uncertain cells force
+    // Unknown.
     if n_uncertain > 0 && active.is_none() {
-        return FloorView::Unknown(FloorFault::UncertainQw {
-            index: uncertain_index.unwrap_or(0),
-        });
+        let committed_t = committed.map(|(_, t)| t);
+        let map_accounts = |idx: u16| -> bool {
+            match (snapshot.stage_binding(), committed_t) {
+                (Some(b), Some(t)) if b.e().checked_sub(1) == Some(t) => {
+                    b.role_of(idx) == Some(PlanRole::Consumed)
+                }
+                _ => false,
+            }
+        };
+        for &idx in &uncertain_indices[..n_uncertain_idx] {
+            if !map_accounts(idx) {
+                return FloorView::Unknown(FloorFault::UncertainQw { index: idx });
+            }
+        }
     }
 
 
@@ -1233,6 +1271,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                     group: g,
                     candidate_slot: binding.slot(),
                     candidate_digest: *binding.manifest_digest(),
+                    candidate_install_id: binding.install_id(),
                     clean_records,
                     snapshot_digest: digest,
                 })
@@ -1248,6 +1287,7 @@ pub fn decode_floor(snapshot: &FloorSnapshot) -> FloorView {
                             failed_group: g,
                             failed_slot: binding.slot(),
                             failed_digest: *binding.manifest_digest(),
+                            failed_install_id: binding.install_id(),
                             failed_r: binding.r(),
                             failed_e: binding.e(),
                             aborted_release_high_water: binding.r(),
