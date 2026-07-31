@@ -476,16 +476,6 @@
       "runs_in": "workflow-security.yml",
       "enforcement": "per_pr_blocking",
       "note": "Zero-width (U+200B..U+200F/U+FEFF) and bidi override/isolate (U+202A..U+202E, U+2066..U+2069) codepoints are invisible to git diff and to code review. Two attacks share that mechanism: TrapDoor-style poisoning of the AI-instruction files every coding agent executes, and Trojan Source (CVE-2021-42574). Baseline 2026-07-31 is ZERO hits over 3841 tracked text files with NO allowlist — the two pre-existing hits were fixed, not exempted, because an allowlist here is a place to hide the payload. Carries a two-sided self-test (5 payload classes fire, 3 benign inputs stay silent); ordinary non-ASCII is deliberately allowed or the gate would be red on day one and disabled by the end of the week."
-    },
-    {
-      "id": "kani-heavy",
-      "make": "make kani-heavy",
-      "polices_paths": [
-        "tx/src/multisend.rs"
-      ],
-      "runs_in": "nightly.yml",
-      "enforcement": "local_documented",
-      "why": "cow_presign_precedence (11.5 GiB, 3m56s) and no_hidden_value (13.05 GiB, 7m55s) both VERIFY SUCCESSFULLY but peak near the hosted-runner ceiling; measured locally 2026-07-31. A public-repo ubuntu-latest has 16 GB RAM and 14 GB disk, so these are UNDER 16 GB and 'requires >=32 GB' would be an overclaim - the real kill mechanism (RAM headroom vs disk exhaustion) is instrumented in nightly.yml and NOT yet settled. They are excluded because an OOM kills the runner and thereby suppresses every later mandatory gate in the same job (same reasoning as verify-extracted-heavy, 53c19f21; continue-on-error cannot save a dead runner), not because a larger runner has been shown necessary. Larger hosted runners are in any case unavailable: GitHub gates them to Team/Enterprise Cloud and this org is on the free plan (hosted-runners API returns 404). The 100-byte symbolic bound is deliberately not reduced. Authoritative validation runs via `make kani-heavy`; the remaining harnesses stay blocking in nightly."
     }
   ],
   "_completeness_waived": {

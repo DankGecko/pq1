@@ -45,6 +45,11 @@ jobs:
   kani:
     name: Kani (bounded model-checking)
     runs-on: ubuntu-latest
+    # The job had NO timeout, so a hung solve burned the 6-hour default. The
+    # three 100-byte-symbolic multiSend harnesses are the long poles (one
+    # measured at 51 min under kissat), so allow room for them but fail cleanly
+    # rather than silently costing six hours of CI.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
