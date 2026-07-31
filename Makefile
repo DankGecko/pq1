@@ -4013,6 +4013,14 @@ sbom-firmware:
 # build, so these do NOT cover those — see work-todo §34.
 # ---------------------------------------------------------------------------
 .PHONY: kani miri ui-golden
+kani-heavy: ## HIGH-MEMORY Kani harnesses excluded from `make kani` (>=32 GB)
+	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
+	@echo "==> Kani (HEAVY): harnesses that do not fit a 16 GB hosted runner."
+	@echo "    cow_presign_precedence measured 2026-07-31: SUCCESSFUL, 3m56s,"
+	@echo "    peak RSS 11.5 GiB. Excluded from `make kani` so an OOM cannot kill"
+	@echo "    the runner and suppress the rest of the nightly job's evidence."
+	cargo kani -p pqsigner-tx --features kani-heavy --harness cow_presign_precedence
+
 kani: ## Bounded model-checking on firmware decoders/counters
 	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
 	@echo "==> Kani: tx-core RLP parsers (decode_item used<=len, bytes_to_u256)"

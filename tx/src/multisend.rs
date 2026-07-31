@@ -904,6 +904,26 @@ mod verification {
     /// it ALSO targets the Safe itself (`to == safe_address`). The CoW arm is
     /// checked first, so such a record renders as the full CoW order, never as
     /// a Safe-mgmt / unknown-self blob.
+    /// HIGH-MEMORY — excluded from the default `make kani` run.
+    ///
+    /// Measured 2026-07-31 on this exact harness: **VERIFICATION SUCCESSFUL**,
+    /// 3m56s wall, **peak RSS 11.5 GiB**. It is not broken and it is not
+    /// weakened here; it simply does not fit a 16 GB hosted runner that is also
+    /// holding the build tree, so it OOM-killed the nightly Kani job (the job
+    /// died mid-solve at 8.5M program-expression steps / 119,654 VCCs with
+    /// "The runner has received a shutdown signal", which reads as
+    /// infrastructure noise rather than as a memory limit).
+    ///
+    /// Same precedent as `verify-extracted-heavy` (53c19f21): a step that can
+    /// terminate the runner is worse than a step that is absent, because the
+    /// kill also suppresses every later mandatory gate in the same job. Not
+    /// even `continue-on-error` helps.
+    ///
+    /// Run it with `make kani-heavy` (locally, or on a >=32 GB runner). The
+    /// 100-byte symbolic bound is deliberately NOT reduced to fit CI — shrinking
+    /// a proof's bound to satisfy a runner is a real loss of coverage disguised
+    /// as a green check.
+    #[cfg(feature = "kani-heavy")]
     #[kani::proof]
     #[kani::unwind(101)]
     fn cow_presign_precedence() {

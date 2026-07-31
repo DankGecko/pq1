@@ -476,6 +476,16 @@
       "runs_in": "workflow-security.yml",
       "enforcement": "per_pr_blocking",
       "note": "Zero-width (U+200B..U+200F/U+FEFF) and bidi override/isolate (U+202A..U+202E, U+2066..U+2069) codepoints are invisible to git diff and to code review. Two attacks share that mechanism: TrapDoor-style poisoning of the AI-instruction files every coding agent executes, and Trojan Source (CVE-2021-42574). Baseline 2026-07-31 is ZERO hits over 3841 tracked text files with NO allowlist — the two pre-existing hits were fixed, not exempted, because an allowlist here is a place to hide the payload. Carries a two-sided self-test (5 payload classes fire, 3 benign inputs stay silent); ordinary non-ASCII is deliberately allowed or the gate would be red on day one and disabled by the end of the week."
+    },
+    {
+      "id": "kani-heavy",
+      "make": "make kani-heavy",
+      "polices_paths": [
+        "tx/src/multisend.rs"
+      ],
+      "runs_in": "nightly.yml",
+      "enforcement": "local_documented",
+      "why": "cow_presign_precedence verifies SUCCESSFULLY but peaks at 11.5 GiB RSS (measured 2026-07-31: 3m56s wall). A 16 GB hosted runner also holding the build tree cannot take it: it OOM-killed the nightly Kani job mid-solve at 8.5M program-expression steps, which surfaces as 'The runner has received a shutdown signal' and reads like infrastructure noise. Same precedent and same reasoning as verify-extracted-heavy (53c19f21): a step that can terminate the runner is worse than an absent step, because the kill ALSO suppresses every later mandatory gate in the same job, and continue-on-error does not help. The 100-byte symbolic bound is deliberately not reduced to fit CI - shrinking a proof's bound to earn a green check is a real coverage loss disguised as a pass. Authoritative validation runs locally or on a >=32 GB runner; the remaining 172 harnesses stay blocking in nightly."
     }
   ],
   "_completeness_waived": {
