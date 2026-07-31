@@ -231,14 +231,15 @@ fn reverify_artifact<B: RollbackBackend>(
     // R9-3: the recheck applies the SAME canonical-address/one-epoch
     // validation as decode_lifecycle (R3-2) — exact bytes at another
     // artifact's QW addresses carry no authority.
-    if !crate::lifecycle::canonical_journal_reads(
+    let trio_epoch = match crate::lifecycle::canonical_journal_reads(
         id,
         &recheck.terminal_c0.0,
         &recheck.terminal_c1.0,
         &recheck.pending.0,
     ) {
-        return Err(IntentError::ArtifactDrift);
-    }
+        Some(epoch) => epoch,
+        None => return Err(IntentError::ArtifactDrift),
+    };
     match expect {
         ArtifactExpectation::PendingCandidate => {
             for (read, _, launch) in [&recheck.terminal_c0, &recheck.terminal_c1] {
@@ -268,6 +269,7 @@ fn reverify_artifact<B: RollbackBackend>(
                     launch: recheck.install_id_inv.2,
                 },
                 Some(fw_manifest::v6::LaterLifecycleEvidence::Pending),
+                Some(trio_epoch),
             );
             // R9-2: the reconstructed install id must equal the
             // identity's install id (the primary decode's
@@ -310,6 +312,7 @@ fn reverify_artifact<B: RollbackBackend>(
                     launch: recheck.install_id_inv.2,
                 },
                 Some(fw_manifest::v6::LaterLifecycleEvidence::Terminal),
+                Some(trio_epoch),
             );
             // R9-2: same reconstructed-id equality on the Robust arm.
             match gen {
@@ -392,13 +395,19 @@ fn arm_and_handoff<B: RollbackBackend>(
 /// to (R3-5): floor, target, snapshot digest, allocation sequence
 /// (group), and capacity (margin). The receipt is comparison data; this
 /// is the only validation path.
-fn receipt_matches(steady: &SteadyProof, receipt: &EpochBumpReceipt, t: u32) -> bool {
+fn receipt_matches(
+    steady: &SteadyProof,
+    receipt: &EpochBumpReceipt,
+    t: u32,
+    candidate_digest: &[u8; 32],
+) -> bool {
     let expected_group = match steady.group() {
         crate::floor::GroupIdentity::Base0 => Some(1),
         crate::floor::GroupIdentity::Group(g) => g.checked_add(1),
     };
     receipt.floor() == steady.floor()
         && receipt.target() == t
+        && receipt.candidate_digest() == candidate_digest
         && receipt.snapshot_digest() == steady.snapshot_digest()
         && Some(receipt.group()) == expected_group
         // The margin is proof-bound: it must equal THIS proof's decoded
@@ -469,7 +478,7 @@ impl CheckedSteadyProbationIntent {
                 let receipt = receipt.ok_or(IntentError::MissingPreflight)?;
                 // The receipt must be current for THIS proof: floor,
                 // target, digest, allocation sequence, and capacity.
-                if !receipt_matches(&steady, &receipt, t) {
+                if !receipt_matches(&steady, &receipt, t, &candidate.identity().manifest_digest) {
                     return Err(IntentError::MissingPreflight);
                 }
                 ProbationClass::EpochBump(receipt)
@@ -558,7 +567,7 @@ impl CheckedSteadyIntent {
             }
             TClassification::EpochBump => {
                 let receipt = receipt.ok_or(IntentError::MissingPreflight)?;
-                if !receipt_matches(&steady, &receipt, t) {
+                if !receipt_matches(&steady, &receipt, t, &artifact.artifact().identity().manifest_digest) {
                     return Err(IntentError::MissingPreflight);
                 }
                 Ok(CheckedSteadyIntent {

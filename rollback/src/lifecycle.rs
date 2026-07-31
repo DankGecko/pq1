@@ -29,6 +29,43 @@ pub struct AttributedRead<'a> {
     pub launch: LaunchAttribution,
 }
 
+/// Sealed probation evidence (R13-1b): a PENDING read minted ONLY by
+/// [`TerminalFirst::probe_pending`]. `pub(crate)` constructor — no
+/// other public path exists, so probation evidence can only exist as
+/// the capability's product.
+pub struct PendingEvidence {
+    read: FreshQwRead,
+    durability: Durability,
+    launch: LaunchAttribution,
+}
+
+impl PendingEvidence {
+    /// The sealed read as an attributed observation.
+    pub fn as_attributed_read(&self) -> AttributedRead<'_> {
+        AttributedRead {
+            read: &self.read,
+            durability: self.durability,
+            launch: self.launch,
+        }
+    }
+
+    /// TEST-SCAFFOLD mint (feature-gated): adversarial tests inject
+    /// non-canonical or cross-epoch PENDING reads through this. The
+    /// honest path remains `TerminalFirst::probe_pending` only.
+    #[cfg(feature = "test-backend")]
+    pub fn for_test(
+        read: FreshQwRead,
+        durability: Durability,
+        launch: LaunchAttribution,
+    ) -> PendingEvidence {
+        PendingEvidence {
+            read,
+            durability,
+            launch,
+        }
+    }
+}
+
 /// The terminal-first probing capability (R10-2): PROOF that both
 /// terminal QWs were fresh-probed BEFORE any PENDING/TAMP evidence was
 /// obtained (§6.2 L2183–2189). Only constructible through
@@ -78,17 +115,23 @@ impl TerminalFirst {
     }
 
     /// Acquire PENDING evidence — ONLY through this capability
-    /// (R11-3): the probation branch's reads are minted by the
-    /// capability itself, so terminal-first acquisition is enforced by
-    /// construction, not convention. (Token evidence is separately
-    /// bound via `ArmToken::decode_and_bind`.)
+    /// (R11-3 + R13-1b): the probation branch's reads are minted by the
+    /// capability itself and sealed into [`PendingEvidence`], so
+    /// terminal-first acquisition is enforced by construction and the
+    /// evidence cannot be fabricated by a direct probe. (Token evidence
+    /// is separately bound via `ArmToken::decode_and_bind`.)
     pub fn probe_pending<P: crate::qw_read::FreshArrayProbe>(
         &self,
         backend: &mut P,
         index: u16,
         addr: u32,
-    ) -> FreshQwRead {
-        backend.fresh_probe(index, addr)
+        attribution: (Durability, LaunchAttribution),
+    ) -> PendingEvidence {
+        PendingEvidence {
+            read: backend.fresh_probe(index, addr),
+            durability: attribution.0,
+            launch: attribution.1,
+        }
     }
 
     /// TEST-SCAFFOLD constructor (feature-gated): adversarial tests
@@ -257,6 +300,7 @@ pub fn decode_install_generation(
     id: AttributedRead<'_>,
     inv: AttributedRead<'_>,
     later_evidence: Option<fw_manifest::v6::LaterLifecycleEvidence>,
+    expected_epoch: Option<u32>,
 ) -> Option<InstallGenerationEvidence> {
     let identity = artifact.identity();
     for (read, expected_addr) in [
@@ -269,22 +313,33 @@ pub fn decode_install_generation(
             }
         }
     }
-    if let (crate::qw_read::FreshQwRead::Clean(a), crate::qw_read::FreshQwRead::Clean(b)) =
-        (id.read, inv.read)
-    {
-        if a.probe_epoch() != b.probe_epoch() {
-            return None;
+    // The halves must share one probe epoch with each other AND with
+    // the required pass epoch when one is supplied (R13-4: no
+    // cross-epoch generation joins).
+    let mut epoch: Option<u32> = None;
+    for read in [id.read, inv.read] {
+        if let crate::qw_read::FreshQwRead::Clean(qw) = read {
+            if let Some(required) = expected_epoch {
+                if qw.probe_epoch() != required {
+                    return None;
+                }
+            }
+            match epoch {
+                None => epoch = Some(qw.probe_epoch()),
+                Some(e) if e != qw.probe_epoch() => return None,
+                _ => {}
+            }
         }
     }
+    let epoch = epoch?;
     let id_ev = install_half_evidence(id.read, id.durability, id.launch);
     let inv_ev = install_half_evidence(inv.read, inv.durability, inv.launch);
     // Bind the minted proof to THIS artifact's sealed key (R5-4).
     let key_digest = artifact.key().digest();
     match later_evidence {
-        None => {
-            full_install_generation(id_ev, inv_ev, key_digest).map(InstallGenerationEvidence::Full)
-        }
-        Some(ev) => surviving_install_generation(id_ev, inv_ev, ev, key_digest)
+        None => full_install_generation(id_ev, inv_ev, key_digest, epoch)
+            .map(InstallGenerationEvidence::Full),
+        Some(ev) => surviving_install_generation(id_ev, inv_ev, ev, key_digest, epoch)
             .map(InstallGenerationEvidence::Surviving),
     }
 }
@@ -303,21 +358,20 @@ pub fn decode_lifecycle(
     artifact: VerifiedArtifact,
     generation: Option<InstallGenerationEvidence>,
     terminals: &TerminalFirst,
-    pending: AttributedRead<'_>,
+    pending: &PendingEvidence,
     token: Option<ArmToken>,
     floor: u32,
 ) -> LifecycleState {
     let (terminal_c0, terminal_c1) = terminals.terminals();
-    // R3-2: the presented journal reads must be THIS artifact's
-    // canonical QWs (identity addresses), under one common probe epoch.
-    if !canonical_journal_reads(
-        artifact.identity(),
-        terminal_c0.read,
-        terminal_c1.read,
-        pending.read,
-    ) {
-        return LifecycleState::Malformed(MalformedReason::NonCanonicalJournalQw);
-    }
+    // Terminal-first classification (R13-1a): the TERMINAL reads must
+    // be canonical for THIS artifact on every row (R3-2); the PENDING
+    // read is consulted ONLY on the probation branch below — on
+    // terminal rows it is "not read; non-authoritative" (§6.2
+    // L2170–2172) and never validated.
+    let trio_epoch = match canonical_terminal_reads(artifact.identity(), terminal_c0.read, terminal_c1.read) {
+        Some(epoch) => epoch,
+        None => return LifecycleState::Malformed(MalformedReason::NonCanonicalJournalQw),
+    };
     let terminal = decode_terminal_set(
         terminal_c0.read,
         terminal_c0.durability,
@@ -337,7 +391,7 @@ pub fn decode_lifecycle(
             if floor > t {
                 return LifecycleState::Malformed(MalformedReason::FloorRelationViolation);
             }
-            if !generation_matches(&generation, &artifact, true) {
+            if !generation_matches(&generation, &artifact, true, trio_epoch) {
                 return LifecycleState::Malformed(MalformedReason::BadInstallGeneration);
             }
             return match AcceptedArtifact::new(
@@ -352,7 +406,7 @@ pub fn decode_lifecycle(
             // Degraded rows: repair-target evidence only. F == T →
             // degraded CONFIRMED; F < T → degraded epoch candidate;
             // F > T → malformed.
-            if !generation_matches(&generation, &artifact, true) {
+            if !generation_matches(&generation, &artifact, true, trio_epoch) {
                 return LifecycleState::Malformed(MalformedReason::BadInstallGeneration);
             }
             return if floor == t {
@@ -393,7 +447,21 @@ pub fn decode_lifecycle(
         return LifecycleState::Malformed(MalformedReason::OutOfOrderMarkers);
     }
 
-    // PENDING branch.
+    // PENDING branch (R13-1a): only here is the PENDING evidence
+    // consulted — and it must satisfy the full trio canonical check
+    // (canonical addresses for THIS artifact, one common probe epoch
+    // across all three journal reads).
+    let pending = pending.as_attributed_read();
+    if canonical_journal_reads(
+        artifact.identity(),
+        terminal_c0.read,
+        terminal_c1.read,
+        pending.read,
+    )
+    .is_none()
+    {
+        return LifecycleState::Malformed(MalformedReason::NonCanonicalJournalQw);
+    }
     let p = observe_marker(
         pending.read,
         &QW_PENDING,
@@ -405,7 +473,7 @@ pub fn decode_lifecycle(
         MarkerObservation::ProvenVirgin => {
             // UNINSTALLED: token ignored; before activation only a full
             // generation is valid.
-            if !generation_matches(&generation, &artifact, false) {
+            if !generation_matches(&generation, &artifact, false, trio_epoch) {
                 return LifecycleState::Malformed(MalformedReason::BadInstallGeneration);
             }
             LifecycleState::Uninstalled(ArtifactRow::new(artifact))
@@ -416,7 +484,7 @@ pub fn decode_lifecycle(
             if e <= floor {
                 return LifecycleState::Malformed(MalformedReason::FloorRelationViolation);
             }
-            if !generation_matches(&generation, &artifact, true) {
+            if !generation_matches(&generation, &artifact, true, trio_epoch) {
                 return LifecycleState::Malformed(MalformedReason::BadInstallGeneration);
             }
             let token = match token {
@@ -445,19 +513,23 @@ fn generation_matches(
     generation: &Option<InstallGenerationEvidence>,
     artifact: &VerifiedArtifact,
     after_activation: bool,
+    expected_epoch: u32,
 ) -> bool {
-    // The generation must reconstruct the SAME identity AND bind the
-    // SAME sealed key as the artifact (R5-4: no old-pass or
-    // cross-artifact generation evidence).
+    // The generation must reconstruct the SAME identity, bind the SAME
+    // sealed key, AND carry the SAME probe epoch as the lifecycle reads
+    // (R5-4 + R13-4: no old-pass, cross-artifact, or cross-epoch joins).
     let key_digest = artifact.key().digest();
     match generation {
         Some(InstallGenerationEvidence::Full(g)) => {
-            g.install_id() == artifact.install_id() && g.evidence_key() == &key_digest
+            g.install_id() == artifact.install_id()
+                && g.evidence_key() == &key_digest
+                && g.epoch() == expected_epoch
         }
         Some(InstallGenerationEvidence::Surviving(g)) => {
             after_activation
                 && g.install_id() == artifact.install_id()
                 && g.evidence_key() == &key_digest
+                && g.epoch() == expected_epoch
         }
         None => false,
     }
@@ -468,12 +540,45 @@ fn generation_matches(
 /// (terminal 0, terminal 1, PENDING), and all presented reads must
 /// share one probe epoch (one common pass). Non-Clean reads fail closed
 /// elsewhere and are not address-checkable here.
+/// R13-1a: canonical check for the TERMINAL reads only (applied on
+/// every row): this artifact's canonical terminal addresses, one
+/// common probe epoch.
+pub(crate) fn canonical_terminal_reads(
+    id: &crate::evidence::ArtifactIdentity,
+    c0: &crate::qw_read::FreshQwRead,
+    c1: &crate::qw_read::FreshQwRead,
+) -> Option<u32> {
+    let mut epoch: Option<u32> = None;
+    for (read, expected_addr) in [
+        (c0, id.confirmed_0_qw_address),
+        (c1, id.confirmed_1_qw_address),
+    ] {
+        if let crate::qw_read::FreshQwRead::Clean(qw) = read {
+            if qw.addr() != expected_addr {
+                return None;
+            }
+            match epoch {
+                None => epoch = Some(qw.probe_epoch()),
+                Some(e) if e != qw.probe_epoch() => return None,
+                _ => {}
+            }
+        }
+    }
+    epoch
+}
+
+/// R13-2-era canonical journal check (probation branch): every presented
+/// Clean journal read must sit at the artifact identity's canonical
+/// address for its role (terminal 0, terminal 1, PENDING), and all
+/// presented reads must share one common probe epoch. On success the
+/// shared epoch is returned (R13-4: the generation must carry the same
+/// epoch).
 pub(crate) fn canonical_journal_reads(
     id: &crate::evidence::ArtifactIdentity,
     c0: &crate::qw_read::FreshQwRead,
     c1: &crate::qw_read::FreshQwRead,
     pending: &crate::qw_read::FreshQwRead,
-) -> bool {
+) -> Option<u32> {
     let mut epoch: Option<u32> = None;
     for (read, expected_addr) in [
         (c0, id.confirmed_0_qw_address),
@@ -482,16 +587,16 @@ pub(crate) fn canonical_journal_reads(
     ] {
         if let crate::qw_read::FreshQwRead::Clean(qw) = read {
             if qw.addr() != expected_addr {
-                return false;
+                return None;
             }
             match epoch {
                 None => epoch = Some(qw.probe_epoch()),
-                Some(e) if e != qw.probe_epoch() => return false,
+                Some(e) if e != qw.probe_epoch() => return None,
                 _ => {}
             }
         }
     }
-    true
+    epoch
 }
 
 /// The bound token must carry exactly the artifact's tuple and identity.

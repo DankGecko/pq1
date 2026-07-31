@@ -284,14 +284,14 @@ fn t_classification_and_preflight() {
     let FloorView::Steady(proof) = bank.decode(FENCE_OK, None) else {
         panic!("steady")
     };
-    let receipt = preflight(&proof, 6).expect("receipt");
+    let receipt = preflight(&proof, 6, &[0x5A; 32]).expect("receipt");
     assert_eq!((receipt.floor(), receipt.target(), receipt.group()), (5, 6, 2));
     // Proof-bound margin: 28 canonical virgins remain after the
     // committed group's four role cells.
     assert_eq!(receipt.margin(), 28);
     assert_eq!(proof.virgin_cells(), 28);
-    assert!(preflight(&proof, 5).is_none());
-    assert!(preflight(&proof, 4).is_none());
+    assert!(preflight(&proof, 5, &[0x5A; 32]).is_none());
+    assert!(preflight(&proof, 4, &[0x5A; 32]).is_none());
 }
 
 #[test]
@@ -305,7 +305,7 @@ fn preflight_margin_is_proof_bound_not_caller_asserted() {
         panic!("steady")
     };
     assert_eq!(proof_27.virgin_cells(), 27);
-    let receipt = preflight(&proof_27, 6).expect("receipt");
+    let receipt = preflight(&proof_27, 6, &[0x5A; 32]).expect("receipt");
     assert_eq!(receipt.margin(), 27);
     let mut bank = steady_bank(5, 1);
     let FloorView::Steady(proof_28) = bank.decode(FENCE_OK, None) else {
@@ -331,7 +331,7 @@ fn preflight_margin_is_proof_bound_not_caller_asserted() {
         panic!("steady")
     };
     assert_eq!(full_proof.virgin_cells(), 0);
-    assert!(preflight(&full_proof, 6).is_none());
+    assert!(preflight(&full_proof, 6, &[0x5A; 32]).is_none());
 }
 
 /// Mirror of the crate-private revalidation rule (floor/target/digest/
@@ -640,7 +640,7 @@ fn preflight_group_overflow_fail_closed() {
     };
     // g == u32::MAX: the allocation sequence cannot advance — fail
     // closed, no panic, no wrap.
-    assert!(preflight(&proof, 6).is_none());
+    assert!(preflight(&proof, 6, &[0x5A; 32]).is_none());
 }
 
 fn view_name(v: &FloorView) -> &'static str {
@@ -810,7 +810,7 @@ fn monotone_two_group_history_yields_highest_target() {
             assert_eq!(p.floor(), 9);
             assert_eq!(p.group(), GroupIdentity::Group(2));
             // The allocation cursor is the max VALIDATED group.
-            let receipt = preflight(&p, 10).expect("receipt");
+            let receipt = preflight(&p, 10, &[0x5A; 32]).expect("receipt");
             assert_eq!(receipt.group(), 3);
         }
         other => panic!("expected Steady(9), got {}", view_name(&other)),
@@ -859,7 +859,7 @@ fn preflight_requires_plan_cells_of_virgins() {
         };
         assert_eq!(proof.virgin_cells() as usize, RESERVED_ROLLBACK_QWS - role_cells - 1);
         assert!(
-            preflight(&proof, 6).is_none(),
+            preflight(&proof, 6, &[0x5A; 32]).is_none(),
             "{} virgins must not fund the plan",
             proof.virgin_cells()
         );
@@ -876,7 +876,7 @@ fn preflight_requires_plan_cells_of_virgins() {
         panic!("steady")
     };
     assert_eq!(proof6.virgin_cells(), PLAN_CELLS + 2);
-    let receipt = preflight(&proof6, 6).expect("6 virgins fund the plan");
+    let receipt = preflight(&proof6, 6, &[0x5A; 32]).expect("6 virgins fund the plan");
     assert_eq!(receipt.margin(), PLAN_CELLS + 2);
 }
 
@@ -1134,5 +1134,30 @@ fn route1_read_with_bank_index_is_unknown() {
     match decode_floor(&snap) {
         FloorView::Unknown(FloorFault::NonCanonicalMap(MapFault::AddressMismatch { index: 5 })) => {}
         other => panic!("expected AddressMismatch, got {}", view_name(&other)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R13-3: group zero is not a group
+// ---------------------------------------------------------------------------
+
+#[test]
+fn group_zero_complete_is_unknown() {
+    // R13-3: exact COMPLETE(0) + matching floor record must never
+    // reconstruct a committed group — canonical base is BASE0-proof-only
+    // and allocation starts at group 1.
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(encode_floor_record(7, 0));
+    }
+    bank.clean(encode_complete_record(0));
+    bank.route1(true);
+    let view = bank.decode(FENCE_OK, None);
+    if let FloorView::Steady(_) = &view {
+        panic!("group 0 must never yield Steady");
+    }
+    match view {
+        FloorView::Unknown(FloorFault::OrphanQw { .. }) => {}
+        other => panic!("expected OrphanQw, got {}", view_name(&other)),
     }
 }

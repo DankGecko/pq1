@@ -305,7 +305,7 @@ impl FloorSnapshot {
         let route1 = [0usize, 1].map(|j| {
             let (durability, launch) = route1_attributions[j];
             FloorCell {
-                read: backend.fresh_probe(60 + j as u16, canonical_route1_addr(j)),
+                read: backend.fresh_probe(ROUTE1_QW_INDICES[j], canonical_route1_addr(j)),
                 durability,
                 launch,
             }
@@ -570,14 +570,22 @@ fn decode_record(bytes: &[u8; 16]) -> Option<Record> {
     }
     let tail: &[u8] = &bytes[8..16];
     if tail == b"COMPLETE" {
+        // R13-3: group 0 is not a valid group — the canonical base is
+        // BASE0-proof-only and allocation starts at group 1.
+        if a == 0 {
+            return None;
+        }
         return Some(Record::Complete { g: a });
     }
     if tail == b"STAGEACT" {
+        if a == 0 {
+            return None;
+        }
         return Some(Record::Stage { g: a });
     }
     let b = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
     let b_inv = u32::from_be_bytes(bytes[12..16].try_into().unwrap());
-    if b_inv != !b {
+    if b_inv != !b || b == 0 {
         return None;
     }
     Some(Record::Floor { t: a, g: b })
@@ -1300,6 +1308,10 @@ pub struct EpochBumpReceipt {
     /// Replacement margin: virgin cells available to the plan.
     margin: u32,
     snapshot_digest: [u8; 32],
+    /// The candidate manifest digest this plan is bound to (R13-2: a
+    /// receipt minted for candidate X can never begin a plan for
+    /// candidate Y, even at the same target).
+    candidate_digest: [u8; 32],
 }
 
 impl EpochBumpReceipt {
@@ -1322,6 +1334,11 @@ impl EpochBumpReceipt {
     pub fn snapshot_digest(&self) -> &[u8; 32] {
         &self.snapshot_digest
     }
+
+    /// The candidate manifest digest this receipt is bound to.
+    pub fn candidate_digest(&self) -> &[u8; 32] {
+        &self.candidate_digest
+    }
 }
 
 /// Snapshot-bound read-only preflight. Returns `None` unless `T > F`,
@@ -1335,7 +1352,11 @@ impl EpochBumpReceipt {
 /// OPEN-OTP-1..3). The margin is PROOF-BOUND (counted by the decode,
 /// never caller-asserted), and the receipt binds the proof's snapshot
 /// digest (currency proof for the recheck).
-pub fn preflight(steady: &SteadyProof, target: u32) -> Option<EpochBumpReceipt> {
+pub fn preflight(
+    steady: &SteadyProof,
+    target: u32,
+    candidate_digest: &[u8; 32],
+) -> Option<EpochBumpReceipt> {
     let floor = steady.floor();
     if target <= floor || target > crate::arm_token::T_MAX {
         return None;
@@ -1359,5 +1380,6 @@ pub fn preflight(steady: &SteadyProof, target: u32) -> Option<EpochBumpReceipt> 
         group,
         margin: steady.virgin_cells(),
         snapshot_digest: *steady.snapshot_digest(),
+        candidate_digest: *candidate_digest,
     })
 }

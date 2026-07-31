@@ -168,7 +168,7 @@ pub fn full_generation(
         identity.install_id_inv_qw_address(),
         ProbeScript::Clean(inv_bytes),
     );
-    pqsigner_rollback::lifecycle::decode_install_generation(art, atr(&id), atr(&inv), None)
+    pqsigner_rollback::lifecycle::decode_install_generation(art, atr(&id), atr(&inv), None, None)
         .expect("full generation")
 }
 
@@ -389,7 +389,7 @@ pub fn accepted_artifact(
     );
     let gen = Some(full_generation(b, &art, 13, 14));
     let t = m.security_epoch - 1;
-    match decode_lifecycle(art, gen, &tf, atr_nl(&pd), None, t) {
+    match decode_lifecycle(art, gen, &tf, &pd, None, t) {
         LifecycleState::ConfirmedRobust(a) => a,
         _ => panic!("expected ConfirmedRobust"),
     }
@@ -424,7 +424,10 @@ pub fn probe_journal(
     c0: ProbeScript,
     c1: ProbeScript,
     pd: ProbeScript,
-) -> (pqsigner_rollback::lifecycle::TerminalFirst, FreshQwRead) {
+) -> (
+    pqsigner_rollback::lifecycle::TerminalFirst,
+    pqsigner_rollback::lifecycle::PendingEvidence,
+) {
     use pqsigner_rollback::lifecycle::TerminalFirst;
     let id = art.identity();
     // Terminal-first acquisition: script and probe BOTH terminals before
@@ -438,11 +441,12 @@ pub fn probe_journal(
         }
     };
     let tf = TerminalFirst::probe(b, id, 30, attr(&c0), 31, attr(&c1));
-    // R11-3: the PENDING read is minted THROUGH the capability — it
-    // cannot precede the terminal probes.
+    // R11-3 + R13-1b: the PENDING evidence is minted THROUGH the
+    // capability — it cannot precede the terminal probes and cannot be
+    // fabricated by a direct probe.
     assert!(b.script(32, id.pending_qw_address, pd));
-    let pd_read = tf.probe_pending(b, 32, id.pending_qw_address);
-    (tf, pd_read)
+    let pd_ev = tf.probe_pending(b, 32, id.pending_qw_address, attr(&pd));
+    (tf, pd_ev)
 }
 
 /// Full degraded-history evidence for a prior degraded artifact at
@@ -474,7 +478,7 @@ pub fn degraded_history(
         ProbeScript::Clean(ERASED),
     );
     let gen = Some(full_generation(&mut b, &prior_art, 3, 4));
-    let row = match decode_lifecycle(prior_art, gen, &tf, atr_nl(&pd), None, e - 1) {
+    let row = match decode_lifecycle(prior_art, gen, &tf, &pd, None, e - 1) {
         LifecycleState::DegradedConfirmed(row) => row,
         _ => panic!("expected DegradedConfirmed for the prior artifact"),
     };

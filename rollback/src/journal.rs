@@ -79,6 +79,7 @@ pub fn observe_marker(
 pub struct FullInstallGeneration {
     install_id: [u8; 16],
     evidence_key: [u8; 32],
+    epoch: u32,
 }
 
 impl FullInstallGeneration {
@@ -91,6 +92,11 @@ impl FullInstallGeneration {
     pub fn evidence_key(&self) -> &[u8; 32] {
         &self.evidence_key
     }
+
+    /// The probe epoch the generation was minted under (R13-4).
+    pub fn epoch(&self) -> u32 {
+        self.epoch
+    }
 }
 
 /// `SurvivingInstallGeneration` — the identity reconstructed from exactly
@@ -100,6 +106,7 @@ impl FullInstallGeneration {
 pub struct SurvivingInstallGeneration {
     install_id: [u8; 16],
     evidence_key: [u8; 32],
+    epoch: u32,
 }
 
 impl SurvivingInstallGeneration {
@@ -112,6 +119,11 @@ impl SurvivingInstallGeneration {
     /// Digest of the `ArtifactEvidenceKey` this proof binds.
     pub fn evidence_key(&self) -> &[u8; 32] {
         &self.evidence_key
+    }
+
+    /// The probe epoch the generation was minted under (R13-4).
+    pub fn epoch(&self) -> u32 {
+        self.epoch
     }
 }
 
@@ -191,6 +203,7 @@ pub(crate) fn full_install_generation(
     id: InstallHalfEvidence,
     inv: InstallHalfEvidence,
     evidence_key: [u8; 32],
+    epoch: u32,
 ) -> Option<FullInstallGeneration> {
     match (id, inv) {
         (InstallHalfEvidence::Exact(a), InstallHalfEvidence::Exact(b)) => {
@@ -200,6 +213,7 @@ pub(crate) fn full_install_generation(
                 Some(FullInstallGeneration {
                     install_id: a,
                     evidence_key,
+                    epoch,
                 })
             }
         }
@@ -227,6 +241,7 @@ pub(crate) fn surviving_install_generation(
     inv: InstallHalfEvidence,
     evidence: LaterLifecycleEvidence,
     evidence_key: [u8; 32],
+    epoch: u32,
 ) -> Option<SurvivingInstallGeneration> {
     // Both evidence kinds carry the same weight here; the parameter
     // exists so no call site can reconstruct without it.
@@ -235,6 +250,7 @@ pub(crate) fn surviving_install_generation(
         Some(SurvivingInstallGeneration {
             install_id,
             evidence_key,
+            epoch,
         })
     };
     match (id, inv) {
@@ -467,6 +483,7 @@ mod tests {
             InstallHalfEvidence::Exact(ID),
             InstallHalfEvidence::Exact(ID_INV),
             test_key().digest(),
+            7,
         );
         assert_eq!(full.map(|g| g.install_id()), Some(ID));
 
@@ -475,12 +492,14 @@ mod tests {
             InstallHalfEvidence::Exact([0x00; 16]),
             InstallHalfEvidence::Exact([0xFF; 16]),
             test_key().digest(),
+            7,
         )
         .is_none());
         assert!(full_install_generation(
             InstallHalfEvidence::Exact([0xFF; 16]),
             InstallHalfEvidence::Exact([0x00; 16]),
             test_key().digest(),
+            7,
         )
         .is_none());
 
@@ -491,6 +510,7 @@ mod tests {
             InstallHalfEvidence::Exact(ID),
             InstallHalfEvidence::Exact(bad),
             test_key().digest(),
+            7,
         )
         .is_none());
 
@@ -499,6 +519,7 @@ mod tests {
             InstallHalfEvidence::Exact(ID),
             InstallHalfEvidence::Indeterminate,
             test_key().digest(),
+            7,
         )
         .is_none());
     }
@@ -513,6 +534,7 @@ mod tests {
             InstallHalfEvidence::Indeterminate,
             ev,
             test_key().digest(),
+            7,
         );
         assert_eq!(s.map(|g| g.install_id()), Some(ID));
         let s = surviving_install_generation(
@@ -520,6 +542,7 @@ mod tests {
             InstallHalfEvidence::Exact(ID_INV),
             ev,
             test_key().digest(),
+            7,
         );
         assert_eq!(s.map(|g| g.install_id()), Some(ID));
 
@@ -530,6 +553,7 @@ mod tests {
             InstallHalfEvidence::ProvenBlankVirgin,
             ev,
             test_key().digest(),
+            7,
         )
         .is_none());
         assert!(surviving_install_generation(
@@ -537,6 +561,7 @@ mod tests {
             InstallHalfEvidence::Exact(ID_INV),
             ev,
             test_key().digest(),
+            7,
         )
         .is_none());
 
@@ -548,6 +573,7 @@ mod tests {
             InstallHalfEvidence::Exact(bad),
             ev,
             test_key().digest(),
+            7,
         )
         .is_none());
 
@@ -557,6 +583,7 @@ mod tests {
             InstallHalfEvidence::Indeterminate,
             ev,
             test_key().digest(),
+            7,
         )
         .is_none());
 
@@ -566,6 +593,7 @@ mod tests {
             InstallHalfEvidence::Indeterminate,
             ev,
             test_key().digest(),
+            7,
         )
         .is_none());
     }

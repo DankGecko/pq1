@@ -33,7 +33,7 @@ fn row_uninstalled() {
     let art = artifact(&p, PhysicalSlot::A);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
-    match decode_lifecycle(art, gen, &tf, atr_nl(&pd), None, F)
+    match decode_lifecycle(art, gen, &tf, &pd, None, F)
     {
         LifecycleState::Uninstalled(row) => {
             assert_eq!(row.artifact().r(), GOLDEN_R);
@@ -66,8 +66,9 @@ fn row_uninstalled_requires_full_generation() {
             launch: MAY_LAUNCH,
         },
         Some(LaterLifecycleEvidence::Pending),
+        None,
     );
-    match decode_lifecycle(art, gen, &tf, atr_nl(&pd), None, F)
+    match decode_lifecycle(art, gen, &tf, &pd, None, F)
     {
         LifecycleState::Malformed(MalformedReason::BadInstallGeneration) => {}
         _ => panic!("expected Malformed(BadInstallGeneration)"),
@@ -82,7 +83,7 @@ fn row_pending() {
     let tok = token_for(&art, ArmState::ArmReady);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
-    match decode_lifecycle(art, gen, &tf, atr(&pd), Some(tok), F) {
+    match decode_lifecycle(art, gen, &tf, &pd, Some(tok), F) {
         LifecycleState::Pending(row) => {
             assert_eq!(row.artifact().e(), GOLDEN_E);
             assert_eq!(row.token().state(), ArmState::ArmReady);
@@ -99,7 +100,7 @@ fn row_attempted() {
     let tok = token_for(&art, ArmState::Attempted);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
-    match decode_lifecycle(art, gen, &tf, atr(&pd), Some(tok), F) {
+    match decode_lifecycle(art, gen, &tf, &pd, Some(tok), F) {
         LifecycleState::Attempted(row) => assert_eq!(row.token().state(), ArmState::Attempted),
         _ => panic!("expected Attempted"),
     }
@@ -113,7 +114,7 @@ fn row_confirmed_robust() {
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(QW_CONFIRMED_0), ProbeScript::Clean(QW_CONFIRMED_1), ProbeScript::Clean(ERASED));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     // F <= T admitted (F == T here); PENDING/token not consulted.
-    match decode_lifecycle(art, gen, &tf, atr_nl(&pd), None, F) {
+    match decode_lifecycle(art, gen, &tf, &pd, None, F) {
         LifecycleState::ConfirmedRobust(a) => assert_eq!(a.artifact().t(), GOLDEN_T),
         _ => panic!("expected ConfirmedRobust"),
     }
@@ -126,7 +127,7 @@ fn row_confirmed_robust_rejects_f_greater_than_t() {
     let art = artifact(&p, PhysicalSlot::A);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(QW_CONFIRMED_0), ProbeScript::Clean(QW_CONFIRMED_1), ProbeScript::Clean(ERASED));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
-    match decode_lifecycle(art, gen, &tf, atr_nl(&pd), None, F + 1) {
+    match decode_lifecycle(art, gen, &tf, &pd, None, F + 1) {
         LifecycleState::Malformed(MalformedReason::FloorRelationViolation) => {}
         _ => panic!("expected Malformed(FloorRelationViolation) for F > T"),
     }
@@ -140,7 +141,7 @@ fn row_degraded_confirmed_repair_target_only() {
     // One exact replica (C0), the other indeterminate; F == T.
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(QW_CONFIRMED_0), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
-    match decode_lifecycle(art, gen, &tf, atr_nl(&pd), None, F) {
+    match decode_lifecycle(art, gen, &tf, &pd, None, F) {
         LifecycleState::DegradedConfirmed(_) => {}
         _ => panic!("expected DegradedConfirmed"),
     }
@@ -154,7 +155,7 @@ fn row_degraded_epoch_candidate_repair_target_only() {
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(QW_CONFIRMED_0), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     // F < T → degraded epoch candidate (repair target only).
-    match decode_lifecycle(art, gen, &tf, atr_nl(&pd), None, F - 1) {
+    match decode_lifecycle(art, gen, &tf, &pd, None, F - 1) {
         LifecycleState::DegradedEpochCandidate(_) => {}
         _ => panic!("expected DegradedEpochCandidate"),
     }
@@ -173,7 +174,7 @@ fn malformed_impossible_writer_order_terminal() {
     // CONFIRMED_1 exact with CONFIRMED_0 proven BlankVirgin.
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_CONFIRMED_1), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
-    match decode_lifecycle(art, gen, &tf, atr(&pd), Some(tok), F) {
+    match decode_lifecycle(art, gen, &tf, &pd, Some(tok), F) {
         LifecycleState::Malformed(MalformedReason::TerminalRejected(_)) => {}
         other => panic!("expected Malformed(TerminalRejected), got {}", row_name(&other)),
     }
@@ -187,7 +188,7 @@ fn malformed_torn_terminal_never_falls_through_to_pending() {
     let tok = token_for(&art, ArmState::ArmReady);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::AmbiguousOrFault, ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
-    match decode_lifecycle(art, gen, &tf, atr(&pd), Some(tok), F) {
+    match decode_lifecycle(art, gen, &tf, &pd, Some(tok), F) {
         LifecycleState::Malformed(_) => {}
         _ => panic!("a torn terminal must never fall through to PENDING"),
     }
@@ -200,7 +201,7 @@ fn malformed_missing_token_on_probation_branch() {
     let art = artifact(&p, PhysicalSlot::A);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
-    match decode_lifecycle(art, gen, &tf, atr(&pd), None, F) {
+    match decode_lifecycle(art, gen, &tf, &pd, None, F) {
         LifecycleState::Malformed(MalformedReason::MissingOrMalformedToken) => {}
         _ => panic!("expected Malformed(MissingOrMalformedToken)"),
     }
@@ -228,7 +229,7 @@ fn malformed_binding_mismatched_token() {
     };
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
-    match decode_lifecycle(art, gen, &tf, atr(&pd), Some(bad_token), F)
+    match decode_lifecycle(art, gen, &tf, &pd, Some(bad_token), F)
     {
         LifecycleState::Malformed(MalformedReason::TokenBindingMismatch) => {}
         other => panic!("expected Malformed(TokenBindingMismatch), got {}", row_name(&other)),
@@ -242,7 +243,7 @@ fn malformed_conflicting_install_halves() {
     let art = artifact(&p, PhysicalSlot::A);
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
     // No valid generation (conflicting halves → None).
-    match decode_lifecycle(art, None, &tf, atr_nl(&pd), None, F)
+    match decode_lifecycle(art, None, &tf, &pd, None, F)
     {
         LifecycleState::Malformed(MalformedReason::BadInstallGeneration) => {}
         _ => panic!("expected Malformed(BadInstallGeneration)"),
@@ -258,7 +259,7 @@ fn malformed_floor_relation_on_probation() {
     let (tf, pd) = probe_journal(&mut b, &art, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(QW_PENDING));
     let gen = Some(full_generation(&mut b, &art, 3, 4));
     // E <= F on the probation branch.
-    match decode_lifecycle(art, gen, &tf, atr(&pd), Some(tok), GOLDEN_E)
+    match decode_lifecycle(art, gen, &tf, &pd, Some(tok), GOLDEN_E)
     {
         LifecycleState::Malformed(MalformedReason::FloorRelationViolation) => {}
         other => panic!("expected Malformed(FloorRelationViolation), got {}", row_name(&other)),
@@ -308,7 +309,8 @@ fn cross_slot_terminal_qws_are_rejected() {
         (c0, CLEAN, MAY_LAUNCH),
         (c1, CLEAN, MAY_LAUNCH),
     );
-    match decode_lifecycle(art_b, gen, &tf, atr_nl(&pd), None, F) {
+    let pd = pqsigner_rollback::lifecycle::PendingEvidence::for_test(pd, CLEAN, NO_LAUNCH);
+    match decode_lifecycle(art_b, gen, &tf, &pd, None, F) {
         LifecycleState::Malformed(MalformedReason::NonCanonicalJournalQw) => {}
         other => panic!("expected Malformed(NonCanonicalJournalQw), got {}", row_name(&other)),
     }
@@ -331,7 +333,8 @@ fn cross_epoch_terminal_reads_are_rejected() {
         (c0, CLEAN, MAY_LAUNCH),
         (c1, CLEAN, MAY_LAUNCH),
     );
-    match decode_lifecycle(art, gen, &tf, atr_nl(&pd), None, F) {
+    let pd = pqsigner_rollback::lifecycle::PendingEvidence::for_test(pd, CLEAN, NO_LAUNCH);
+    match decode_lifecycle(art, gen, &tf, &pd, None, F) {
         LifecycleState::Malformed(MalformedReason::NonCanonicalJournalQw) => {}
         other => panic!("expected Malformed(NonCanonicalJournalQw), got {}", row_name(&other)),
     }
@@ -360,15 +363,42 @@ fn generation_minted_for_a_rejected_for_b() {
     // Mint the generation for A through the canonical orchestrator.
     let id = probe_at(&mut b, 4, art_a.identity().install_id_qw_address(), ProbeScript::Clean(INSTALL_ID));
     let inv = probe_at(&mut b, 5, art_a.identity().install_id_inv_qw_address(), ProbeScript::Clean(INSTALL_ID_INV));
-    let gen_for_a = pqsigner_rollback::lifecycle::decode_install_generation(&art_a, atr(&id), atr(&inv), None);
+    let gen_for_a = pqsigner_rollback::lifecycle::decode_install_generation(&art_a, atr(&id), atr(&inv), None, None);
     assert!(gen_for_a.is_some(), "generation mints for A");
     // Present it for B (identical install_id, different sealed key).
     let (tf, pd) = probe_journal(&mut b, &art_b, ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED), ProbeScript::Clean(ERASED));
-    match decode_lifecycle(art_b, gen_for_a, &tf, atr_nl(&pd), None, F) {
+    match decode_lifecycle(art_b, gen_for_a, &tf, &pd, None, F) {
         LifecycleState::Malformed(MalformedReason::BadInstallGeneration) => {}
         other => panic!(
             "A's generation evidence must never join B, got {}",
             row_name(&other)
         ),
+    }
+}
+
+#[test]
+fn terminal_row_ignores_pending_evidence_entirely() {
+    // R13-1a: on a terminal row the PENDING read is "not read;
+    // non-authoritative" (§6.2 L2170–2172) — even garbage, mis-addressed,
+    // or cross-epoch PENDING bytes cannot demote a robust CONFIRMED
+    // artifact.
+    let mut b = TestBackend::new(7);
+    let mut b8 = TestBackend::new(8);
+    let p = pass();
+    let art = artifact(&p, PhysicalSlot::A);
+    let (tf, _pd) = probe_journal(
+        &mut b,
+        &art,
+        ProbeScript::Clean(QW_CONFIRMED_0),
+        ProbeScript::Clean(QW_CONFIRMED_1),
+        ProbeScript::Clean([0x42; 16]), // garbage PENDING
+    );
+    // …and an even more hostile PENDING: wrong address AND wrong epoch.
+    let pd = probe_at(&mut b8, 9, 0x0BAD_0000, ProbeScript::Clean([0x00; 16]));
+    let pd = pqsigner_rollback::lifecycle::PendingEvidence::for_test(pd, CLEAN, MAY_LAUNCH);
+    let gen = Some(full_generation(&mut b, &art, 3, 4));
+    match decode_lifecycle(art, gen, &tf, &pd, None, F) {
+        LifecycleState::ConfirmedRobust(a) => assert_eq!(a.artifact().t(), GOLDEN_T),
+        other => panic!("expected ConfirmedRobust, got {}", row_name(&other)),
     }
 }
