@@ -92,8 +92,13 @@ fn vwrite<T>(p: *mut T, v: T) {
 /// forcing the FAIL term. A glitch yields garbage that is `!= OK_SENTINEL`,
 /// not a clean flip. (It does NOT make boolean→sentinel *unconditionally*
 /// single-fault-proof — a stale-register coincidence on the final compose is
-/// still possible; secret-RELEASE gates should additionally use the
-/// infective-mask pattern, see `tools/sca/README.md` §F-28. But it removes the
+/// still possible; secret-RELEASE gates should additionally publish a
+/// fail-initialized receipt from duplicated independent recomputation and
+/// re-check it twice through volatile reads — the F-28-rework pattern, see
+/// `tools/sca/README.md` §F-28. The legacy *infective-mask* pattern that
+/// §F-28 once recommended was itself attacker-invertible — XOR-garbling with a
+/// public mask returns `Ok` on a forgery and the attacker pre-complements the
+/// payload — so it was removed 2026-08-03. But select_sentinel removes the
 /// clean single-branch flip that was F-29's root.)
 #[inline(always)]
 fn select_sentinel(pass: bool) -> u32 {

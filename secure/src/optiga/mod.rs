@@ -257,6 +257,11 @@ impl OptigaTrustM {
         // closed (no silent plaintext downgrade — see bb2615f6).
         let mut last_err = OptigaError::Shield;
         for attempt in 0..2u8 {
+            // Each attempt starts from an explicit zero destination. A failed
+            // or short response can therefore never leave a nonzero prefix for
+            // the retry/caller to mistake for a complete TRNG contribution.
+            buf.zeroize();
+            crate::fi::zeroize_barrier();
             match self.random_shielded_once(buf) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -272,6 +277,8 @@ impl OptigaTrustM {
                 }
             }
         }
+        buf.zeroize();
+        crate::fi::zeroize_barrier();
         Err(last_err)
     }
 
@@ -298,7 +305,7 @@ impl OptigaTrustM {
             return Err(OptigaError::Shield);
         }
         self.init()?;
-        let written = unsafe { apdu::get_random(&mut self.ifx, &mut self.shield, out)? };
+        let written = unsafe { apdu::get_random_plain(&mut self.ifx, out)? };
         if written != out.len() {
             return Err(OptigaError::Transport);
         }
@@ -1605,25 +1612,39 @@ impl OptigaTrustM {
     ///
     /// The `factory_reset` wipe loop that runs next overwrites F1D0
     /// with zeros anyway, so the transient secret only ever exists
-    /// inside this function's stack frame.
+    /// in the caller-owned zeroizing buffer and this function's HMAC
+    /// computation; both are wiped before the reset returns.
     ///
     /// One E120 slot is consumed per call: the HMAC-verify step fires
     /// the LUC counter on F1D0's Execute AC (success path), but the
     /// subsequent `reset_hw_pin_counter` immediately snaps it back to
     /// 0. Net effect per wipe: E120 = 0 afterwards.
     ///
-    /// Security review: the transient secret is 32 TRNG bytes,
-    /// unguessable. An attacker who already holds E140 PBS (the only
-    /// way to reach this path) can derive or replay the secret
-    /// themselves — but if they have PBS, they already own the chip;
-    /// no new capability is introduced by this helper.
-    #[cfg(feature = "optiga-hw-counter")]
-    unsafe fn reset_e120_via_transient_auth(&mut self) -> Result<(), OptigaError> {
+    /// Security review: the caller supplies a 32-byte value from the strict
+    /// STM32 + OPTIGA + SE050 combiner. Keeping the draw at the dual-SE owner
+    /// avoids re-entering/aliasing the global backend while `self` is already
+    /// borrowed. If that draw fails, the caller skips this optional counter
+    /// reset and still performs the destructive wipe; this helper never falls
+    /// back to a platform-only authorization value.
+    #[cfg(all(feature = "optiga-hw-counter", not(feature = "optiga-lock-operational")))]
+    unsafe fn reset_e120_via_transient_auth(
+        &mut self,
+        transient_secret: &mut [u8; 32],
+    ) -> Result<(), OptigaError> {
         use zeroize::Zeroize;
 
-        // 1. Generate 32 random bytes to use as the transient F1D0 value.
-        let mut transient_secret = [0u8; 32];
-        crate::rng::fill(&mut transient_secret).map_err(|_| OptigaError::Transport)?;
+        // 1. The dual-SE owner has already filled `transient_secret` through
+        //    rng_strong::fill_with_store (STM32 + OPTIGA + SE050). Refuse an
+        //    error-wiped/invalid input instead of minting a weaker local draw.
+        let mut nonzero = 0u8;
+        for &byte in transient_secret.iter() {
+            nonzero |= byte;
+        }
+        if nonzero == 0 {
+            transient_secret.zeroize();
+            crate::fi::zeroize_barrier();
+            return Err(OptigaError::Transport);
+        }
 
         // 2. Write them to F1D0 under the active Shielded Connection
         //    (Conf(E140)) — Change AC is ALW, so the write always
@@ -1631,7 +1652,7 @@ impl OptigaTrustM {
         secure_log!("[OPTIGA/wipe] transient-auth: writing random to F1D0");
         if let Err(e) = apdu::set_data_object(
             &mut self.ifx, &mut self.shield,
-            apdu::OID_AUTH_REF, &transient_secret,
+            apdu::OID_AUTH_REF, transient_secret,
         ) {
             transient_secret.zeroize();
             secure_log!("[OPTIGA/wipe] transient-auth: F1D0 write FAILED: {:?}", e);
@@ -1654,7 +1675,7 @@ impl OptigaTrustM {
         //    DecryptSym-auto-state against F1D0 with the 18B data
         //    block `(nonce_oid || nonce)`. Success opens F1D0's
         //    session. LUC fires on E120 (counter advances by 1).
-        let mut hmac = Self::hmac_sha256(&transient_secret, &nonce);
+        let mut hmac = Self::hmac_sha256(transient_secret, &nonce);
         transient_secret.zeroize();
 
         let verify_result = apdu::hmac_verify_auto_state(
@@ -2628,7 +2649,8 @@ impl OptigaTrustM {
     /// 1. Ensure shielded connection active.
     /// 2. Overwrite F1D1..F1D4 with zeros (Change is satisfied by Conf).
     /// 3. Overwrite F1D0 (auth ref) with zeros (Change = Conf only).
-    /// 4. Reset the attempt counter to 0.
+    /// 4. Reset the attempt counter to 0 only when the dual-SE owner supplies
+    ///    a strict three-source transient authorization value.
     ///
     /// After this the device reports `is_provisioned()` → false? Not
     /// quite: LcsO is still Operational and metadata is still in place.
@@ -2649,7 +2671,31 @@ impl OptigaTrustM {
     ///   or `load_pbs_from_device_root`). `ensure_shield()` below will return
     ///   `OptigaError::Shield` otherwise — correct failure, not a
     ///   regression.
+    ///
+    /// Standalone callers intentionally skip the legacy E120 transient-auth
+    /// reset rather than generating a platform-only authorization secret.
+    /// Dual-SE callers use `DualSecureElement::reset_optiga_for_admin`, which
+    /// supplies a value drawn from STM32 + OPTIGA + SE050.
     pub fn factory_reset(&mut self) -> Result<(), OptigaError> {
+        self.factory_reset_with_optional_transient_secret(None)
+    }
+
+    /// Dual-SE factory reset entry: optionally reset E120 using a transient
+    /// authorization value that the owning `DualSecureElement` already drew
+    /// through the strict three-source combiner. This explicit handoff avoids
+    /// borrowing the global backend recursively from inside `OptigaTrustM`.
+    #[cfg(all(feature = "optiga-hw-counter", not(feature = "optiga-lock-operational")))]
+    pub(crate) fn factory_reset_with_transient_secret(
+        &mut self,
+        transient_secret: &mut [u8; 32],
+    ) -> Result<(), OptigaError> {
+        self.factory_reset_with_optional_transient_secret(Some(transient_secret))
+    }
+
+    fn factory_reset_with_optional_transient_secret(
+        &mut self,
+        transient_secret: Option<&mut [u8; 32]>,
+    ) -> Result<(), OptigaError> {
         // Run the reset body; on ANY error, drop the cached "chip is
         // ready" / "shield is up" state so the next `init()` does a real
         // soft_reset + re-handshake instead of early-returning. A failed
@@ -2661,7 +2707,7 @@ impl OptigaTrustM {
         // every subsequent plain APDU bounces with the same alert and a
         // later `setup_pbs_no_handshake` (which would rewrite E140 with
         // the new PBS at LcsO=Creation) fails with `Transport`.
-        let r = self.factory_reset_body();
+        let r = self.factory_reset_body(transient_secret);
         if r.is_err() {
             self.ready = false;
             self.shield.active = false;
@@ -2669,14 +2715,17 @@ impl OptigaTrustM {
         r
     }
 
-    fn factory_reset_body(&mut self) -> Result<(), OptigaError> {
+    fn factory_reset_body(
+        &mut self,
+        transient_secret: Option<&mut [u8; 32]>,
+    ) -> Result<(), OptigaError> {
         self.init()?;
         // Bring the Shielded Connection up so every subsequent write
         // satisfies the `Conf(E140)` arm of the user OID's Change AC.
-        // `authenticate_and_read` already brings it up on the PIN-
-        // lockout path, but the e2e test harness calls `factory_reset`
-        // directly — be explicit so correctness doesn't depend on
-        // caller ordering.
+        // `authenticate_and_read` already brings it up on the PIN-lockout
+        // path, but standalone/test callers may call `factory_reset`
+        // directly — be explicit so correctness doesn't depend on caller
+        // ordering.
         self.ensure_shield()?;
 
         // HIGH-18 fix: arm the shared wipe flag BEFORE starting any
@@ -2712,13 +2761,20 @@ impl OptigaTrustM {
         // than resetting E120 in place.
         #[cfg(all(feature = "optiga-hw-counter", not(feature = "optiga-lock-operational")))]
         unsafe {
-            if let Err(e) = self.reset_e120_via_transient_auth() {
+            if let Some(secret) = transient_secret {
+                if let Err(e) = self.reset_e120_via_transient_auth(secret) {
+                    secure_log!(
+                        "[OPTIGA] Factory reset: E120 reset via transient-auth FAILED: {:?} — \
+                         counter will carry over, next wipe cycle will retry",
+                        e
+                    );
+                    // Fall through — do not abort the wipe.
+                }
+            } else {
                 secure_log!(
-                    "[OPTIGA] Factory reset: E120 reset via transient-auth FAILED: {:?} — \
-                     counter will carry over, next wipe cycle will retry",
-                    e
+                    "[OPTIGA] Factory reset: no three-source transient auth — \
+                     skipping optional E120 reset and continuing wipe"
                 );
-                // Fall through — do not abort the wipe.
             }
         }
 
@@ -3138,6 +3194,10 @@ impl WalletStore for OptigaTrustM {
     }
 
     fn random(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
+        OptigaTrustM::random(self, buf).map_err(|_| SeError::InternalError)
+    }
+
+    fn random_optiga(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
         OptigaTrustM::random(self, buf).map_err(|_| SeError::InternalError)
     }
 

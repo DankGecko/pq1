@@ -8,10 +8,13 @@
 //!
 //!  * **FI gate-bypass** (`fault_sweep_scp03.py`, pattern `fault_sweep_pin.py`)
 //!    — `sca_scp03_unwrap_gate`: feed a **forged** response (valid R-ENC
-//!    ciphertext of an attacker-chosen `half_E`, but a WRONG R-MAC). Can a
-//!    single fault make the R-MAC verify gate
-//!    (`if !ct_eq_8(mac_full[..8], rmac_recv)`) pass → host accepts and
-//!    releases the attacker's `half_E`?
+//!    ciphertext of the *complement* of an attacker-chosen `half_E`, plus a
+//!    WRONG R-MAC). Can a single fault make the R-MAC authentication-receipt
+//!    gate (`scp03_logic::verify_rmac_into` + its dual volatile checks)
+//!    pass → host accepts and releases the attacker's `half_E`? The
+//!    complemented payload is the case the legacy infective `0xFF` mask
+//!    would have turned into the exact attacker-selected bytes — the mask
+//!    is gone, so ANY acceptance that releases `half_E` is a genuine bypass.
 //!  * **Leakage / constant-time** (`leakage_scp03.py`, pattern
 //!    `leakage_saes_kdf.py`) — `sca_scp03_cbc_decrypt` / `sca_scp03_cmac`:
 //!    does the R-ENC decrypt or the R-MAC CMAC do data-dependent
@@ -51,6 +54,14 @@ pub mod rng {
     pub fn byte() -> u8 {
         5
     }
+
+    /// Non-secret TRNG hook the production `fi.rs` uses for its delay loop
+    /// (degrades to `fallback` on transient TRNG errors). Constant here for the
+    /// same reason as `byte()`.
+    #[inline(never)]
+    pub fn byte_nonsecret(fallback: u8) -> u8 {
+        fallback
+    }
 }
 
 /// The REAL production FI-countermeasure source, included verbatim — so the
@@ -60,17 +71,26 @@ pub mod rng {
 #[path = "../../../../secure/src/fi.rs"]
 mod fi;
 
+/// The REAL receipt-bound exact copy used at the firmware's hardware-RNG
+/// boundaries — the kept-in-sync `unwrap_response` copy releases through it
+/// exactly like production (`copy_exact` wipes the destination on failure).
+#[path = "../../../../secure/src/rng_exact.rs"]
+mod rng_exact;
+
 // ===========================================================================
 // VERBATIM COPY — keep in sync with secure/src/se050/scp03.rs
-//   Scp03Session (struct + inc_counter)  : scp03.rs:92-125
-//   UnwrapError                          : scp03.rs:417-435   (From impl dropped)
-//   ct_eq_8                              : scp03.rs:452-457
-//   response_icv                         : scp03.rs:310-314
-//   unwrap_response                      : scp03.rs:491-601   (debug-log line dropped)
+//   Scp03Session (struct + inc_counter)  : scp03.rs:107-165
+//   UnwrapError                          : scp03.rs:497-515   (From impl dropped)
+//   ct_eq_8                              : scp03.rs:532-537
+//   response_icv                         : scp03.rs:388-392
+//   unwrap_response                      : scp03.rs:596-..    (debug-log line dropped)
 // The only edits are: drop `#[cfg(feature="debug-log")] secure_log!(...)`,
 // drop `impl From<UnwrapError> for Se050Error`, and make the items local.
-// The R-MAC gate carries the F-28 FI-hardening (sentinel + recomputed CMAC)
-// in lock-step with the firmware — that is what `make scp03-fi` re-validates.
+// The release path carries the reworked F-28 hardening (fail-initialized
+// R-MAC receipt via `scp03_logic::verify_rmac_into`, the wave-18 R-ENC
+// decrypt-fidelity receipt via `verify_renc_relation_into`, dual volatile
+// checks, and the receipt-bound `rng_exact::copy_exact` release) in
+// lock-step with the firmware — that is what `make scp03-fi` re-validates.
 // ===========================================================================
 
 pub struct Scp03Session {
@@ -99,12 +119,17 @@ pub enum UnwrapError {
     Inactive,
     MalformedLength,
     RMacMismatch,
+    RelationMismatch,
     BadCiphertextLen,
     BadPadding,
     Overflow,
 }
 
 /// Constant-time equality on two 8-byte slices (`subtle::ConstantTimeEq`).
+/// Unused by the reworked F-28 gate below (which delegates to
+/// `scp03_logic::verify_rmac_into`) but part of the kept-in-sync copy —
+/// the real `scp03.rs` still uses it in `establish`.
+#[allow(dead_code)]
 fn ct_eq_8(a: &[u8], b: &[u8]) -> bool {
     use subtle::ConstantTimeEq;
     debug_assert_eq!(a.len(), 8);
@@ -139,6 +164,7 @@ pub fn unwrap_response(
         }
         out[0] = wrapped[0];
         out[1] = wrapped[1];
+        session.inc_counter();
         return Ok(2);
     }
 
@@ -153,16 +179,34 @@ pub fn unwrap_response(
 
     // R-MAC = CMAC(S-RMAC, MCV || ciphered_body || SW)[..8]
     //
-    // F-28 FI-hardening (kept in sync with scp03.rs): recompute the CMAC inside
-    // the double-evaluated closure (a fault corrupting one computation makes
-    // the two disagree) and route the verdict through the Hamming-distant
-    // sentinel; `black_box` stops LLVM collapsing the two evaluations.
+    // F-28 rework (kept in sync with scp03.rs): the authoritative gate is a
+    // fail-initialized authentication receipt — `verify_rmac_into` publishes
+    // `OK_SENTINEL` only after two independent full R-MAC recomputations, and
+    // two independent volatile checks (separated by `wait_random`) must pass
+    // before any copy, counter advance, or `Ok`. There is deliberately NO
+    // complementing infective mask: XOR-0xFF is a public bijection, so the
+    // forged frame in this harness carries the *complement* of
+    // `ATTACKER_HALF_E` — the old mask would have turned it into the exact
+    // attacker-selected bytes after one fault.
     crate::fi::wait_random();
-    let rmac_ok = crate::fi::check_true_into_sentinel(|| {
-        let mac = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
-        core::hint::black_box(ct_eq_8(&mac[..8], rmac_recv))
-    });
-    if rmac_ok != crate::fi::OK_SENTINEL {
+    let mut rmac_auth_receipt: u32 = crate::fi::FAIL_SENTINEL;
+    // SAFETY: unique stack receipt, fail-initialized.
+    unsafe {
+        core::ptr::write_volatile(&mut rmac_auth_receipt, crate::fi::FAIL_SENTINEL);
+    }
+    scp03_logic::verify_rmac_into(
+        &session.s_rmac,
+        &session.mcv,
+        body,
+        sw,
+        rmac_recv,
+        &mut rmac_auth_receipt,
+    );
+    if unsafe { core::ptr::read_volatile(&rmac_auth_receipt) } != crate::fi::OK_SENTINEL {
+        return Err(UnwrapError::RMacMismatch);
+    }
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&rmac_auth_receipt) } != crate::fi::OK_SENTINEL {
         return Err(UnwrapError::RMacMismatch);
     }
 
@@ -180,7 +224,7 @@ pub fn unwrap_response(
         return Err(UnwrapError::BadCiphertextLen);
     }
 
-    let mut plain = [0u8; 1024];
+    let mut plain = zeroize::Zeroizing::new([0u8; 1024]);
     if body_end > plain.len() {
         return Err(UnwrapError::Overflow);
     }
@@ -188,6 +232,30 @@ pub fn unwrap_response(
 
     let icv = response_icv(session);
     aes128_cbc_decrypt(&session.s_enc, &icv, &mut plain[..body_end]);
+
+    // Decrypt-fidelity receipt (kept in sync with scp03.rs): bind the
+    // decrypted padded buffer back to the authenticated ciphertext — a
+    // skipped/corrupted decrypt writeback otherwise releases bus-visible
+    // ciphertext behind an Ok (wave-18 GPT-5.6 blocker).
+    let mut renc_receipt: u32 = crate::fi::FAIL_SENTINEL;
+    // SAFETY: unique stack receipt, fail-initialized.
+    unsafe {
+        core::ptr::write_volatile(&mut renc_receipt, crate::fi::FAIL_SENTINEL);
+    }
+    scp03_logic::verify_renc_relation_into(
+        &session.s_enc,
+        &session.counter,
+        &plain[..body_end],
+        body,
+        &mut renc_receipt,
+    );
+    if unsafe { core::ptr::read_volatile(&renc_receipt) } != crate::fi::OK_SENTINEL {
+        return Err(UnwrapError::RelationMismatch);
+    }
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&renc_receipt) } != crate::fi::OK_SENTINEL {
+        return Err(UnwrapError::RelationMismatch);
+    }
 
     // ISO 7816-4 depad.
     let mut pad_pos = body_end;
@@ -212,20 +280,10 @@ pub fn unwrap_response(
         return Err(UnwrapError::Overflow);
     }
 
-    // F-28 infective release gate (kept in sync with scp03.rs): fold a fresh,
-    // INDEPENDENT R-MAC recompute branchlessly into the released bytes, so a
-    // forged response that slips past the early sentinel gate (which is itself
-    // single-skip-defeatable via check_true_into_sentinel's verdict branch) is
-    // XOR-garbled rather than releasing the attacker's half_E. No branch on the
-    // verdict here.
-    let mac_chk = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
-    let mac_matches = ct_eq_8(&mac_chk[..8], rmac_recv);
-    let release_mask = (mac_matches as u8).wrapping_sub(1);
-    for (o, p) in out[..plaintext_len]
-        .iter_mut()
-        .zip(plain[..plaintext_len].iter())
-    {
-        *o = p ^ release_mask;
+    // Both receipts passed — release through the receipt-bound exact copy
+    // (kept in sync with scp03.rs). No infective mask.
+    if rng_exact::copy_exact(&plain[..plaintext_len], &mut out[..plaintext_len]).is_err() {
+        return Err(UnwrapError::RelationMismatch);
     }
     out[plaintext_len] = sw[0];
     out[plaintext_len + 1] = sw[1];
@@ -262,9 +320,10 @@ const ATTACKER_HALF_E: [u8; 15] = *b"FORGED::half_E!";
 /// plaintext by symbol address rather than relying on a hand-mapped scratch.
 /// `#[used]` keeps it (and its symbol) past LTO/`--gc-sections` even though
 /// the firmware writes it only through the `out_ptr` the harness supplies.
+/// 96 bytes: the valid3 witness publishes 32 plaintext + 48 ciphertext bytes.
 #[no_mangle]
 #[used]
-pub static mut SCA_SCP03_OUT: [u8; 64] = [0u8; 64];
+pub static mut SCA_SCP03_OUT: [u8; 96] = [0u8; 96];
 
 fn fixed_session() -> Scp03Session {
     Scp03Session {
@@ -277,14 +336,18 @@ fn fixed_session() -> Scp03Session {
     }
 }
 
-/// Build a 26-byte wrapped response (`ciphertext(16) || R-MAC(8) || SW(2)`)
-/// carrying `ATTACKER_HALF_E` under R-ENC. `valid_rmac=false` plants a
-/// deliberately-wrong (all-zero) R-MAC — the response a forging attacker can
-/// actually produce (they cannot compute the R-MAC without `S-RMAC`).
+/// Build a 26-byte wrapped response (`ciphertext(16) || R-MAC(8) || SW(2)`).
+/// A valid frame carries `ATTACKER_HALF_E`. A forged frame carries its bitwise
+/// complement so the legacy `0xff` infective mask turns it back into the exact
+/// attacker-selected bytes if one fault skips the early R-MAC rejection.
+/// `valid_rmac=false` also plants a deliberately-wrong (all-zero) R-MAC — the
+/// attacker can know R-ENC while still being unable to compute `S-RMAC`.
 fn build_forged_wrapped(valid_rmac: bool) -> [u8; 26] {
     let sess = fixed_session();
     let mut block = [0u8; 16];
-    block[..15].copy_from_slice(&ATTACKER_HALF_E);
+    for (slot, selected) in block[..15].iter_mut().zip(ATTACKER_HALF_E.iter()) {
+        *slot = if valid_rmac { *selected } else { !*selected };
+    }
     block[15] = 0x80; // ISO 7816-4 pad
     let icv = response_icv(&sess);
     aes128_cbc_encrypt(&sess.s_enc, &icv, &mut block); // block := R-ENC ciphertext
@@ -323,6 +386,77 @@ pub extern "C" fn sca_scp03_unwrap_gate(out_ptr: *mut u8) -> u32 {
         }
         Err(_) => 0,
     }
+}
+
+/// **Valid-frame output-equality target (wave-18 follow-up).** Unwrap a
+/// CORRECTLY-MAC'd 58-byte response (3-block R-ENC body of a 32-byte
+/// TLV-shaped plaintext + ISO pad, valid R-MAC). The gate must release the
+/// expected plaintext. The FI sweep faults every instruction and requires
+/// that no single fault yields `Ok` with output ≠ the expected plaintext
+/// (the decrypt-writeback skip class that released bus-visible ciphertext
+/// before the R-ENC relation receipt).
+#[no_mangle]
+pub extern "C" fn sca_scp03_unwrap_valid3_gate(out_ptr: *mut u8) -> u32 {
+    let (wrapped, _expected) = build_valid3_wrapped();
+    let mut sess = fixed_session();
+    let mut out = [0u8; 64];
+    match unwrap_response(&mut sess, &wrapped, &mut out) {
+        Ok(n) => {
+            let m = if n > 64 { 64 } else { n };
+            for i in 0..m {
+                // SAFETY: harness provides a ≥64-byte out buffer.
+                unsafe { core::ptr::write_volatile(out_ptr.add(i), out[i]) };
+            }
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+/// The valid3 frame's expected released plaintext (`TLV || 30 bytes`).
+fn valid3_expected() -> [u8; 32] {
+    let mut expected = [0u8; 32];
+    expected[0] = 0x41; // TAG_1
+    expected[1] = 0x1e; // len 30
+    for (i, b) in expected[2..].iter_mut().enumerate() {
+        *b = 0xA0 + i as u8;
+    }
+    expected
+}
+
+/// Build a VALID 58-byte wrapped response: 48-byte R-ENC body (32-byte
+/// plaintext || 0x80 || 0-padding) || correct R-MAC(8) || SW(2).
+fn build_valid3_wrapped() -> ([u8; 58], [u8; 32]) {
+    let sess = fixed_session();
+    let expected = valid3_expected();
+    let mut plain = [0u8; 48];
+    plain[..32].copy_from_slice(&expected);
+    plain[32] = 0x80; // ISO 7816-4 pad
+    let icv = response_icv(&sess);
+    aes128_cbc_encrypt(&sess.s_enc, &icv, &mut plain); // plain := R-ENC ciphertext
+    let mac = cmac_aes128(&sess.s_rmac, &[&sess.mcv, &plain, &SW]);
+    let mut wrapped = [0u8; 58];
+    wrapped[..48].copy_from_slice(&plain);
+    wrapped[48..56].copy_from_slice(&mac[..8]);
+    wrapped[56] = SW[0];
+    wrapped[57] = SW[1];
+    (wrapped, expected)
+}
+
+/// Witness for the harness script: expected plaintext at [0..32], R-ENC
+/// ciphertext body at [32..80].
+#[no_mangle]
+pub extern "C" fn sca_scp03_valid3_witness(out_ptr: *mut u8) -> u32 {
+    let (wrapped, expected) = build_valid3_wrapped();
+    for i in 0..32 {
+        // SAFETY: harness provides a ≥80-byte buffer.
+        unsafe { core::ptr::write_volatile(out_ptr.add(i), expected[i]) };
+    }
+    for i in 0..48 {
+        // SAFETY: harness provides a ≥80-byte buffer.
+        unsafe { core::ptr::write_volatile(out_ptr.add(32 + i), wrapped[i]) };
+    }
+    1
 }
 
 /// Sanity self-test (no fault): a CORRECTLY-MAC'd response of the same shape
@@ -395,6 +529,10 @@ static _KEEP_GATE: extern "C" fn(*mut u8) -> u32 = sca_scp03_unwrap_gate;
 #[used]
 static _KEEP_SELFTEST: extern "C" fn() -> u32 = sca_scp03_unwrap_valid_selftest;
 #[used]
+static _KEEP_VALID3: extern "C" fn(*mut u8) -> u32 = sca_scp03_unwrap_valid3_gate;
+#[used]
+static _KEEP_WIT3: extern "C" fn(*mut u8) -> u32 = sca_scp03_valid3_witness;
+#[used]
 static _KEEP_CBC: extern "C" fn(*const u8, *mut u8) = sca_scp03_cbc_decrypt;
 #[used]
 static _KEEP_CMAC: extern "C" fn(*const u8, *mut u8) = sca_scp03_cmac;
@@ -405,6 +543,8 @@ fn main() -> ! {
     // real work. Touch the keep-statics belt-and-braces against DCE.
     core::hint::black_box(&_KEEP_GATE);
     core::hint::black_box(&_KEEP_SELFTEST);
+    core::hint::black_box(&_KEEP_VALID3);
+    core::hint::black_box(&_KEEP_WIT3);
     core::hint::black_box(&_KEEP_CBC);
     core::hint::black_box(&_KEEP_CMAC);
     loop {

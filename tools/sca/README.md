@@ -220,9 +220,16 @@ stable C symbols, then a `rainbow`/`lascar` harness.
   (FI) + `leakage_scp03.py` (TVLA) + `scp03_target/`, which `#[path]`-includes the real
   `secure/src/scp03_logic.rs` primitives — see "### SE050 SCP03 response-unwrap" below).
   `make scp03-fi` exits **0** now: the exhaustive stride-1 sweep first FOUND a real gate
-  weakness (**F-28** — `[skip]` faults released the attacker's `half_E`), which is now
-  FIXED (early `check_true_into_sentinel` gate + an *infective release mask*; closing it
-  also uncovered **F-29**, the shared sentinel-verdict branch being single-skip-defeatable).
+  weakness (**F-28** — `[skip]` faults released the attacker's `half_E`), then found the
+  2026-06-10 *infective release mask* "fix" was itself attacker-invertible (wave-17
+  GPT-5.6, 2026-08-02), and the reworked gate — a **fail-initialized R-MAC
+  receipt** from two independent full recomputations, an **R-ENC decrypt-fidelity
+  receipt** (two independent re-encryptions under independently recomputed ICVs;
+  wave-18 GPT-5.6 follow-up), and **receipt-bound copies** at both release
+  handoffs — passes with the forged frame now carrying the *complement* of the
+  desired payload and a valid-frame output-equality phase (closing it also
+  uncovered **F-29**, the shared sentinel-verdict branch
+  being single-skip-defeatable).
   See Findings F-28/F-29. `make scp03-leakage` reports flat on
   `mem_address` for all four modes (R-ENC decrypt + R-MAC CMAC, vary key / `half_E` / msg),
   with the leaky-S-box positive control confirming the pipeline detects leaks. Surfaced by
@@ -930,10 +937,20 @@ result for a gate-bypass verdict). Root cause: the gate was a **plain
 `if !ct_eq_8(..) { return Err }`** with no FI redundancy.
 
 **Result now: `make scp03-fi` exits 0** — see Finding **F-28** below for the
-full fix (an early `check_true_into_sentinel` gate for correct rejection + an
-*infective release mask* that branchlessly garbles the output unless a fresh,
-independent R-MAC recompute matches). `GENUINE-gate-bypass(half_E released)=0`
-across all 3 fault models over the full 60,726-instruction sweep. Closing it
+full history (2026-06-10: an early `check_true_into_sentinel` gate + an
+*infective release mask*; 2026-08-03 rework: the mask was attacker-invertible,
+replaced by a **fail-initialized R-MAC receipt** from two independent full
+recomputations with two volatile checks before any copy/counter/`Ok`; same-day
+wave-18 follow-up: the ciphertext receipt doesn't bind the *decrypted* output,
+so a decrypt-fidelity receipt (two independent re-encryptions under
+independently recomputed ICVs) plus receipt-bound copies at both handoffs now
+bind the released plaintext end-to-end).
+`GENUINE-gate-bypass(half_E released)=0` across all 3 fault models over the
+full instruction sweep — re-verified on the reworked gate with the forged
+frame now carrying the **complement** of the desired payload (the shape the
+old mask would have turned into the exact attacker-selected bytes), and a
+valid-frame output-equality phase (`GENUINE-corrupted-release=0`) covering
+the decrypt/writeback/copy class. Closing it
 also uncovered **F-29** (the shared `check_true_into_sentinel` verdict branch is
 itself single-skip-defeatable) — see below.
 
@@ -1609,7 +1626,79 @@ Both hygiene migrations are deferred to a separate "delete leaky
 `WORDLIST[i]` access pattern from the codebase" commit so the F-27
 diff stays focused on the production-critical fix.
 
-### F-28 — SE050 SCP03 R-MAC verify gate is single-fault-defeatable (`unwrap_response`) — **FIXED 2026-06-10 (infective release mask); `make scp03-fi` exits 0**
+### F-28 — SE050 SCP03 R-MAC verify gate is single-fault-defeatable (`unwrap_response`) — **REWORKED 2026-08-03 (fail-initialized receipt; infective mask removed); `make scp03-fi` exits 0**
+
+> **UPDATE 2026-08-03 — the 2026-06-10 "infective release mask" closure was a
+> harness blind spot, and the mask itself was an attacker-invertible transform.
+> This section's original text is preserved below for history; the live design
+> and the current sweep status are in this update.**
+>
+> The 2026-06-10 harness encrypted the attacker's chosen payload *directly* in
+> the forged frame, so the mask's XOR-`0xFF` garble emitted its complement
+> ("garbage") and the sweep passed. But the mask is a **public bijection**:
+> an attacker who can form R-ENC ciphertext submits the *complement* of the
+> desired payload and — after one fault skips the early rejection — receives
+> exactly the desired bytes, with the attacker-chosen SW preserved, the counter
+> advanced, and `Ok` returned. The wave-17 Phase-D GPT-5.6 review
+> (`secure/src/se050/scp03.rs:751`) flagged exactly this: a complemented valid
+> GetRandom TLV is reconstructed and accepted as the SE050 entropy
+> contribution, so a "three-source" draw need not contain authenticated SE050
+> TRNG output. The SCA target's forged frame now encrypts the complement, and
+> the exhaustive sweep on the pre-rework code finds genuine bypasses (the old
+> mask demonstrably caught).
+>
+> **Rework (2026-08-03).** The authoritative gate is now a **fail-initialized
+> authentication receipt**: `scp03_logic::verify_rmac_into` (exported
+> `pqsigner_se050_scp03_rmac_verify_into`, `#[inline(never)]`, audited by
+> `scripts/prod_symbol_audit.sh`) publishes `OK_SENTINEL` only after **two
+> independent full R-MAC recomputations** (constant-time compare, `black_box`ed,
+> separated by `wait_random` so LTO cannot common them up), and
+> `unwrap_response` requires **two independent volatile success checks** —
+> separated by `wait_random` — before any protected-response copy, counter
+> advance, or `Ok` return. The gate covers both the empty-body (case 2) and
+> full encrypted (case 3) paths; the bare-error (case 1) arm is unchanged. The
+> complementing infective mask and the single-skip-defeatable early sentinel
+> gate are removed: a forged response now yields `Err(RMacMismatch)`, never an
+> `Ok` with transformed bytes. Host tests pin the verifier's behavior
+> (`scp03_logic::tests::verify_rmac_*`), mutation-sensitive source pins lock
+> the caller shape (`se050_under_test`), and the exhaustive `make scp03-fi`
+> sweep on the reworked code exits 0.
+>
+> **UPDATE 2026-08-03 (second pass) — the wave-18 GPT-5.6 review of the
+> receipt rework found the NEXT gap in the same release path: the R-MAC
+> receipt authenticates the ciphertext, but nothing bound the *decrypted*
+> output to it.** A single skip of the per-block writeback inside
+> `aes128_cbc_decrypt` left bus-visible ciphertext in the released payload
+> (coordinator-reproduced under emulation: `Ok` + intact TLV header + SW
+> `9000` + advanced counter, block bytes equal to the on-wire ciphertext).
+> Two remediation layers now close it:
+>
+> * **R-ENC decrypt-fidelity receipt** (`verify_renc_relation_into`,
+>   exported `pqsigner_se050_scp03_renc_verify_into`): after decrypt and
+>   before depad, the padded plaintext is re-encrypted twice independently
+>   — each pass under an **independently recomputed response ICV** (the
+>   first iteration of this fix shared the caller's ICV between decrypt and
+>   check; the sweep immediately caught that one faulted ICV computation
+>   made both consistently wrong: garbage first block, valid equality) —
+>   with the same fail-initialized, dual-volatile-check shape as the R-MAC
+>   receipt.
+> * **Receipt-bound copies at both handoffs** (`rng_exact::copy_exact` at
+>   `scp03.rs`'s plaintext release and `send_apdu`'s caller-buffer copy):
+>   a skipped or shortened plain memcpy can no longer release stale bytes
+>   behind an `Ok`.
+>
+> The sweep gained a second phase: a **valid-frame output-equality sweep**
+> (any single fault yielding `Ok` with bytes the downstream SW/TLV checks
+> accept while differing from the authenticated plaintext counts as genuine;
+> harness-builder/readback phases are classified out by execution-index
+> bounds; Ok-corruptions of the return length or SW fail closed downstream —
+> `send_apdu` `Err` or a secure-world panic — and are reported separately as
+> the inherent result-register class). On the remediated gate both phases
+> exit 0.
+>
+> ---
+>
+> *Original 2026-06-10 text (superseded by the update above):*
 
 The exhaustive stride-1 `make scp03-fi` sweep (39,325 positions × 3 fault
 models) found genuine **`[skip]` faults inside `secure/src/se050/scp03.rs::
@@ -1718,10 +1807,14 @@ call-site glue (`if verdict != OK_SENTINEL { return … }`) and the condition
 closure. That is the long-documented **F-2** class: `fi::check_true_into_sentinel`
 "cannot fix its own call site." It is exploitable only for a gate that releases
 a secret on a *single* sentinel check with an attacker-controlled reject input
-(F-28's SCP03 shape) — which is why such gates additionally use the
-**infective-mask** pattern (see F-28). With F-29 closed, the primitive itself is
+(F-28's SCP03 shape) — which is why such gates publish a fail-initialized
+receipt from duplicated independent recomputation, re-checked twice through
+volatile reads (the F-28-rework pattern; the legacy infective-mask variant
+named here previously was attacker-invertible and removed 2026-08-03). With
+F-29 closed, the primitive itself is
 now sound; gate authors must still compose it correctly (a second independent
-check, a silicon gate, or an infective mask) for secret-release sites.
+check, a silicon gate, or a duplicated-recompute receipt) for secret-release
+sites.
 
 (Harness follow-up, low-priority: `make c10` still relies on a human to
 "eyeball the PCs" to tell an inside-`check_true` decision-point flip from

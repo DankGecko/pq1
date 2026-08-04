@@ -320,7 +320,11 @@ pub unsafe fn send_apdu(
         };
 
         let has_le = apdu.len() > hdr_len + lc_val;
-        let apdu_no_le = if has_le { &apdu[..apdu.len() - 1] } else { apdu };
+        let apdu_no_le = if has_le {
+            &apdu[..apdu.len() - 1]
+        } else {
+            apdu
+        };
 
         let mut wrapped = [0u8; MAX_APDU];
         let mut wlen = super::scp03::wrap_apdu(scp03, apdu_no_le, &mut wrapped);
@@ -331,8 +335,7 @@ pub unsafe fn send_apdu(
         // it appends an 8-byte C-MAC, pushing the body well past the
         // 255-byte short-Lc cap on every command with a payload.
         if has_le {
-            let wrapped_extended =
-                wlen >= 7 && wrapped[4] == 0x00;
+            let wrapped_extended = wlen >= 7 && wrapped[4] == 0x00;
             if wrapped_extended {
                 wrapped[wlen] = 0x00;
                 wrapped[wlen + 1] = 0x00;
@@ -351,13 +354,19 @@ pub unsafe fn send_apdu(
             // Log the raw (post-SCP03) APDU header + first few bytes
             secure_log!(
                 "[SE050] TX CLA={:02x} INS={:02x} P1={:02x} P2={:02x} Lc={:02x} len={}",
-                tx_buf[0], tx_buf[1], tx_buf[2], tx_buf[3], tx_buf[4], tx_len
+                tx_buf[0],
+                tx_buf[1],
+                tx_buf[2],
+                tx_buf[3],
+                tx_buf[4],
+                tx_len
             );
         }
     }
 
     let mut raw_resp = [0u8; MAX_APDU];
-    let n = t1.transceive(&tx_buf[..tx_len], &mut raw_resp)
+    let n = t1
+        .transceive(&tx_buf[..tx_len], &mut raw_resp)
         .map_err(|_| Se050Error::Transport)?;
 
     if n < 2 {
@@ -390,7 +399,16 @@ pub unsafe fn send_apdu(
     if data_len > resp_buf.len() {
         return Err(Se050Error::BufferOverflow);
     }
-    resp_buf[..data_len].copy_from_slice(&resp_slice[..data_len]);
+    // Receipt-bound copy (wave-18 GPT-5.6 follow-up): a skipped or shortened
+    // plain memcpy here would leave STALE bytes from a previous response in
+    // `resp_buf` behind an `Ok`, and the downstream exact-copy receipts
+    // faithfully certify the stale staging buffer. `rng_exact::copy_exact`
+    // binds the copy with pointer publications, volatile progress, and two
+    // independent read-back relations; on any failure it wipes the
+    // destination slice and we fail closed as a transport fault.
+    if crate::rng_exact::copy_exact(&resp_slice[..data_len], &mut resp_buf[..data_len]).is_err() {
+        return Err(Se050Error::Transport);
+    }
     Ok(data_len)
 }
 
@@ -413,7 +431,9 @@ pub unsafe fn select_applet(t1: &mut T1State) -> Result<(), Se050Error> {
     let total = 5 + SE050_AID.len();
 
     let mut resp = [0u8; 256];
-    let n = t1.transceive(&apdu[..total], &mut resp).map_err(|_| Se050Error::Transport)?;
+    let n = t1
+        .transceive(&apdu[..total], &mut resp)
+        .map_err(|_| Se050Error::Transport)?;
     if n < 2 {
         return Err(Se050Error::Transport);
     }
@@ -441,7 +461,10 @@ pub unsafe fn check_exists(
                 if n >= 3 {
                     secure_log!(
                         "[SE050] check_exists resp: {:02x} {:02x} {:02x} (n={})",
-                        resp[0], resp[1], resp[2], n
+                        resp[0],
+                        resp[1],
+                        resp[2],
+                        n
                     );
                 }
             }
@@ -472,11 +495,7 @@ const AR_REQUIRE_SM: u32 = 0x0002_0000;
 /// the requested operation, the operation succeeds. This lets us grant
 /// "normal use under UserID" + "admin delete under a secondary auth
 /// object" on the same secure object.
-fn build_policy(
-    primary_auth: u32,
-    primary_ar: u32,
-    admin_auth: Option<u32>,
-) -> ([u8; 18], usize) {
+fn build_policy(primary_auth: u32, primary_ar: u32, admin_auth: Option<u32>) -> ([u8; 18], usize) {
     let mut out = [0u8; 18];
     let mut len = 0;
 
@@ -823,9 +842,7 @@ pub unsafe fn verify_session(
         // `trigger_lockout_wipe` would risk a false-positive wipe, so
         // 0x6982 propagates as `Status(0x6982)` (→ `InternalError`,
         // treated as transient, no wipe).
-        Err(Se050Error::Status(sw)) if sw == 0x6986 => {
-            Err(Se050Error::AuthMethodBlocked)
-        }
+        Err(Se050Error::Status(sw)) if sw == 0x6986 => Err(Se050Error::AuthMethodBlocked),
         Err(e) => Err(e),
     }
 }
@@ -1073,7 +1090,9 @@ pub unsafe fn iterative_delete_all(
 
     #[cfg(feature = "debug-log")]
     secure_log!(
-        "[SE050][erase] Pass 1 done: {} deleted, {} left", deleted, failed
+        "[SE050][erase] Pass 1 done: {} deleted, {} left",
+        deleted,
+        failed
     );
 
     if failed == 0 {
@@ -1101,7 +1120,8 @@ pub unsafe fn iterative_delete_all(
 
     #[cfg(feature = "debug-log")]
     secure_log!(
-        "[SE050][erase] Pass 2: authenticated (UserID=0x{:08x})", uid
+        "[SE050][erase] Pass 2: authenticated (UserID=0x{:08x})",
+        uid
     );
 
     let (auth_del, auth_fail) = sweep(t1, scp03, Some(&session_id))?;
@@ -1250,17 +1270,13 @@ unsafe fn delete_id_list_page(
                 } else {
                     deleted += 1;
                     #[cfg(feature = "debug-log")]
-                    secure_log!(
-                        "[SE050][erase]   0x{:08x} deleted", id
-                    );
+                    secure_log!("[SE050][erase]   0x{:08x} deleted", id);
                 }
             }
             Err(_e) => {
                 failed += 1;
                 #[cfg(feature = "debug-log")]
-                secure_log!(
-                    "[SE050][erase]   0x{:08x} FAILED: {:?}", id, _e
-                );
+                secure_log!("[SE050][erase]   0x{:08x} FAILED: {:?}", id, _e);
             }
         }
     }
@@ -1284,6 +1300,75 @@ unsafe fn delete_id_list_page(
 /// same. 128 is chosen as a clean, comfortably-safe chunk below 224.
 const GET_RANDOM_MAX_CHUNK: usize = 128;
 
+/// Advance the sole SE050 response cursor only after an exact authenticated
+/// response copy.  A stale loop offset cannot be promoted because both passes
+/// bind it to the canonical volatile completion record and to the exact
+/// `min(128, remaining)` response shape.
+#[inline(never)]
+fn publish_verified_get_random_progress_into(
+    completed_bytes: &mut usize,
+    current: usize,
+    copied: usize,
+    total: usize,
+    progress_receipt: &mut u32,
+) {
+    unsafe {
+        core::ptr::write_volatile(progress_receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    let completed_a = unsafe { core::ptr::read_volatile(completed_bytes) };
+    let current_a = unsafe { core::ptr::read_volatile(&current) };
+    let copied_a = unsafe { core::ptr::read_volatile(&copied) };
+    let total_a = unsafe { core::ptr::read_volatile(&total) };
+    if completed_a != current_a || current_a >= total_a {
+        return;
+    }
+    let expected_a = core::cmp::min(GET_RANDOM_MAX_CHUNK, total_a - current_a);
+    if copied_a != expected_a {
+        return;
+    }
+    let next_a = match current_a.checked_add(copied_a) {
+        Some(next) if next <= total_a => next,
+        _ => return,
+    };
+
+    crate::fi::wait_random();
+
+    let completed_b = unsafe { core::ptr::read_volatile(completed_bytes) };
+    let current_b = unsafe { core::ptr::read_volatile(&current) };
+    let copied_b = unsafe { core::ptr::read_volatile(&copied) };
+    let total_b = unsafe { core::ptr::read_volatile(&total) };
+    if completed_b != current_b || current_b >= total_b {
+        return;
+    }
+    let expected_b = core::cmp::min(GET_RANDOM_MAX_CHUNK, total_b - current_b);
+    if copied_b != expected_b {
+        return;
+    }
+    let next_b = match current_b.checked_add(copied_b) {
+        Some(next) if next <= total_b => next,
+        _ => return,
+    };
+    if next_b != next_a {
+        return;
+    }
+
+    unsafe {
+        core::ptr::write_volatile(completed_bytes, next_a);
+        core::ptr::write_volatile(completed_bytes, next_b);
+    }
+    if unsafe { core::ptr::read_volatile(completed_bytes) } != next_a {
+        return;
+    }
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(completed_bytes) } != next_b {
+        return;
+    }
+    unsafe {
+        core::ptr::write_volatile(progress_receipt, crate::fi::OK_SENTINEL);
+    }
+}
+
 /// `Se05x_API_GetRandom` (NXP AN12413 §5.13.1) — fill `out` with bytes
 /// from the SE050 hardware TRNG over the established SCP03 channel.
 ///
@@ -1306,8 +1391,31 @@ pub unsafe fn get_random(
         return Err(Se050Error::InvalidParam);
     }
 
-    let mut filled = 0usize;
-    while filled < out.len() {
+    let mut completed_bytes = usize::MAX;
+    let mut progress_init_receipt = crate::fi::FAIL_SENTINEL;
+    unsafe {
+        core::ptr::write_volatile(&mut progress_init_receipt, crate::fi::FAIL_SENTINEL);
+    }
+    crate::rng_exact::initialize_exact_progress_into(
+        &mut completed_bytes,
+        &mut progress_init_receipt,
+    );
+    if unsafe { core::ptr::read_volatile(&progress_init_receipt) } != crate::fi::OK_SENTINEL {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(Se050Error::Transport);
+    }
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&progress_init_receipt) } != crate::fi::OK_SENTINEL {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(Se050Error::Transport);
+    }
+    loop {
+        let filled = unsafe { core::ptr::read_volatile(&completed_bytes) };
+        if filled >= out.len() {
+            break;
+        }
         let chunk = (out.len() - filled).min(GET_RANDOM_MAX_CHUNK);
 
         let mut apdu = ApduBuf::new(0x80, INS_MGMT, P1_DEFAULT, P2_RANDOM);
@@ -1317,17 +1425,166 @@ pub unsafe fn get_random(
 
         let mut resp = [0u8; 320];
         let n = send_apdu(t1, scp03, cmd, &mut resp)?;
-        let (_, value, _) = tlv_parse(&resp[..n]).ok_or(Se050Error::Transport)?;
-        if value.len() < chunk {
-            // Chip returned fewer bytes than requested — treat as a
-            // transport / framing fault rather than silently
-            // under-filling the caller's buffer with stale zeros.
+        let (tag, value, rest) = tlv_parse(&resp[..n]).ok_or(Se050Error::Transport)?;
+        // A caller-owned receipt remains failed if this verifier call is
+        // omitted. The out-of-line verifier observes both predicates twice,
+        // so skipping one optimized tag/trailing-data rejection cannot accept
+        // a substituted hardware-RNG response.
+        let mut frame_receipt = crate::fi::FAIL_SENTINEL;
+        unsafe {
+            core::ptr::write_volatile(&mut frame_receipt, crate::fi::FAIL_SENTINEL);
+        }
+        crate::rng_exact::verify_exact_pair_into(
+            tag as usize,
+            TAG_1 as usize,
+            rest.len(),
+            0,
+            &mut frame_receipt,
+        );
+        if unsafe { core::ptr::read_volatile(&frame_receipt) } != crate::fi::OK_SENTINEL {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
             return Err(Se050Error::Transport);
         }
-        out[filled..filled + chunk].copy_from_slice(&value[..chunk]);
-        filled += chunk;
+        crate::fi::wait_random();
+        if unsafe { core::ptr::read_volatile(&frame_receipt) } != crate::fi::OK_SENTINEL {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(Se050Error::Transport);
+        }
+        // Bind the parser's value pointer to the authenticated response
+        // buffer independently of the parser result register. With an exact
+        // value length and empty `rest`, the value must occupy the final
+        // `chunk` bytes of `resp[..n]`. A stale command-buffer pointer can be
+        // valid and non-overlapping, but it cannot satisfy this provenance.
+        let expected_value_offset = match n.checked_sub(chunk) {
+            Some(offset) => offset,
+            None => {
+                out.fill(0);
+                crate::fi::zeroize_barrier();
+                return Err(Se050Error::Transport);
+            }
+        };
+        let expected_value_pointer = unsafe { resp.as_ptr().add(expected_value_offset) };
+        let mut published_expected_source = core::ptr::null();
+        let mut source_publication_receipt = crate::fi::FAIL_SENTINEL;
+        crate::rng_exact::publish_region_pointer_into(
+            expected_value_pointer,
+            &mut published_expected_source,
+            &mut source_publication_receipt,
+        );
+        if unsafe { core::ptr::read_volatile(&source_publication_receipt) }
+            != crate::fi::OK_SENTINEL
+        {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(Se050Error::Transport);
+        }
+        crate::fi::wait_random();
+        if unsafe { core::ptr::read_volatile(&source_publication_receipt) }
+            != crate::fi::OK_SENTINEL
+        {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(Se050Error::Transport);
+        }
+
+        // GetRandom has an exact response contract. A short response would
+        // leave stale caller bytes; an overlong authenticated TLV indicates
+        // command/response desynchronization and must not be truncated.
+        let mut copy_receipt = crate::fi::FAIL_SENTINEL;
+        unsafe {
+            core::ptr::write_volatile(&mut copy_receipt, crate::fi::FAIL_SENTINEL);
+        }
+        let mut published_destination = core::ptr::null();
+        let mut destination_publication_receipt = crate::fi::FAIL_SENTINEL;
+        crate::rng_exact::publish_region_pointer_into(
+            unsafe { out.as_ptr().add(filled) },
+            &mut published_destination,
+            &mut destination_publication_receipt,
+        );
+        if unsafe { core::ptr::read_volatile(&destination_publication_receipt) }
+            != crate::fi::OK_SENTINEL
+        {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(Se050Error::Transport);
+        }
+        crate::fi::wait_random();
+        if unsafe { core::ptr::read_volatile(&destination_publication_receipt) }
+            != crate::fi::OK_SENTINEL
+        {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(Se050Error::Transport);
+        }
+        crate::rng_exact::copy_exact_into(
+            value.as_ptr(),
+            core::ptr::addr_of!(published_expected_source),
+            value.len(),
+            out.as_mut_ptr(),
+            filled,
+            core::ptr::addr_of!(published_destination),
+            chunk,
+            &mut copy_receipt,
+        );
+        if unsafe { core::ptr::read_volatile(&copy_receipt) } != crate::fi::OK_SENTINEL {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(Se050Error::Transport);
+        }
+        crate::fi::wait_random();
+        if unsafe { core::ptr::read_volatile(&copy_receipt) } != crate::fi::OK_SENTINEL {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(Se050Error::Transport);
+        }
+
+        let mut progress_receipt = crate::fi::FAIL_SENTINEL;
+        unsafe {
+            core::ptr::write_volatile(&mut progress_receipt, crate::fi::FAIL_SENTINEL);
+        }
+        publish_verified_get_random_progress_into(
+            &mut completed_bytes,
+            filled,
+            chunk,
+            out.len(),
+            &mut progress_receipt,
+        );
+        if unsafe { core::ptr::read_volatile(&progress_receipt) } != crate::fi::OK_SENTINEL {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(Se050Error::Transport);
+        }
+        crate::fi::wait_random();
+        if unsafe { core::ptr::read_volatile(&progress_receipt) } != crate::fi::OK_SENTINEL {
+            out.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(Se050Error::Transport);
+        }
     }
-    Ok(filled)
+
+    let mut completion_receipt = crate::fi::FAIL_SENTINEL;
+    unsafe {
+        core::ptr::write_volatile(&mut completion_receipt, crate::fi::FAIL_SENTINEL);
+    }
+    crate::rng_exact::verify_exact_progress_into(
+        &completed_bytes,
+        out.len(),
+        &mut completion_receipt,
+    );
+    if unsafe { core::ptr::read_volatile(&completion_receipt) } != crate::fi::OK_SENTINEL {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(Se050Error::Transport);
+    }
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&completion_receipt) } != crate::fi::OK_SENTINEL {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(Se050Error::Transport);
+    }
+    Ok(out.len())
 }
 
 /// Close a session on the SE050.

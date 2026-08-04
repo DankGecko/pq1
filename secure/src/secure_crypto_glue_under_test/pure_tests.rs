@@ -1804,7 +1804,7 @@ fn positive_dual_se_xor_split_recipe_present() {
     // CLAUDE.md invariant #1: "BIP-39 entropy is XOR-split: half_O
     // on OPTIGA, half_E on SE050. Neither chip alone reveals any bit."
     assert!(
-        DUAL_SE_SRC.contains("let mut half_e = xor_32(entropy, &half_o);"),
+        DUAL_SE_SRC.contains("let half_e = Zeroizing::new(xor_32(entropy, &half_o));"),
         "dual_se.rs must compute half_e = entropy XOR half_o (invariant #1)",
     );
 }
@@ -1813,32 +1813,12 @@ fn positive_dual_se_xor_split_recipe_present() {
 fn positive_dual_se_three_source_random_for_half_o() {
     // half_o is drawn from STM32 TRNG ⊕ OPTIGA TRNG ⊕ SE050 TRNG so
     // that no single TRNG bias gives an attacker either half.
-    assert!(
-        DUAL_SE_SRC.contains("crate::rng::fill(&mut half_o)"),
-        "half_o must seed from STM32 TRNG",
-    );
-    assert!(
-        DUAL_SE_SRC.contains("self.optiga.random(&mut se_buf)"),
-        "half_o must mix in OPTIGA TRNG via .random()",
-    );
-    assert!(
-        DUAL_SE_SRC.contains("self.se050.random(&mut se_buf)"),
-        "half_o must mix in SE050 TRNG via .random()",
-    );
-    // Both-or-fail (finding F1): each SE contribution is mandatory. A failed
-    // SE read must abort provisioning (`.map_err(...)?`), not be silently
-    // dropped via `if …is_ok()`, which would let half_o degrade to the
-    // platform TRNG alone and enable seed recovery from the SE050 half.
-    assert!(
-        DUAL_SE_SRC.contains("self.optiga.random(&mut se_buf).map_err(")
-            && DUAL_SE_SRC.contains("self.se050.random(&mut se_buf).map_err("),
-        "both SE .random() reads must be mandatory (map_err + ?), not soft-fail",
-    );
-    assert!(
-        !DUAL_SE_SRC.contains("self.optiga.random(&mut se_buf).is_ok()")
-            && !DUAL_SE_SRC.contains("self.se050.random(&mut se_buf).is_ok()"),
-        "SE .random() contributions must not be silently dropped on failure (F1)",
-    );
+    assert!(DUAL_SE_SRC.contains(
+        "crate::rng_strong::fill_with_store(&mut half_o, self).is_err()"
+    ));
+    assert!(DUAL_SE_SRC.contains(
+        "strict STM32+OPTIGA+SE050 draw FAILED — refusing degraded split"
+    ));
 }
 
 #[test]
@@ -1846,13 +1826,50 @@ fn positive_dual_se_half_o_stuck_at_zero_fails_closed() {
     // FI defense: if all three sources fail / produce zero, the
     // half_o accumulator is zero — the function must refuse to
     // provision rather than fall through with predictable entropy.
+    assert!(DUAL_SE_SRC.contains("half_o.zeroize();"));
+    assert!(DUAL_SE_SRC.contains("return Err(SeError::InternalError);"));
+}
+
+#[test]
+fn negative_dual_se_provision_halves_auto_wipe_on_every_error_exit() {
+    // A provisioning error on either chip (or either optional ML-KEM seal)
+    // used to `return Err` before four reconstructing stack copies reached the
+    // success-only zeroize block. Keep the whole operation inside a closure
+    // whose Zeroizing locals drop before its Result is propagated.
+    let start = DUAL_SE_SRC
+        .find("    fn provision(\n")
+        .expect("DualSecureElement::provision must exist");
+    let end = DUAL_SE_SRC[start..]
+        .find("    #[cfg(feature = \"duress-pin\")]\n")
+        .map(|n| start + n)
+        .expect("provision_duress boundary must exist");
+    let body = &DUAL_SE_SRC[start..end];
+
+    for required in [
+        "let provision_result = (|| -> Result<(), SeError> {",
+        "let half_o = Zeroizing::new(self.generate_split_half()?);",
+        "let half_e = Zeroizing::new(xor_32(entropy, &half_o));",
+        "Zeroizing::new(*half_o)",
+        "Zeroizing::new(*half_e)",
+    ] {
+        assert!(
+            body.contains(required),
+            "provision must retain RAII wipe invariant `{required}` on every return"
+        );
+    }
+
+    let closure_end = body
+        .rfind("        })();")
+        .expect("provision operation must be scoped in a drop boundary");
+    let barrier = body
+        .rfind("crate::fi::zeroize_barrier();")
+        .expect("post-drop zeroize barrier must remain");
+    let propagate = body
+        .rfind("provision_result?;")
+        .expect("provision must propagate only after the drop boundary");
     assert!(
-        DUAL_SE_SRC.contains("if acc == 0"),
-        "dual_se.rs must fail-closed when half_o is all-zero",
-    );
-    assert!(
-        DUAL_SE_SRC.contains("[DUAL/prov] half_o stuck at zero — FI suspected"),
-        "dual_se.rs must log the stuck-at-zero failure with the FI tag",
+        closure_end < barrier && barrier < propagate,
+        "all Zeroizing split halves must drop, then hit the barrier, before Err propagation"
     );
 }
 
@@ -1912,14 +1929,15 @@ fn positive_dual_se_xor_32_is_loop_constant_time() {
 
 #[test]
 fn positive_dual_se_unlock_zeroizes_full_entropy_and_halves() {
-    // Every secret stack local is wiped before the function
-    // returns, on both the success and failure paths.
+    // Unlock/duress and split-generation error paths manually wipe their
+    // mutable locals. Main provisioning is separately pinned to Zeroizing
+    // RAII above so early errors cannot bypass its wipe.
     let half_o_zeroize = DUAL_SE_SRC.matches("half_o.zeroize();").count();
     let half_e_zeroize = DUAL_SE_SRC.matches("half_e.zeroize();").count();
     let full_zeroize = DUAL_SE_SRC.matches("full_entropy.zeroize();").count();
     assert!(
         half_o_zeroize >= 2,
-        "half_o must be zeroized on both provision + unlock paths; found {half_o_zeroize}",
+        "manual half_o paths must retain their explicit wipes; found {half_o_zeroize}",
     );
     assert!(
         half_e_zeroize >= 1,
@@ -1964,6 +1982,81 @@ fn positive_dual_se_factory_reset_admin_zeroizes_caches_even_on_error() {
         body.find("self.zeroize_caches();").unwrap() < body.find("?").unwrap_or(usize::MAX),
         "zeroize_caches() must run BEFORE the early-return on either-chip error",
     );
+}
+
+#[test]
+fn negative_dual_se_factory_reset_transient_auth_cannot_degrade_to_platform_rng() {
+    // The temporary F1D0 value authorizes an E120 counter reset. It is still
+    // an authorization secret even though the following wipe destroys it, so
+    // the dual-SE owner must draw it through all three TRNGs before either chip
+    // is wiped. If any source fails, the counter reset may be skipped, but the
+    // destructive wipe must continue without minting a weaker local value.
+    let helper_start = DUAL_SE_SRC
+        .find("    pub(crate) fn reset_optiga_for_admin(&mut self) -> Result<(), SeError> {")
+        .expect("dual-SE OPTIGA reset helper must exist");
+    let helper_end = DUAL_SE_SRC[helper_start..]
+        .find("\n    }\n}\n\nimpl WalletStore")
+        .map(|n| helper_start + n)
+        .expect("dual-SE OPTIGA reset helper boundary must exist");
+    let body = &DUAL_SE_SRC[helper_start..helper_end];
+
+    let zeroizing = body
+        .find("Zeroizing::new([0u8; 32])")
+        .expect("transient authorization owner must auto-wipe");
+    let draw = body
+        .find("crate::rng_strong::fill_with_store(&mut *transient_secret, self)")
+        .expect("transient authorization must use the strict three-source facade");
+    let success_gate = body[draw..]
+        .find(".is_ok()")
+        .map(|n| draw + n)
+        .expect("only a successful strict draw may enter transient auth");
+    let optiga_wipe = body
+        .find("factory_reset_with_transient_secret(&mut *transient_secret)")
+        .expect("the verified draw must be handed explicitly to OPTIGA");
+    let failure_branch = body
+        .find("} else {")
+        .expect("failed strict draw must take an explicit fallback branch");
+    let fallback_wipe = body
+        .find("self.optiga.factory_reset_admin()")
+        .expect("failed draw must still run OPTIGA wipe without transient auth");
+    let zeroize = body
+        .find("transient_secret.zeroize();")
+        .expect("transient authorization must be explicitly wiped");
+    let barrier = body
+        .find("crate::fi::zeroize_barrier();")
+        .expect("transient authorization wipe needs a compiler barrier");
+
+    assert!(
+        zeroizing < draw
+            && draw < success_gate
+            && success_gate < optiga_wipe
+            && optiga_wipe < failure_branch
+            && failure_branch < fallback_wipe
+            && fallback_wipe < zeroize
+            && zeroize < barrier
+    );
+    assert!(body.contains("strict transient-auth RNG failed"));
+    assert!(!body.contains("return "));
+    assert!(!body.contains('?'));
+    assert!(
+        !body.contains("crate::rng::fill"),
+        "factory-reset authorization must never fall back to platform-only RNG"
+    );
+
+    let admin_start = DUAL_SE_SRC
+        .find("    fn factory_reset_admin(&mut self) -> Result<(), SeError> {")
+        .expect("DualSecureElement::factory_reset_admin must exist");
+    let admin_body = &DUAL_SE_SRC[admin_start..];
+    let optiga_call = admin_body
+        .find("let optiga_result = self.reset_optiga_for_admin();")
+        .expect("all dual-SE admin wipes must use the strong OPTIGA helper");
+    let se050_call = admin_body
+        .find("let se050_result = self.se050.factory_reset_admin();")
+        .expect("SE050 wipe must remain best-effort after the OPTIGA leg");
+    assert!(optiga_call < se050_call);
+    assert!(!admin_body[..se050_call].contains("return "));
+    assert!(!admin_body[..se050_call].contains('?'));
+    assert!(!DUAL_SE_SRC.contains("self.optiga.factory_reset()"));
 }
 
 #[test]
@@ -2045,15 +2138,14 @@ fn positive_dual_se_provision_passes_same_master_secret_to_both_chips() {
     // The two `.provision(...)` calls in order are OPTIGA then
     // SE050; both must take `master_secret` (not a per-chip
     // derivative).
-    // NOTE: the `half_o`/`half_e` locals were renamed to `se_half_o`/`se_half_e`
-    // by the ML-KEM inner-wrap commit (11f5bfc7); this source-text assertion is
-    // synced to match. (Concurrent-work fix, not part of the EF-findings set.)
+    // The SE-facing halves are Zeroizing wrappers under both the direct and
+    // ML-KEM arms; both calls must still receive the same master secret.
     assert!(
-        DUAL_SE_SRC.contains("self.optiga.provision(&se_half_o, master_secret, vk, bootstrap_vk, pin)"),
+        DUAL_SE_SRC.contains(".provision(&se_half_o, master_secret, vk, bootstrap_vk, pin)"),
         "optiga.provision must receive the shared master_secret",
     );
     assert!(
-        DUAL_SE_SRC.contains("self.se050.provision(&se_half_e, master_secret, vk, bootstrap_vk, pin)"),
+        DUAL_SE_SRC.contains(".provision(&se_half_e, master_secret, vk, bootstrap_vk, pin)"),
         "se050.provision must receive the same shared master_secret",
     );
 }
@@ -2180,15 +2272,17 @@ fn positive_crypto_duress_always_provisions_decoy() {
     );
     assert!(
         CRYPTO_SRC.contains("None => {")
-            && CRYPTO_SRC.contains("crate::rng::fill(&mut random_pin)"),
+            && CRYPTO_SRC.contains("fill_strong_with_store(store, &mut random_pin)"),
         "declined duress (None) must provision a decoy with a fresh random PIN, not skip",
     );
     // Decoy must be an INDEPENDENT fresh entropy (separate-entropy model),
     // not derived from the real seed.
     assert!(
-        CRYPTO_SRC.contains("crate::rng::fill(&mut decoy_entropy)"),
-        "decoy entropy must be a fresh independent TRNG draw",
+        CRYPTO_SRC.contains("fill_strong_with_store(store, &mut decoy_entropy)?;"),
+        "decoy entropy must be a fresh independent three-source draw",
     );
+    assert!(CRYPTO_SRC.contains("crate::rng_strong::fill_with_store(out, store)"));
+    assert!(!CRYPTO_SRC.contains("if store.random().is_ok()"));
 }
 
 #[test]

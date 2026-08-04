@@ -63,10 +63,9 @@ pub fn init() {
     // SAFETY: seed_prng_from_rng writes the static mut PRNG_STATE; this
     // is the sole pre-`randomize` writer and runs single-threaded at boot.
     unsafe {
-        // Seed the xorshift PRNG from the hardware TRNG. Single
-        // 4-byte TRNG read at boot — the only place this module
-        // touches `crate::rng`. Subsequent `randomize()` calls run
-        // off the seeded state with zero RNG / semihosting cost.
+        // Seed the xorshift PRNG from the platform hardware TRNG. Single
+        // 4-byte TRNG read at boot; subsequent `randomize()` calls run off
+        // the seeded state with zero RNG cost between periodic reseeds.
         //
         // Fail closed (finding F12): a failed seed would leave the SCA mask
         // emitting a predictable PWM duty. Panic rather than boot with a
@@ -105,31 +104,26 @@ const RESEED_PERIOD_TICKS: u32 = 1024;
 #[cfg(feature = "consumption-mask")]
 static mut RESEED_TICKS: u32 = 0;
 
-/// Seed the PRNG from the multi-source strong TRNG. Called once
-/// from [`init`].
+/// Seed the non-cryptographic PWM-duty PRNG from the STM32 hardware TRNG.
+/// Called once from [`init`].
 ///
-/// Migrated from `crate::rng::byte()` × 4 to `rng_strong::fill` so
-/// the PWM-mask seed inherits the same 3-source XOR-mix defense as
-/// the signing path's OptRand / shuffle seeds. A predictable mask
-/// seed → predictable EM signature → easier for an SCA attacker to
-/// subtract the mask and recover the underlying secret. The mask
-/// quality matters more than the once-per-init cost (single SE
-/// round-trip at boot, no hot-path impact).
+/// This deliberately does not call `rng_strong`: `main` initializes the mask
+/// before I2C1 and before any secure-element traffic is allowed. Calling the
+/// dual-SE path here violated `se_random`'s initialization precondition and
+/// made the canonical production feature set panic before boot. The generated
+/// bytes never become a seed, key, nonce, or challenge; they only drive an
+/// observable PWM duty cycle. Failure is still fatal, and there is no fixed or
+/// software-generated fallback seed.
 #[cfg(feature = "consumption-mask")]
 unsafe fn seed_prng_from_rng() -> Result<(), ()> {
     let mut seed_bytes = [0u8; 4];
-    // Strong fill, with fallback: on early-boot before SE channels
-    // are up, `rng_strong::fill` falls through to platform TRNG only
-    // (same as the old code). On normal operation it XOR-mixes
-    // OPTIGA + SE050.
-    //
     // Fail closed on RNG error (finding F12): the previous code discarded
     // the `Err` (`let _ =`) leaving `seed_bytes` zero, then substituted a
     // fixed constant seed. That produced a fully deterministic, attacker-
     // predictable PWM-duty sequence — defeating the very randomisation this
     // SCA countermeasure exists to provide. Propagate the failure so the
     // caller refuses to run a maskless boot.
-    crate::rng_strong::fill(&mut seed_bytes)?;
+    crate::rng::fill(&mut seed_bytes)?;
     // xorshift32 must not be seeded with 0 (state would stick). An all-zero
     // strong-fill result is itself an RNG fault, so treat it as failure
     // rather than silently substituting a constant.

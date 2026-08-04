@@ -54,6 +54,8 @@ use crate::iso7816::{tlv_parse, tlv_put, tlv_put_u32};
 // ─────────────────────────────────────────────────────────────────────
 
 const APDU_SRC: &str = include_str!("../se050/apdu.rs");
+const RNG_EXACT_SRC: &str = include_str!("../rng_exact.rs");
+const SCP03_LOGIC_SRC: &str = include_str!("../scp03_logic.rs");
 const SCP03_SRC: &str = include_str!("../se050/scp03.rs");
 const T1OI2C_SRC: &str = include_str!("../se050/t1oi2c.rs");
 /// The pure T=1' framing, extracted to `sphincs-tz-shared` (2026-07-17) so it
@@ -423,6 +425,201 @@ fn positive_scp03_unwrap_response_exists() {
     assert!(APDU_SRC.contains("super::scp03::unwrap_response("));
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// 6b. F-28 REWORK (2026-08-03) — R-MAC authentication receipt
+//
+// Wave-17 GPT-5.6 blocker: the legacy F-28 "infective" gate folded a fresh
+// R-MAC mismatch into the released bytes as XOR-0xFF — but returned `Ok`,
+// preserved the attacker-chosen SW, and advanced the counter. XOR-0xFF is a
+// public bijection, so a forging attacker submits the *complement* of the
+// desired payload and receives exactly it after one fault skips the early
+// rejection. These pins make any mutation that reintroduces that shape (or
+// weakens the replacement receipt gate) a test failure.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Extract `unwrap_response`'s body from `SCP03_SRC` (up to the next
+/// top-level item) so order and count pins can't be satisfied by text
+/// elsewhere in the file.
+fn unwrap_response_src() -> &'static str {
+    let start = SCP03_SRC
+        .find("pub fn unwrap_response(")
+        .expect("unwrap_response exists");
+    let rest = &SCP03_SRC[start..];
+    let end = rest
+        .find("\n// `aes128_cbc_decrypt` lives")
+        .map_or(rest.len(), |o| o);
+    &rest[..end]
+}
+
+#[test]
+fn positive_scp03_rmac_verify_helper_is_exported_and_duplicated() {
+    // The verifier must be an out-of-line exported symbol (LTO cannot fold it
+    // into the caller or CSE the duplicate checks; the production symbol
+    // audit requires exactly one copy in the optimized ELF).
+    assert!(SCP03_LOGIC_SRC.contains("#[inline(never)]"));
+    assert!(
+        SCP03_LOGIC_SRC.contains("#[export_name = \"pqsigner_se050_scp03_rmac_verify_into\"]")
+    );
+    assert!(SCP03_LOGIC_SRC.contains("pub fn verify_rmac_into("));
+    // Two independent full R-MAC recomputations inside the helper.
+    let start = SCP03_LOGIC_SRC
+        .find("pub fn verify_rmac_into(")
+        .expect("verify_rmac_into exists");
+    let rest = &SCP03_LOGIC_SRC[start..];
+    let end = rest
+        .find("pub fn verify_renc_relation_into(")
+        .map_or(rest.len(), |o| o);
+    let helper = &rest[..end];
+    assert_eq!(
+        helper.matches("cmac_aes128(s_rmac, &[mcv, body, sw])").count(),
+        2,
+        "verify_rmac_into must recompute the full R-MAC twice independently"
+    );
+    // The recomputations are separated by wait_random (an opaque
+    // possible-write call so LLVM cannot common them up).
+    assert!(helper.contains("crate::fi::wait_random();"));
+    // Fail-initialized receipt with a sole success publication.
+    assert!(helper.contains("core::ptr::write_volatile(receipt, crate::fi::FAIL_SENTINEL);"));
+    assert_eq!(
+        helper
+            .matches("core::ptr::write_volatile(receipt, crate::fi::OK_SENTINEL);")
+            .count(),
+        1,
+        "exactly one OK publication point"
+    );
+    // Constant-time comparison preserved.
+    assert!(helper.contains(".ct_eq(rmac_recv)"));
+}
+
+#[test]
+fn positive_scp03_renc_verify_helper_is_exported_and_duplicated() {
+    // Wave-18: the decrypt-fidelity relation verifier — same exported,
+    // duplicated, fail-initialized shape as the R-MAC verifier.
+    assert!(
+        SCP03_LOGIC_SRC.contains("#[export_name = \"pqsigner_se050_scp03_renc_verify_into\"]")
+    );
+    assert!(SCP03_LOGIC_SRC.contains("pub fn verify_renc_relation_into("));
+    let start = SCP03_LOGIC_SRC
+        .find("pub fn verify_renc_relation_into(")
+        .expect("verify_renc_relation_into exists");
+    let rest = &SCP03_LOGIC_SRC[start..];
+    let end = rest.find("\n// ---").map_or(rest.len(), |o| o);
+    let helper = &rest[..end];
+    // Two independent full CBC re-encryptions of the padded plaintext, each
+    // under an independently recomputed response ICV (a shared caller ICV
+    // would let one faulted ICV computation make decrypt and check
+    // consistently wrong).
+    assert_eq!(
+        helper.matches("aes128_cbc_encrypt(s_enc, &icv,").count(),
+        2,
+        "verify_renc_relation_into must re-encrypt twice independently"
+    );
+    assert_eq!(
+        helper.matches("aes128_ecb_encrypt(s_enc, &icv_block)").count(),
+        2,
+        "each pass must recompute the response ICV independently"
+    );
+    assert_eq!(helper.matches("icv_block[0] = 0x80;").count(), 2);
+    assert!(helper.contains("crate::fi::wait_random();"));
+    assert!(helper.contains("core::ptr::write_volatile(receipt, crate::fi::FAIL_SENTINEL);"));
+    assert_eq!(
+        helper
+            .matches("core::ptr::write_volatile(receipt, crate::fi::OK_SENTINEL);")
+            .count(),
+        1,
+        "exactly one OK publication point"
+    );
+    // Constant-time compare against the authenticated ciphertext body, with
+    // shape validation (equal lengths, AES blocks, bounded buffer).
+    assert!(helper.contains(".ct_eq(body)"));
+    assert!(helper.contains("plain_padded.len() != body.len()"));
+    assert!(helper.contains("body.len() % 16 != 0"));
+}
+
+#[test]
+fn positive_scp03_unwrap_gates_on_fail_initialized_receipt_twice() {
+    let f = unwrap_response_src();
+    // Caller fail-initializes BOTH receipts (a skipped verifier call stays FAIL).
+    assert!(f.contains("let mut rmac_auth_receipt: u32 = crate::fi::FAIL_SENTINEL;"));
+    assert!(f.contains("let mut renc_receipt: u32 = crate::fi::FAIL_SENTINEL;"));
+    assert!(f.contains("core::ptr::write_volatile(&mut rmac_auth_receipt, crate::fi::FAIL_SENTINEL);"));
+    assert!(f.contains("core::ptr::write_volatile(&mut renc_receipt, crate::fi::FAIL_SENTINEL);"));
+    // Exactly one call to each verifier, and exactly two independent volatile
+    // success checks per receipt before any depad/copy/counter/Ok.
+    assert_eq!(f.matches("verify_rmac_into(").count(), 1);
+    assert_eq!(f.matches("verify_renc_relation_into(").count(), 1);
+    assert_eq!(
+        f.matches("core::ptr::read_volatile(&rmac_auth_receipt)").count(),
+        2,
+        "two independent volatile R-MAC receipt checks required"
+    );
+    assert_eq!(
+        f.matches("core::ptr::read_volatile(&renc_receipt)").count(),
+        2,
+        "two independent volatile R-ENC relation receipt checks required"
+    );
+    // Order: R-MAC gate → case-2 branch → decrypt → R-ENC relation gate →
+    // depad → receipt-bound copy → counter advance → Ok. The relation gate
+    // must sit between the decrypt and the depad (verify-then-parse).
+    let p_rmac = f.find("verify_rmac_into(").unwrap();
+    let p_case2 = f.find("if body_end == 0 {").unwrap();
+    let p_dec = f.find("aes128_cbc_decrypt(&session.s_enc, &icv, &mut plain[..body_end]);").unwrap();
+    let p_renc = f.find("verify_renc_relation_into(").unwrap();
+    let p_depad = f.find("// ISO 7816-4 depad").unwrap();
+    let p_copy = f.find("crate::rng_exact::copy_exact(&plain[..plaintext_len], &mut out[..plaintext_len])").unwrap();
+    let p_inc = f.rfind("session.inc_counter();").unwrap();
+    assert!(
+        p_rmac < p_case2 && p_case2 < p_dec && p_dec < p_renc && p_renc < p_depad && p_depad < p_copy && p_copy < p_inc,
+        "gate order: R-MAC → case2 → decrypt → R-ENC relation → depad → copy_exact → counter"
+    );
+}
+
+#[test]
+fn negative_scp03_unwrap_has_no_infective_mask_or_early_sentinel_gate() {
+    let f = unwrap_response_src();
+    // The complementing infective mask is gone — it returned Ok on a
+    // mismatch and was invertible by the attacker.
+    assert!(!f.contains("release_mask"));
+    assert!(!f.contains("mac_matches"));
+    assert!(!f.contains("wrapping_sub(1)"));
+    assert!(!f.contains("p ^ "));
+    // The single-skip-defeatable early sentinel gate is gone — the receipt
+    // gate is the only R-MAC decision.
+    assert!(!f.contains("check_true_into_sentinel"));
+    // The plaintext release must go through the receipt-bound exact copy,
+    // never a plain memcpy (a skipped memcpy releases stale bytes behind Ok).
+    assert!(f.contains("crate::rng_exact::copy_exact(&plain[..plaintext_len], &mut out[..plaintext_len])"));
+    assert!(!f.contains("out[..plaintext_len].copy_from_slice(&plain[..plaintext_len]);"));
+}
+
+#[test]
+fn positive_scp03_send_apdu_copy_is_receipt_bound() {
+    // Wave-18 follow-up: send_apdu's handoff into the caller buffer must be
+    // the receipt-bound exact copy — a skipped plain memcpy would leave stale
+    // bytes from a previous response behind an Ok, and the downstream
+    // exact-copy receipts would faithfully certify the stale staging buffer.
+    assert!(APDU_SRC.contains("crate::rng_exact::copy_exact(&resp_slice[..data_len], &mut resp_buf[..data_len])"));
+    assert!(!APDU_SRC.contains("resp_buf[..data_len].copy_from_slice(&resp_slice[..data_len]);"));
+}
+
+#[test]
+fn positive_scp03_bare_error_handling_unchanged() {
+    // Legitimate bare-error handling (GP Amd D §6.2.5 first paragraph: no
+    // R-MAC on an error SW) must NOT be weakened by the receipt gate: the
+    // n == 2 arm still copies the SW, advances the counter (the card burned
+    // the command's counter value), and returns Ok(2).
+    let f = unwrap_response_src();
+    let bare = f.find("if n == 2 {").expect("bare-error arm exists");
+    let gate = f.find("verify_rmac_into(").expect("receipt gate exists");
+    assert!(bare < gate, "bare-error arm stays ahead of (outside) the receipt gate");
+    let bare_body = &f[bare..gate];
+    assert!(bare_body.contains("out[0] = wrapped[0];"));
+    assert!(bare_body.contains("out[1] = wrapped[1];"));
+    assert!(bare_body.contains("session.inc_counter();"));
+    assert!(bare_body.contains("return Ok(2);"));
+}
+
+
 #[test]
 fn positive_scp03_counter_starts_at_one() {
     // GP Amendment D: the SCP03 command counter starts at 1 after
@@ -553,7 +750,8 @@ fn positive_delete_object_swallows_0x6985_idempotent() {
     // the only documented SW for DELETE is 0x9000; 0x6985 is the
     // empirical "no such OID" code (NXP plug-and-trust accepts it the
     // same way).
-    assert!(APDU_SRC.contains("Err(Se050Error::Status(0x6985)) => Ok(()), // doesn't exist — idempotent"));
+    assert!(APDU_SRC
+        .contains("Err(Se050Error::Status(0x6985)) => Ok(()), // doesn't exist — idempotent"));
 }
 
 #[test]
@@ -605,7 +803,9 @@ fn positive_verify_session_dual_status_word_coalesce() {
     // Both 0x6985 (auth method not satisfied) and any 0x63xx (counter
     // decrement) collapse to a single `PinIncorrect` so the firmware
     // doesn't expose a side channel discriminating one from the other.
-    assert!(APDU_SRC.contains("Err(Se050Error::Status(sw)) if sw == 0x6985 || (sw & 0xFF00) == 0x6300"));
+    assert!(
+        APDU_SRC.contains("Err(Se050Error::Status(sw)) if sw == 0x6985 || (sw & 0xFF00) == 0x6300")
+    );
     assert!(APDU_SRC.contains("Err(Se050Error::PinIncorrect)"));
 }
 
@@ -656,12 +856,18 @@ fn negative_crc16_algorithm_shape_stable() {
     // agree with EACH OTHER and would stay green if BOTH were changed to a
     // different CRC. Only these constants tie us to the chip's silicon-locked
     // choice, which no host-side proof can reach.
-    assert!(T1_FRAME_SRC.contains("let mut crc: u16 = 0xFFFF;"),
-            "init constant must remain 0xFFFF");
-    assert!(T1_FRAME_SRC.contains("crc = (crc >> 1) ^ 0x8408;"),
-            "the reflected polynomial constant 0x8408 (mirror of 0x1021) must remain");
-    assert!(T1_FRAME_SRC.contains("crc ^= 0xFFFF;"),
-            "final XOR with 0xFFFF must remain");
+    assert!(
+        T1_FRAME_SRC.contains("let mut crc: u16 = 0xFFFF;"),
+        "init constant must remain 0xFFFF"
+    );
+    assert!(
+        T1_FRAME_SRC.contains("crc = (crc >> 1) ^ 0x8408;"),
+        "the reflected polynomial constant 0x8408 (mirror of 0x1021) must remain"
+    );
+    assert!(
+        T1_FRAME_SRC.contains("crc ^= 0xFFFF;"),
+        "final XOR with 0xFFFF must remain"
+    );
     assert!(
         T1_FRAME_SRC.contains("crc // GP 1.0: no byte-swap"),
         "GP 1.0 explicitly does NOT byte-swap the CRC; the standard \
@@ -682,9 +888,11 @@ fn negative_crc16_not_standard_ccitt_false() {
     // input. GP 1.0 must produce something else; if they ever match,
     // someone "fixed" the CRC to be more standard and broke the chip.
     let gp10 = gp10_crc16(b"123456789");
-    assert_ne!(gp10, 0x29B1,
-               "GP 1.0 CRC-16 must NOT equal CRC-16/CCITT-FALSE; if they match \
-                the polynomial / init / reflection have been silently swapped");
+    assert_ne!(
+        gp10, 0x29B1,
+        "GP 1.0 CRC-16 must NOT equal CRC-16/CCITT-FALSE; if they match \
+                the polynomial / init / reflection have been silently swapped"
+    );
 }
 
 #[test]
@@ -694,9 +902,11 @@ fn negative_crc16_catches_single_bit_flip() {
     let mut mutated = *base;
     mutated[0] ^= 0x01;
     let crc_b = gp10_crc16(&mutated);
-    assert_ne!(crc_a, crc_b,
-               "CRC-16 must catch single-bit flips; equal CRCs would mean \
-                we're emitting a constant rather than hashing the bytes");
+    assert_ne!(
+        crc_a, crc_b,
+        "CRC-16 must catch single-bit flips; equal CRCs would mean \
+                we're emitting a constant rather than hashing the bytes"
+    );
 }
 
 #[test]
@@ -792,7 +1002,9 @@ fn negative_t1_interface_reset_resets_sequence_numbers() {
 fn negative_t1_wtx_response_echoes_inf() {
     // The S(WTX_RSP) MUST echo the byte from the matching S(WTX_REQ);
     // sending an empty INF makes the chip retry and eventually give up.
-    assert!(T1OI2C_SRC.contains("let wtx_frame_len = build_frame(PCB_S_WTX_RSP, inf, &mut tx_buf);"));
+    assert!(
+        T1OI2C_SRC.contains("let wtx_frame_len = build_frame(PCB_S_WTX_RSP, inf, &mut tx_buf);")
+    );
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -878,8 +1090,7 @@ fn negative_user_policy_grants_full_access_through_user_userid() {
         .split("pub unsafe fn ")
         .next()
         .expect("isolate write_binary_gated body");
-    assert!(gated_body
-        .contains("AR_ALLOW_READ | AR_ALLOW_WRITE | AR_ALLOW_DELETE | AR_REQUIRE_SM"));
+    assert!(gated_body.contains("AR_ALLOW_READ | AR_ALLOW_WRITE | AR_ALLOW_DELETE | AR_REQUIRE_SM"));
 }
 
 #[test]
@@ -922,14 +1133,67 @@ fn negative_userid_policy_grants_write_delete_not_read() {
 }
 
 #[test]
-fn negative_get_random_rejects_empty_and_underfill() {
+fn negative_get_random_rejects_empty_and_nonexact_response() {
     // A 0-byte request is rejected (would send a useless APDU); pin the
     // empty guard + InvalidParam. Also pin the under-fill guard: if the
     // chip returns fewer bytes than the chunk requested, `get_random`
     // must error rather than leave the caller's buffer partially stale.
     assert!(APDU_SRC.contains("if out.is_empty() {"));
     assert!(APDU_SRC.contains("return Err(Se050Error::InvalidParam);"));
-    assert!(APDU_SRC.contains("if value.len() < chunk {"));
+    assert!(APDU_SRC.contains("crate::rng_exact::copy_exact_into("));
+    assert!(APDU_SRC.contains("value.as_ptr(),"));
+    assert!(APDU_SRC.contains("let expected_value_offset = match n.checked_sub(chunk)"));
+    assert!(APDU_SRC.contains(
+        "let expected_value_pointer = unsafe { resp.as_ptr().add(expected_value_offset) };"
+    ));
+    assert!(APDU_SRC.contains("expected_value_pointer,"));
+    assert!(APDU_SRC.contains("core::ptr::addr_of!(published_expected_source)"));
+    assert!(APDU_SRC.contains("out.as_mut_ptr(),"));
+    assert!(APDU_SRC.contains("filled,"));
+    assert!(APDU_SRC.contains("crate::rng_exact::publish_region_pointer_into("));
+    assert!(APDU_SRC.contains("core::ptr::addr_of!(published_destination)"));
+    assert!(APDU_SRC.contains("crate::rng_exact::initialize_exact_progress_into("));
+    assert!(APDU_SRC.contains("fn publish_verified_get_random_progress_into("));
+    assert!(
+        APDU_SRC.contains("let filled = unsafe { core::ptr::read_volatile(&completed_bytes) };")
+    );
+    assert!(APDU_SRC.contains("completed_a != current_a || current_a >= total_a"));
+    assert!(APDU_SRC.contains("copied_a != expected_a"));
+    assert!(APDU_SRC.contains("copied_b != expected_b"));
+    assert!(APDU_SRC.contains("publish_verified_get_random_progress_into("));
+    assert!(
+        APDU_SRC
+            .matches("core::ptr::read_volatile(&progress_init_receipt)")
+            .count()
+            >= 2
+    );
+    assert!(
+        APDU_SRC
+            .matches("core::ptr::read_volatile(&progress_receipt)")
+            .count()
+            >= 2
+    );
+    assert!(APDU_SRC.contains("crate::rng_exact::verify_exact_pair_into("));
+    assert!(APDU_SRC.contains("tag as usize,"));
+    assert!(APDU_SRC.contains("rest.len(),"));
+    assert!(APDU_SRC.contains("core::ptr::read_volatile(&frame_receipt)"));
+    assert!(RNG_EXACT_SRC.contains(
+        "verify_exact_progress_into(&source_len, destination_len, &mut length_receipt)"
+    ));
+    assert!(RNG_EXACT_SRC.contains("source: *const u8,"));
+    assert!(RNG_EXACT_SRC.contains("expected_source_slot: *const *const u8,"));
+    assert!(RNG_EXACT_SRC.contains("destination_base: *mut u8,"));
+    assert!(RNG_EXACT_SRC.contains("destination_offset: usize,"));
+    assert!(RNG_EXACT_SRC.contains(
+        "expected_destination_slot: *const *const u8,"
+    ));
+    assert!(
+        RNG_EXACT_SRC
+            .matches("copy_regions_are_disjoint(")
+            .count()
+            >= 3,
+        "SE050 response copy must reject fault-created source/output aliasing twice"
+    );
 }
 
 #[test]
@@ -958,7 +1222,7 @@ fn negative_send_apdu_status_word_check_before_data_copy() {
         .find("if sw != SW_OK {")
         .expect("status-word check present");
     let copy_idx = send_body
-        .find("resp_buf[..data_len].copy_from_slice(")
+        .find("crate::rng_exact::copy_exact(&resp_slice[..data_len]")
         .expect("response copy present");
     assert!(
         status_idx < copy_idx,
@@ -1017,8 +1281,16 @@ fn negative_se050_module_no_classical_signer_references() {
     // P-256, Ed25519, secp256k1) MAY appear anywhere in the SE050
     // driver. Even a doc-comment reference is a smell because it
     // suggests future re-introduction.
-    let needles = ["ecdsa", "ECDSA", "ed25519", "Ed25519",
-                   "secp256k1", "secp256r1", "p256", "P256"];
+    let needles = [
+        "ecdsa",
+        "ECDSA",
+        "ed25519",
+        "Ed25519",
+        "secp256k1",
+        "secp256r1",
+        "p256",
+        "P256",
+    ];
     let all_sources = [APDU_SRC, SCP03_SRC, T1OI2C_SRC, I2C_SRC, MOD_SRC];
     for src in all_sources {
         for needle in needles {
@@ -1157,9 +1429,8 @@ fn negative_debug_log_only_gated_by_feature() {
                 // bounds the search. If we find a debug-log gate along
                 // the way, the call is properly fenced.
                 let window_start = i.saturating_sub(8);
-                let preceded = (window_start..i).any(|j| {
-                    lines[j].contains("#[cfg(feature = \"debug-log\")]")
-                });
+                let preceded =
+                    (window_start..i).any(|j| lines[j].contains("#[cfg(feature = \"debug-log\")]"));
                 assert!(
                     preceded,
                     "secure_log!() at line {} must be guarded by \
@@ -1208,7 +1479,9 @@ fn negative_apdu_buf_cursor_starts_at_7_for_extended_lc() {
     // then `finish()` compacts to short-Lc when the payload is small.
     // A regression to `cursor=5` would leave the extended-Lc slot
     // unwritten when the payload spills past 255 bytes.
-    assert!(APDU_SRC.contains("// Cursor starts at offset 7 (past header + 3-byte extended Lc slot)."));
+    assert!(
+        APDU_SRC.contains("// Cursor starts at offset 7 (past header + 3-byte extended Lc slot).")
+    );
     assert!(APDU_SRC.contains("Self { buf, cursor: 7 }"));
 }
 
@@ -1288,9 +1561,7 @@ fn negative_scp03_establish_fallback_requires_derived_and_allow_flags() {
     assert!(establish_body.contains("feature = \"se050-scp03-allow-factory-fallback\""));
     assert!(establish_body.contains("&PLATFORM_ENC, &PLATFORM_MAC"));
     // And the nonsense combo (fallback without derived) is compile-fenced.
-    assert!(SCP03_SRC.contains(
-        "se050-scp03-allow-factory-fallback requires se050-derived-scp03"
-    ));
+    assert!(SCP03_SRC.contains("se050-scp03-allow-factory-fallback requires se050-derived-scp03"));
 }
 
 #[test]
@@ -1745,7 +2016,9 @@ fn gap4_apdu_translates_0x6986_to_auth_method_blocked() {
         "verify_session must translate 0x6986 to AuthMethodBlocked"
     );
     assert!(
-        APDU_SRC.contains("Err(Se050Error::Status(0x6986)) => return Err(Se050Error::AuthMethodBlocked)"),
+        APDU_SRC.contains(
+            "Err(Se050Error::Status(0x6986)) => return Err(Se050Error::AuthMethodBlocked)"
+        ),
         "create_session must translate the locked-UserID 0x6986 to AuthMethodBlocked; \
          on B-U585I-IOT02A the lockout is enforced at session creation"
     );
@@ -1864,7 +2137,9 @@ fn positive_se050_error_classifies_transport_as_inconclusive() {
 fn negative_scp03_rotation_probe_does_not_collapse_inconclusive_into_reject() {
     let f = fn_code("pub fn rotate_scp03_transport_to_final");
     assert!(
-        !f.contains("establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac).is_ok()"),
+        !f.contains(
+            "establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac).is_ok()"
+        ),
         "D1: the FINAL-keyset probe collapsed a transport fault into 'not \
          rotated' and fell through to PUT KEY. Classify with is_inconclusive() \
          and fail closed — the ceremony is journal-resumable, so failing closed \

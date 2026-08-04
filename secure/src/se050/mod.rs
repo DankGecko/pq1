@@ -341,6 +341,69 @@ impl Se050 {
         Ok(())
     }
 
+    /// First-boot-only SCP03 establishment under the explicit OTP-rooted
+    /// transport keys, before the BHK exists.
+    ///
+    /// The ordinary [`Self::init`] selects the build's preferred final keys;
+    /// in a `bhk` build those are BHK-derived and therefore circular while we
+    /// are generating the BHK itself. This method has no fallback and exists
+    /// solely to make the SE050 TRNG available to that three-source draw.
+    #[cfg(feature = "rdp2-self-lock")]
+    pub(crate) fn establish_transport_for_entropy(&mut self) -> Result<(), Se050Error> {
+        use crate::hw::secret_keys as sk;
+        use zeroize::Zeroize;
+
+        let map = |_| Se050Error::Scp03;
+        let mut enc = sk::transport_se050_scp03_enc().map_err(map)?;
+        let mut mac = sk::transport_se050_scp03_mac().map_err(map)?;
+
+        self.ready = false;
+        self.scp03.zeroize_session();
+        self.scp03 = Scp03Session::new();
+        let result = (|| unsafe {
+            self.link_bringup()?;
+            scp03::establish_with(&mut self.scp03, &mut self.t1, &enc, &mac)
+                .map_err(|_| Se050Error::Scp03)?;
+            self.ready = true;
+            Ok(())
+        })();
+
+        enc.zeroize();
+        mac.zeroize();
+        crate::fi::zeroize_barrier();
+        if result.is_err() {
+            self.ready = false;
+            self.scp03.zeroize_session();
+        }
+        result
+    }
+
+    /// Draw from the SE050 TRNG using the already-established explicit
+    /// transport session. Never calls lazy [`Self::init`] and therefore can
+    /// never switch to the circular BHK-derived key selection.
+    #[cfg(feature = "rdp2-self-lock")]
+    pub(crate) fn random_from_established_transport(
+        &mut self,
+        buf: &mut [u8],
+    ) -> Result<(), Se050Error> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        buf.fill(0);
+        crate::fi::zeroize_barrier();
+        if !self.ready || !self.scp03.active {
+            return Err(Se050Error::Scp03);
+        }
+        let result = unsafe {
+            apdu::get_random(&mut self.t1, &mut self.scp03, buf).map(|_| ())
+        };
+        if result.is_err() {
+            buf.fill(0);
+            crate::fi::zeroize_barrier();
+        }
+        result
+    }
+
     /// work-todo #36 first-boot: rotate the SCP03 keyset from the factory
     /// **transport** keys to the **final** BHK-rooted keys, two-phase.
     ///
@@ -368,6 +431,7 @@ impl Se050 {
         let mut tr_dek = sk::transport_se050_scp03_dek().map_err(map)?;
 
         self.ready = false;
+        self.scp03.zeroize_session();
         let result = (|| unsafe {
             // Fresh link, then probe FINAL (resume / idempotence).
             //
@@ -398,6 +462,7 @@ impl Se050 {
             // the write refused (named production gate).
             let mut proof = scp03::TransportAuthProof::pending(scp03::AUTH_CTX_SCP03_TRANSPORT);
             self.link_bringup()?;
+            self.scp03.zeroize_session();
             self.scp03 = Scp03Session::new();
             scp03::establish_with(&mut self.scp03, &mut self.t1, &tr_enc, &tr_mac)
                 .map_err(|_| Se050Error::Scp03)?;
@@ -443,6 +508,7 @@ impl Se050 {
             // the bench-gated torn-DEK safety net for the no-KCV-echo case; see
             // the #36 runbook / HW-ASSUME-PUTKEY-REPUT-IDEMPOTENT.)
             self.link_bringup()?;
+            self.scp03.zeroize_session();
             self.scp03 = Scp03Session::new();
             scp03::establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac)
                 .map_err(|_| Se050Error::Scp03)?;
@@ -632,11 +698,19 @@ impl Se050 {
         if buf.is_empty() {
             return Ok(());
         }
-        self.init()?;
-        unsafe {
-            apdu::get_random(&mut self.t1, &mut self.scp03, buf)?;
+        buf.fill(0);
+        crate::fi::zeroize_barrier();
+        if let Err(error) = self.init() {
+            return Err(error);
         }
-        Ok(())
+        let result = unsafe {
+            apdu::get_random(&mut self.t1, &mut self.scp03, buf).map(|_| ())
+        };
+        if result.is_err() {
+            buf.fill(0);
+            crate::fi::zeroize_barrier();
+        }
+        result
     }
 
     /// PROBE ONLY (`duress-probe-e2e`, §32 duress-PIN feasibility):
@@ -3077,6 +3151,10 @@ impl WalletStore for Se050 {
     }
 
     fn random(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
+        Se050::random(self, buf).map_err(|_| SeError::InternalError)
+    }
+
+    fn random_se050(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
         Se050::random(self, buf).map_err(|_| SeError::InternalError)
     }
 

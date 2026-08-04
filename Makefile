@@ -2300,8 +2300,11 @@ prod-erc7730-provenance-check: check-erc7730-descriptors check-erc7730-forced-el
 	@$(error prod-erc7730-provenance-check: FAIL — ERC-7730 catalogue provenance is '$(ERC7730_CATALOGUE_PROVENANCE)'; required '$(PROD_ERC7730_PROVENANCE)'; Draft catalogue has no production authority)
 endif
 
-.PHONY: prod-feature-check prod-check
-prod-feature-check: ## Resolve and validate the production hardening feature set
+.PHONY: rng-consumer-audit prod-feature-check prod-check
+rng-consumer-audit: ## Refuse unreviewed direct platform-RNG consumers
+	@python3 scripts/rng_consumer_audit.py
+
+prod-feature-check: rng-consumer-audit ## Resolve and validate the production hardening feature set
 	@echo "==> prod-feature-check (MED-2 / HIGH-1): resolving shipping feature set"
 	@echo "    RELEASE_FEATURES = $(RELEASE_FEATURES)"
 	@feats=$$(cargo tree -p sphincs-tz-secure --no-default-features \
@@ -4098,12 +4101,17 @@ verify-kani-census: ## source-generated Kani harness census vs kani_census.lock.
 miri: ## Miri UB check on host crates
 	@rustup component list --toolchain nightly --installed 2>/dev/null | grep -q '^miri' || rustup component add miri --toolchain nightly
 	@echo "==> Miri: FI volatile helpers"
-	MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p pqsigner-fi
+	cargo +nightly miri test -p pqsigner-fi
 	@echo "==> Miri: tx-core decoders (RLP / EIP-1559 / keccak)"
-	MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p pqsigner-tx-core
+	cargo +nightly miri test -p pqsigner-tx-core
+	@echo "==> Miri: ERC-7730 display/render volatile canary + transcript-poison (the crate's only unsafe)"
+	@# Filter `display` matches every module containing the crate's 10 unsafe blocks;
+	@# the rest is safe code. Full-crate Miri is ~8.5 min — filtered leg is ~4 min.
+	@# ignore-leaks: test fixtures use Box::leak for &'static [u8] IR pools (intentional).
+	MIRIFLAGS="-Zmiri-ignore-leaks" cargo +nightly miri test -p pqsigner-erc7730 --lib -- display
 	@echo "==> Miri: secure-world NS-pointer deref + validation (the genuine host-reachable unsafe)"
 	@# permissive-provenance: the NS-ptr boundary is a legitimate int->ptr cast.
-	MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance" cargo +nightly miri test -p sphincs-tz-secure --no-default-features --features mock-se,debug-log,ui-semihosting -- ns_ptr ptr_validate
+	MIRIFLAGS="-Zmiri-permissive-provenance" cargo +nightly miri test -p sphincs-tz-secure --no-default-features --features mock-se,debug-log,ui-semihosting -- ns_ptr ptr_validate
 	@echo "==> Miri (tree-borrows): shared NS-pointer deref primitives over a REAL allocation"
 	@# the secure-crate pass above can't deref (its addr is a u32, never a host ptr); the
 	@# extracted shared primitives run read_volatile/write_volatile/from_raw_parts on a real

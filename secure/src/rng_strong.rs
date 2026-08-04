@@ -1,8 +1,8 @@
 //! Multi-source strong RNG. Mirrors Trezor's
 //! `core/embed/sec/rng/rng_strong.c` design: fill from the platform
 //! TRNG (STM32 hardware RNG on real silicon; semihosting `/dev/urandom`
-//! on QEMU), then XOR-mix per-block from each available secure-element
-//! TRNG.
+//! on QEMU), then XOR-mix per-block from both mandatory secure-element
+//! TRNGs in hardware builds.
 //!
 //! **Security argument.** XOR over independent random sources preserves
 //! entropy from any unbroken source. If `n-1` of the `n` contributing
@@ -17,18 +17,17 @@
 //!   - **Single-fault FI on one source's read path**: the other two
 //!     reach the XOR-fold unfaulted.
 //!
-//! **Failure semantics — strict, no silent fall-through.** Any source
-//! that fails to deliver entropy aborts the call. Specifically: the
-//! platform TRNG (STM32 RNG SEIS/CEIS, or QEMU `/dev/urandom`) AND
-//! the SE-side contribution (which itself is `OPTIGA ⊕ SE050` and
-//! requires *both* chips to succeed; see `DualSecureElement::random`).
+//! **Failure semantics — strict, no silent fall-through.** Any configured
+//! source that fails to deliver entropy aborts the call. The production path
+//! obtains OPTIGA and SE050 bytes through separate methods and requires an
+//! independent success/nonzero receipt for each before either is mixed.
 //! Refusing the call is the loud failure mode — under EMFI / I2C
 //! glitching, silently degrading to fewer sources would let an
 //! attacker reduce entropy without anything noticing.
 //!
-//! Under `feature = "mock-se"` only (dev/QEMU builds), the SE-side
-//! contribution is allowed to be absent because the mock backend has
-//! no TRNG. CI gates production firmware on `mock-se` OFF.
+//! Under `feature = "mock-se"` only (dev/QEMU builds), the SE contributions
+//! are absent because the mock backend has no TRNG. Compile-time and final-ELF
+//! gates require `mock-se` off and all three hardware backends for production.
 //!
 //! **What we do NOT defend** with the XOR alone:
 //!
@@ -44,12 +43,153 @@
 //! draw a fresh `opt_rand` per signing call (F-13 follow-up; aligned
 //! with `docs/archive/work-todo-retired-2026-07-19.md` §10 "Multi-Source RNG").
 
-use crate::rng_strong_fold::fold_se_blocks;
+use crate::rng_strong_fold::{
+    fold_se_sources, verify_nonzero_output_twice_into, SeSource, SourceRepeatState,
+    MIN_SOURCE_BLOCK,
+};
+use crate::secure_element::WalletStore;
+use core::sync::atomic::{AtomicBool, Ordering};
+use zeroize::Zeroize;
 
-/// Fill `buf` with strong random bytes: platform TRNG XOR'd with the
-/// active SE backend's `random()` (which itself XOR-mixes all
-/// available SE-side sources for multi-SE backends like
-/// `DualSecureElement`).
+/// Serialize the shared physical-source continuous-repetition history.
+/// Strong-RNG users run in secure thread mode, but an immediate-fail guard is
+/// still safer than relying on every future caller to preserve that invariant.
+static STRONG_RNG_BUSY: AtomicBool = AtomicBool::new(false);
+static mut SOURCE_REPEAT_STATE: SourceRepeatState = SourceRepeatState::new();
+
+struct StrongRngGuard;
+
+impl StrongRngGuard {
+    fn try_acquire() -> Result<Self, ()> {
+        STRONG_RNG_BUSY
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .map(|_| Self)
+            .map_err(|_| ())
+    }
+}
+
+impl Drop for StrongRngGuard {
+    fn drop(&mut self) {
+        STRONG_RNG_BUSY.store(false, Ordering::Release);
+    }
+}
+
+/// Common strict three-source composition for callers that already hold the
+/// active secure-element handle. Keeping this alongside [`fill`] prevents
+/// those callers from hand-rolling an optional-SE fallback or aliasing the
+/// global backend through the source-specific global accessors.
+pub(crate) fn fill_with_source_draw(
+    buf: &mut [u8],
+    source_draw: impl FnMut(SeSource, &mut [u8]) -> bool,
+) -> Result<(), ()> {
+    if buf.is_empty() {
+        return Ok(());
+    }
+    if buf.len() < MIN_SOURCE_BLOCK {
+        buf.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(());
+    }
+    let _guard = match StrongRngGuard::try_acquire() {
+        Ok(guard) => guard,
+        Err(()) => {
+            buf.zeroize();
+            crate::fi::zeroize_barrier();
+            return Err(());
+        }
+    };
+    // SAFETY: `_guard` serializes every access for the full platform + SE
+    // draw, fold, history publication, and final-output verification.
+    let source_history = unsafe { &mut *core::ptr::addr_of_mut!(SOURCE_REPEAT_STATE) };
+
+    // Fail-initialize the platform buffer before the call. If the call itself
+    // or an outer Result branch is fault-skipped, stale caller bytes cannot be
+    // mistaken for an STM32 contribution.
+    buf.zeroize();
+    crate::fi::zeroize_barrier();
+    let platform_result = crate::rng::fill(buf);
+    let mut platform_nonzero = 0u8;
+    for &byte in buf.iter() {
+        platform_nonzero |= byte;
+    }
+    let mut platform_receipt = crate::fi::FAIL_SENTINEL;
+    let checked_platform =
+        crate::fi::check_true_into_sentinel(|| platform_result.is_ok() && platform_nonzero != 0);
+    // SAFETY: unique stack receipt. Two volatile gates below prevent one
+    // skipped/inverted ordinary Result branch from accepting an error-wiped
+    // zero baseline.
+    unsafe {
+        core::ptr::write_volatile(&mut platform_receipt, checked_platform);
+    }
+    if unsafe { core::ptr::read_volatile(&platform_receipt) } != crate::fi::OK_SENTINEL {
+        buf.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(());
+    }
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&platform_receipt) } != crate::fi::OK_SENTINEL {
+        buf.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(());
+    }
+
+    // Apply each SE contribution exactly once. The fold owns promotion of the
+    // fail-initialized receipt: only its unconditional all-chunks-success exit
+    // writes OK, while every failed source path wipes `buf`. Keeping the
+    // promotion inside the fold prevents a skipped/inverted caller-side bool
+    // promotion from accepting the untouched STM32-only baseline.
+    let mut fold_receipt = crate::fi::FAIL_SENTINEL;
+    // SAFETY: unique stack local. Volatile fail-initialization makes a skipped
+    // stateful fold leave an explicit failure receipt instead of stale truth.
+    unsafe {
+        core::ptr::write_volatile(&mut fold_receipt, crate::fi::FAIL_SENTINEL);
+    }
+    fold_se_sources(buf, source_draw, source_history, &mut fold_receipt);
+    let se_ok = crate::fi::check_true_into_sentinel(|| {
+        // SAFETY: repeated read of the live stack receipt for FI checking.
+        unsafe { core::ptr::read_volatile(&fold_receipt) == crate::fi::OK_SENTINEL }
+    });
+    if se_ok != crate::fi::OK_SENTINEL {
+        buf.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(());
+    }
+
+    let mut output_receipt = crate::fi::FAIL_SENTINEL;
+    unsafe {
+        core::ptr::write_volatile(&mut output_receipt, crate::fi::FAIL_SENTINEL);
+    }
+    verify_nonzero_output_twice_into(buf, &mut output_receipt);
+    if unsafe { core::ptr::read_volatile(&output_receipt) } != crate::fi::OK_SENTINEL {
+        buf.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(());
+    }
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&output_receipt) } != crate::fi::OK_SENTINEL {
+        buf.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(());
+    }
+    Ok(())
+}
+
+/// Strict three-source fill for a caller that already owns the active wallet
+/// backend. The two chip methods are deliberately separate so a nonzero
+/// OPTIGA result cannot mask a skipped/zero SE050 result (or vice versa).
+pub(crate) fn fill_with_store(buf: &mut [u8], store: &mut impl WalletStore) -> Result<(), ()> {
+    // The trait defaults fail. Only a backend that explicitly exposes both
+    // physical chips can pass this path; production is additionally compile-
+    // fenced to `DualSecureElement`.
+    fill_with_source_draw(buf, |source, block| match source {
+        SeSource::Optiga => store.random_optiga(block).is_ok(),
+        SeSource::Se050 => store.random_se050(block).is_ok(),
+    })
+}
+
+/// Fill `buf` with strong random bytes from three independently checked
+/// sources: the platform TRNG, OPTIGA TRNG, and SE050 TRNG. Each secure-
+/// element source is folded into the platform bytes exactly once.
 ///
 /// Returns `Err(())` if:
 ///   - the platform TRNG fails (STM32 RNG peripheral seed/clock error
@@ -64,69 +204,43 @@ use crate::rng_strong_fold::fold_se_blocks;
 /// (`optiga-trust-m`, `se050`, `dual-se`) a missing SE
 /// contribution is fatal.
 pub fn fill(buf: &mut [u8]) -> Result<(), ()> {
-    if buf.is_empty() {
-        return Ok(());
-    }
-
-    // ── Step 1: platform TRNG (STM32 or QEMU /dev/urandom) ──────────
-    // Establishes the baseline; XOR layers below strictly improve
-    // entropy. STM32 RNG SEIS/CEIS or `/dev/urandom` read failure
-    // aborts the call.
-    crate::rng::fill(buf)?;
-
-    // ── Step 2: XOR-mix per-block from the SE backend ────────────────
-    // For multi-SE backends the trait impl already XOR-folds the
-    // per-source contributions internally and requires every chip to
-    // succeed (see `DualSecureElement::random`). Block-by-block
-    // matches Trezor's pattern and keeps the SE TLV body small. The
-    // fold lives in `rng_strong_fold::fold_se_blocks` (split out so the
-    // host test suite can exercise it), which hands the backend a
-    // FRESH zeroed block per chunk — the backend XORs into the
-    // caller's buffer, so a stale block would re-fold the previous
-    // chunk's contribution into this one (finding F27).
     #[cfg(all(not(test), not(feature = "mock-se")))]
     {
-        // Production: an absent SE contribution is fatal — silently
-        // degrading to platform-only under EMFI / I2C glitching would
-        // let an attacker reduce entropy without anything noticing.
-        // SCAFI-6/F18 (#442): the gate runs through the codebase's
-        // FI-sentinel idiom instead of a plain `if !bool` — a bare
-        // branch on the fold's bool is one instruction-skip away from
-        // waiving the fatal-SE check. `check_true_into_sentinel`
-        // double-evaluates the fold (a second XOR-fold of fresh SE
-        // bytes is entropy-neutral) and the caller compares the
-        // Hamming-distant sentinel VALUE, so a skipped/garbled branch
-        // lands on the error path.
-        let se_ok = crate::fi::check_true_into_sentinel(|| {
-            fold_se_blocks(buf, |b| unsafe { crate::se_random(b) }.is_ok())
+        return fill_with_source_draw(buf, |source, block| match source {
+            SeSource::Optiga => unsafe { crate::se_random_optiga(block) }.is_ok(),
+            SeSource::Se050 => unsafe { crate::se_random_se050(block) }.is_ok(),
         });
-        if se_ok != crate::fi::OK_SENTINEL {
-            return Err(());
-        }
     }
+
     // Dev/QEMU (`mock-se`): the mock backend has no TRNG, so an absent
     // SE contribution is tolerated. CI gates production firmware on
     // `mock-se` OFF.
     #[cfg(all(not(test), feature = "mock-se"))]
     {
-        let _ = fold_se_blocks(buf, |b| unsafe { crate::se_random(b) }.is_ok());
+        if buf.is_empty() {
+            return Ok(());
+        }
+        if crate::rng::fill(buf).is_err() {
+            buf.zeroize();
+            crate::fi::zeroize_barrier();
+            return Err(());
+        }
+        let mut output_receipt = crate::fi::FAIL_SENTINEL;
+        unsafe {
+            core::ptr::write_volatile(&mut output_receipt, crate::fi::FAIL_SENTINEL);
+        }
+        verify_nonzero_output_twice_into(buf, &mut output_receipt);
+        if unsafe { core::ptr::read_volatile(&output_receipt) } != crate::fi::OK_SENTINEL {
+            buf.zeroize();
+            crate::fi::zeroize_barrier();
+            return Err(());
+        }
+        crate::fi::wait_random();
+        if unsafe { core::ptr::read_volatile(&output_receipt) } != crate::fi::OK_SENTINEL {
+            buf.zeroize();
+            crate::fi::zeroize_barrier();
+            return Err(());
+        }
+        return Ok(());
     }
-
-    // ── Step 3: fail-closed non-zero acceptance gate ────────────────
-    // An all-zero buffer is a strong signal of a stuck-at-0 fault
-    // somewhere on the fill path. For any reasonable buffer length
-    // (the typical caller uses 16 B for SPHINCS+C10 OptRand) the
-    // legitimate collision probability with all-zero is 2^-(8·N),
-    // which is negligible. Refuse rather than silently emit a
-    // predictable random.
-    let mut acc: u8 = 0;
-    for &b in buf.iter() {
-        acc |= b;
-    }
-    if acc == 0 {
-        return Err(());
-    }
-
-    Ok(())
 }
-

@@ -505,6 +505,10 @@ pub enum UnwrapError {
     MalformedLength,
     /// R-MAC verification failed in constant time.
     RMacMismatch,
+    /// The decrypted padded plaintext does not re-encrypt to the
+    /// authenticated ciphertext (decryption fault / corruption), or a
+    /// receipt-bound copy out of the verified staging buffer failed.
+    RelationMismatch,
     /// Encrypted body length was not a multiple of 16 (ISO 7816-4 padded
     /// AES-CBC must be).
     BadCiphertextLen,
@@ -575,9 +579,11 @@ fn ct_eq_8(a: &[u8], b: &[u8]) -> bool {
 /// **F8 (corrected):** that R-MAC-mismatch path returns `Err(RMacMismatch)`
 /// but does NOT itself clear `session.active` (an earlier comment claimed it
 /// "kills the session" — it does not). The channel still fails CLOSED: no
-/// plaintext is ever released on the mismatch (the early sentinel reject plus
-/// the F-28 infective release gate XOR-garble half_E unless a fresh,
-/// independent R-MAC recompute matches), and the seed half is only ever read,
+/// plaintext is ever released on the mismatch (the fail-initialized R-MAC
+/// authentication receipt — published only after two independent full
+/// recomputations inside `verify_rmac_into` and re-checked by two
+/// independent volatile reads — never reaches the copy, counter advance, or
+/// `Ok` on a mismatch), and the seed half is only ever read,
 /// never sent, and always travels as R-ENC ciphertext on the bus. A desynced
 /// session is an availability concern, not a confidentiality/integrity one:
 /// the counter desync makes every SUBSEQUENT command error too, so the unlock
@@ -646,34 +652,54 @@ pub fn unwrap_response(
     // The MCV is the full 16-byte command CMAC produced by `wrap_apdu`
     // (`session.mcv`); it is NOT updated by `unwrap_response`.
     //
-    // FI-hardening (F-28, `tools/sca/README.md` §F-28). This R-MAC verify is
-    // the ONLY thing between a forged (attacker-supplied, wrong-R-MAC)
-    // response and the host releasing an attacker-chosen `half_E`. A plain
-    // `if !ct_eq_8(..) { return Err }` is single-fault-defeatable — the
-    // exhaustive `make scp03-fi` sweep found `[skip]` faults that release the
-    // plaintext (skip the reject branch, or a stuck-at that zeroes the
-    // computed MAC to match a forged all-zero R-MAC). Mirror `crypto.rs`'s C10
-    // verify-before-release gate (F-1/F-2):
+    // FI-hardening (F-28 rework, 2026-08-03 — `tools/sca/README.md` §F-28).
+    // This R-MAC verify is the ONLY thing between a forged
+    // (attacker-supplied, wrong-R-MAC) response and the host releasing
+    // attacker-influenced plaintext (a substituted SE050 entropy
+    // contribution / `half_E`). The authoritative gate is a fail-initialized
+    // authentication receipt: `verify_rmac_into` publishes `OK_SENTINEL`
+    // only after two independent full R-MAC recomputations (constant-time
+    // compare, `black_box`ed so LTO cannot fold the duplicate checks), and
+    // two independent volatile success checks — separated by `wait_random`
+    // — must pass below before ANY protected-response copy, counter
+    // advance, or `Ok` return, covering BOTH the empty-body (case 2) and
+    // full encrypted (case 3) paths. A skipped verifier call, a skipped
+    // store, or one faulted recomputation leaves `FAIL_SENTINEL`
+    // authoritative.
     //
-    //   * The CMAC is recomputed INSIDE the double-evaluated closure, so a
-    //     fault that corrupts one computation makes the two evaluations
-    //     disagree → `check_true_into_sentinel` fails closed. (Unlike the C10
-    //     gate, which computes `verify` once because `verify` is itself
-    //     fault-robust, the R-MAC equality is not — so we recompute it.)
-    //   * The verdict is the Hamming-distant `OK_SENTINEL`; a skip of the
-    //     reject branch can't synthesise that 32-bit magic.
-    //   * `core::hint::black_box` is load-bearing — without it LLVM CSEs the
-    //     two closure evaluations (and the two CMACs) into one, collapsing the
-    //     re-check back to a single skippable branch. See F-1.
-    //
-    // `wait_random()` immediately before defeats clock-aligned glitch bursts
-    // timed to the fixed-shape control flow.
+    // There is deliberately NO complementing infective mask here. The
+    // previous gate folded a mismatch into the released bytes as XOR-0xFF —
+    // a public bijection: a forging attacker who can form R-ENC ciphertext
+    // submits the *complement* of the desired payload and receives exactly
+    // those bytes (with attacker-chosen SW, advanced counter, and an `Ok`
+    // return) once a single fault skips an early rejection (the wave-17
+    // GPT-5.6 blocker). A mask that returns `Ok` cannot be the release
+    // authority; the receipt is.
     crate::fi::wait_random();
-    let rmac_ok = crate::fi::check_true_into_sentinel(|| {
-        let mac = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
-        core::hint::black_box(ct_eq_8(&mac[..8], rmac_recv))
-    });
-    if rmac_ok != crate::fi::OK_SENTINEL {
+    let mut rmac_auth_receipt: u32 = crate::fi::FAIL_SENTINEL;
+    // SAFETY: unique stack receipt, fail-initialized so a skipped verifier
+    // call cannot synthesize success from stale stack state.
+    unsafe {
+        core::ptr::write_volatile(&mut rmac_auth_receipt, crate::fi::FAIL_SENTINEL);
+    }
+    crate::scp03_logic::verify_rmac_into(
+        &session.s_rmac,
+        &session.mcv,
+        body,
+        sw,
+        rmac_recv,
+        &mut rmac_auth_receipt,
+    );
+    // First volatile success check.
+    if unsafe { core::ptr::read_volatile(&rmac_auth_receipt) } != crate::fi::OK_SENTINEL {
+        #[cfg(feature = "debug-log")]
+        secure_log!("[SCP03] R-MAC MISMATCH");
+        return Err(UnwrapError::RMacMismatch);
+    }
+    crate::fi::wait_random();
+    // Second independent volatile success check — a single fault cannot
+    // defeat both.
+    if unsafe { core::ptr::read_volatile(&rmac_auth_receipt) } != crate::fi::OK_SENTINEL {
         #[cfg(feature = "debug-log")]
         secure_log!("[SCP03] R-MAC MISMATCH");
         return Err(UnwrapError::RMacMismatch);
@@ -706,6 +732,49 @@ pub fn unwrap_response(
     let icv = response_icv(session);
     aes128_cbc_decrypt(&session.s_enc, &icv, &mut plain[..body_end]);
 
+    // Decrypt-fidelity receipt (wave-18 GPT-5.6 blocker). The R-MAC gate
+    // above authenticates the CIPHERTEXT; it cannot see a fault that
+    // corrupts the decryption — a single skip of the per-block writeback
+    // inside `aes128_cbc_decrypt` leaves bus-visible ciphertext in `plain`
+    // (coordinator-reproduced: `Ok` + intact TLV header + SW + advanced
+    // counter, block bytes equal to the on-wire ciphertext). Bind the
+    // decrypted padded buffer back to the authenticated ciphertext:
+    // `verify_renc_relation_into` re-encrypts `plain` twice independently
+    // (CBC re-encryption is the identity on a faithful decrypt), each pass
+    // under an independently recomputed response ICV — sharing the caller's
+    // `icv` would let one faulted ICV computation make the decrypt and the
+    // check consistently wrong. `OK_SENTINEL` is published only when both
+    // passes match `body`. Two independent volatile checks, separated by
+    // `wait_random`, must pass before any depad, copy, counter advance, or
+    // `Ok`.
+    let mut renc_receipt: u32 = crate::fi::FAIL_SENTINEL;
+    // SAFETY: unique stack receipt, fail-initialized so a skipped verifier
+    // call cannot synthesize success from stale stack state.
+    unsafe {
+        core::ptr::write_volatile(&mut renc_receipt, crate::fi::FAIL_SENTINEL);
+    }
+    crate::scp03_logic::verify_renc_relation_into(
+        &session.s_enc,
+        &session.counter,
+        &plain[..body_end],
+        body,
+        &mut renc_receipt,
+    );
+    // First volatile success check.
+    if unsafe { core::ptr::read_volatile(&renc_receipt) } != crate::fi::OK_SENTINEL {
+        #[cfg(feature = "debug-log")]
+        secure_log!("[SCP03] R-ENC RELATION MISMATCH");
+        return Err(UnwrapError::RelationMismatch);
+    }
+    crate::fi::wait_random();
+    // Second independent volatile success check — a single fault cannot
+    // defeat both.
+    if unsafe { core::ptr::read_volatile(&renc_receipt) } != crate::fi::OK_SENTINEL {
+        #[cfg(feature = "debug-log")]
+        secure_log!("[SCP03] R-ENC RELATION MISMATCH");
+        return Err(UnwrapError::RelationMismatch);
+    }
+
     // ISO 7816-4 depad: scan back from end of last block for the `0x80`
     // sentinel.  GP Amd D §6.2.7 + GP Card Spec §B.2.3.
     let mut pad_pos = body_end;
@@ -733,31 +802,19 @@ pub fn unwrap_response(
         return Err(UnwrapError::Overflow);
     }
 
-    // F-28 infective release gate. The early sentinel gate above rejects a
-    // forged response in normal operation, but an exhaustive `make scp03-fi`
-    // sweep showed `check_true_into_sentinel`'s OWN verdict-selection branch is
-    // single-skip-defeatable (a skip flips its return to `OK_SENTINEL` for a
-    // false condition) — and that defeats ANY number of value-gates that read
-    // the now-corrupted verdict. So at the secret-release point we do NOT
-    // branch on the verdict: we fold a FRESH, INDEPENDENT R-MAC recompute
-    // branchlessly into the released bytes. The real plaintext is emitted only
-    // if this recompute matches; otherwise every byte is XOR-garbled. A forged
-    // response that reaches here (early gate FI-bypassed) therefore yields
-    // garbage, never the attacker's chosen `half_E`, and there is no clean
-    // branch a single skip can flip to "release". Reaching here at all costs
-    // the one fault, so this recompute + mask run unfaulted. (Folding `half_E`'s
-    // confidentiality into an arithmetic dependency is the standard "infective"
-    // FI countermeasure; it does not rely on the fragile sentinel branch.)
-    let mac_chk = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
-    let mac_matches = ct_eq_8(&mac_chk[..8], rmac_recv);
-    // 0x00 when the R-MAC matches (release), 0xFF when it does not (garble) —
-    // branchless: `true as u8 = 1 → 0`, `false as u8 = 0 → 0xFF`.
-    let release_mask = (mac_matches as u8).wrapping_sub(1);
-    for (o, p) in out[..plaintext_len]
-        .iter_mut()
-        .zip(plain[..plaintext_len].iter())
-    {
-        *o = p ^ release_mask;
+    // The R-MAC receipt authenticated the ciphertext and the R-ENC relation
+    // receipt bound the plaintext to it, so the authenticated plaintext is
+    // copied out verbatim. The copy itself is receipt-bound
+    // (`rng_exact::copy_exact`: pointer publication, volatile byte copy with
+    // progress, and two independent read-back relations; it wipes the
+    // destination on any failure) so a skipped or shortened copy cannot
+    // release stale bytes behind an `Ok`. There is no complementing
+    // infective mask anywhere on this path: it returned `Ok` on a mismatch
+    // and its XOR-0xFF garble was invertible by the attacker.
+    if crate::rng_exact::copy_exact(&plain[..plaintext_len], &mut out[..plaintext_len]).is_err() {
+        #[cfg(feature = "debug-log")]
+        secure_log!("[SCP03] RELEASE COPY RECEIPT MISMATCH");
+        return Err(UnwrapError::RelationMismatch);
     }
     out[plaintext_len] = sw[0];
     out[plaintext_len + 1] = sw[1];

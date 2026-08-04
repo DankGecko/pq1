@@ -234,16 +234,16 @@ pub trait FirstBootHw {
     /// Precondition: SAES Tier-1 (DHUK) is alive.
     fn saes_alive(&self) -> bool;
 
-    /// BHK first-write: erase-and-reprovision UNCONDITIONALLY (anti-pre-plant),
-    /// then load-lock + self-test.
+    /// BHK first-write: erase-and-reprovision UNCONDITIONALLY (anti-pre-plant)
+    /// from STM32 + OPTIGA + SE050 entropy, then load-lock + self-test.
     fn bhk_provision_and_lock(&mut self) -> Result<(), FirstBootError>;
     /// Rotate SE050 SCP03 transport → final (two-phase confirm).
     fn se050_rotate_scp03(&mut self) -> Result<(), FirstBootError>;
     /// Re-key the SE050 admin credential transport → final.
     fn se050_rekey_admin(&mut self) -> Result<(), FirstBootError>;
-    /// #443: bring the OPTIGA shielded session up under the factory TRANSPORT
-    /// PBS (E140 untouched) so the 3-source `trng_salt` draw can reach the
-    /// OPTIGA TRNG. Fresh-path only — with a committed salt the rotation
+    /// Bring the OPTIGA shielded session up under the factory TRANSPORT PBS
+    /// (E140 untouched) so the 3-source BHK and `trng_salt` draws can reach
+    /// the OPTIGA TRNG. Fresh-path only — with a committed salt the rotation
     /// self-establishes (FINAL-probe-first) and a transport handshake against
     /// an already-rotated chip would fail spuriously.
     fn optiga_establish_transport_shield(&mut self) -> Result<(), FirstBootError>;
@@ -285,10 +285,18 @@ pub fn run(hw: &mut dyn FirstBootHw) -> Result<(), FirstBootFault> {
     let resuming = !js.is_blank();
     let mut done = js.done;
     let salt = js.salt;
+    let mut optiga_transport_ready = false;
 
     // Step 2 — BHK first-write (anti-pre-plant erase-and-reprovision).
     if done & DONE_BHK == 0 {
         hw.ui_step(FirstBootStep::Bhk, resuming);
+        // The BHK is a long-lived key root, so it must use the same mandatory
+        // three-source policy as wallet entropy. E140 is still on the factory
+        // transport PBS here; establish its shield before asking OPTIGA for
+        // entropy. A clean run reuses this session for the later salt draw.
+        hw.optiga_establish_transport_shield()
+            .map_err(|e| FirstBootFault::new(FirstBootStep::Bhk, e))?;
+        optiga_transport_ready = true;
         hw.bhk_provision_and_lock()
             .map_err(|e| FirstBootFault::new(FirstBootStep::Bhk, e))?;
         hw.commit_step(STEP_BHK)
@@ -329,8 +337,10 @@ pub fn run(hw: &mut dyn FirstBootHw) -> Result<(), FirstBootFault> {
                 // OPTIGA TRNG leg of the 3-source draw can answer. On a resume
                 // with a committed salt this whole arm is skipped, so a
                 // transport handshake against an already-rotated chip never runs.
-                hw.optiga_establish_transport_shield()
-                    .map_err(|e| FirstBootFault::new(FirstBootStep::OptigaPbs, e))?;
+                if !optiga_transport_ready {
+                    hw.optiga_establish_transport_shield()
+                        .map_err(|e| FirstBootFault::new(FirstBootStep::OptigaPbs, e))?;
+                }
                 let s = hw
                     .trng_salt()
                     .map_err(|e| FirstBootFault::new(FirstBootStep::OptigaPbs, e))?;
@@ -483,6 +493,10 @@ mod tests {
                 self.journal_done() & DONE_BHK,
                 0,
                 "BHK step re-run after its marker was committed"
+            );
+            assert!(
+                self.optiga_shield_up,
+                "three-source BHK draw requires the OPTIGA transport shield"
             );
             self.bhk_calls += 1;
             self.tick(); // cut before the durable effect
@@ -648,20 +662,18 @@ mod tests {
 
     #[test]
     fn transport_shield_failure_halts_with_0x0855() {
-        // #443: a chip that no longer answers the transport PBS handshake is
-        // caught at the establish step, BEFORE the salt is drawn or written.
+        // A chip that no longer answers the transport PBS handshake is caught
+        // before the mandatory three-source BHK is drawn or written.
         let mut hw = FakeHw::new();
         hw.fail_establish = true;
         assert_eq!(
             run(&mut hw),
             Err(FirstBootFault::new(
-                FirstBootStep::OptigaPbs,
+                FirstBootStep::Bhk,
                 FirstBootError::OptigaTransportShieldFailed,
             ))
         );
-        // Steps 2-4 completed and are durable; step 5 wrote no salt and never
-        // reached the rotation.
-        assert!(hw.journal().has(DONE_SE050_ADMIN));
+        assert!(!hw.journal().has(DONE_BHK));
         assert_eq!(hw.journal().salt, None);
         assert_eq!(hw.optiga_calls, 0);
     }

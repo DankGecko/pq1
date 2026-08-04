@@ -20,7 +20,7 @@ use crate::optiga::OptigaTrustM;
 use crate::se050::Se050;
 use crate::secure_element::{SeError, UnlockError, WalletStore};
 use subtle::ConstantTimeEq;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// XOR two 32-byte arrays. Inherently constant-time.
 fn xor_32(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
@@ -79,10 +79,9 @@ impl DualSecureElement {
     /// reconstruct the seed by XOR. Mixing three sources means any single
     /// unbroken source preserves entropy.
     ///
-    /// Open-coded (not via `rng_strong::fill`) to avoid the re-entrancy
-    /// that would arise from calling `WalletStore::random` on the global
-    /// SE while we already hold `&mut self`; direct field borrows of
-    /// `self.optiga` / `self.se050` are the clean path.
+    /// Uses the explicit-handle `rng_strong::fill_with_store` path so holding
+    /// `&mut self` never re-enters the global SE singleton. That path obtains
+    /// and validates the two chip streams separately before folding either.
     ///
     /// Both-or-fail (finding F1): each SE's `random()` contribution is
     /// mandatory — a failed read aborts provisioning rather than being
@@ -97,43 +96,44 @@ impl DualSecureElement {
         // `half_o` = the OPTIGA-side half in both the real and decoy
         // splits (the SE050 half is `entropy XOR half_o`).
         let mut half_o = [0u8; 32];
-        if crate::rng::fill(&mut half_o).is_err() {
-            secure_log!("[DUAL/prov] rng::fill FAILED");
-            return Err(SeError::InternalError);
-        }
-        let mut se_buf = [0u8; 32];
-        self.optiga.random(&mut se_buf).map_err(|_| {
-            secure_log!("[DUAL/prov] optiga.random FAILED — refusing degraded split");
-            se_buf.zeroize();
-            half_o.zeroize();
-            SeError::InternalError
-        })?;
-        for i in 0..32 {
-            half_o[i] ^= se_buf[i];
-        }
-        se_buf.zeroize();
-        crate::fi::wait_random();
-        self.se050.random(&mut se_buf).map_err(|_| {
-            secure_log!("[DUAL/prov] se050.random FAILED — refusing degraded split");
-            se_buf.zeroize();
-            half_o.zeroize();
-            SeError::InternalError
-        })?;
-        for i in 0..32 {
-            half_o[i] ^= se_buf[i];
-        }
-        se_buf.zeroize();
-        crate::fi::zeroize_barrier();
-        let mut acc: u8 = 0;
-        for &b in half_o.iter() {
-            acc |= b;
-        }
-        if acc == 0 {
-            secure_log!("[DUAL/prov] half_o stuck at zero — FI suspected");
+        if crate::rng_strong::fill_with_store(&mut half_o, self).is_err() {
+            secure_log!(
+                "[DUAL/prov] strict STM32+OPTIGA+SE050 draw FAILED — refusing degraded split"
+            );
             half_o.zeroize();
             return Err(SeError::InternalError);
         }
         Ok(half_o)
+    }
+
+    /// Wipe the OPTIGA side of a dual-SE store, supplying the legacy E120
+    /// reset path with a strict three-source transient authorization value.
+    /// A failed source skips only that optional counter reset; the underlying
+    /// OPTIGA wipe still runs without a weaker replacement secret.
+    pub(crate) fn reset_optiga_for_admin(&mut self) -> Result<(), SeError> {
+        #[cfg(all(feature = "optiga-hw-counter", not(feature = "optiga-lock-operational")))]
+        let result = {
+            let mut transient_secret = Zeroizing::new([0u8; 32]);
+            let result = if crate::rng_strong::fill_with_store(&mut *transient_secret, self)
+                .is_ok()
+            {
+                self.optiga
+                    .factory_reset_with_transient_secret(&mut *transient_secret)
+                    .map_err(|_| SeError::InternalError)
+            } else {
+                secure_log!(
+                    "[DUAL] strict transient-auth RNG failed — skipping optional \
+                     OPTIGA E120 reset; continuing best-effort wipe"
+                );
+                self.optiga.factory_reset_admin()
+            };
+            transient_secret.zeroize();
+            crate::fi::zeroize_barrier();
+            result
+        };
+        #[cfg(not(all(feature = "optiga-hw-counter", not(feature = "optiga-lock-operational"))))]
+        let result = self.optiga.factory_reset_admin();
+        result
     }
 }
 
@@ -152,47 +152,74 @@ impl WalletStore for DualSecureElement {
     ) -> Result<(), SeError> {
         secure_log!("[DUAL/prov] start");
 
-        let mut half_o = self.generate_split_half()?;
-        secure_log!("[DUAL/prov] rng OK (3-source XOR mix), calling optiga.provision");
-        let mut half_e = xor_32(entropy, &half_o);
+        // Keep every reconstructing split-half copy in an auto-wiping wrapper.
+        // This closure is intentional: all four wrappers drop before the
+        // barrier below on success, either SE provisioning error, or either
+        // optional ML-KEM sealing error. Returning directly from one of those
+        // branches must never leave a raw half live on the stack.
+        let provision_result = (|| -> Result<(), SeError> {
+            let half_o = Zeroizing::new(self.generate_split_half()?);
+            secure_log!("[DUAL/prov] rng OK (3-source XOR mix), calling optiga.provision");
+            let half_e = Zeroizing::new(xor_32(entropy, &half_o));
 
-        // Under the ML-KEM hybrid inner wrap (#28), seal each half BEFORE it
-        // crosses I²C: the SE stores the 32-byte AES-GCM ciphertext (object
-        // size unchanged), and the 1568-byte ML-KEM ct + 16-byte tag go to the
-        // ct-store. Without the feature the raw half is stored — the validated
-        // direct-half flow, byte-for-byte. (`[u8; 32]` is Copy, so the
-        // non-wrapped arm just aliases the halves; all copies are zeroized below.)
-        #[cfg(feature = "mlkem-inner-wrap")]
-        let (mut se_half_o, mut se_half_e) = (
-            crate::pq_wrap::seal_half_for_se(crate::pq_wrap::HalfId::OptigaHalfO, 0, &half_o)
-                .map_err(|_| SeError::InternalError)?,
-            crate::pq_wrap::seal_half_for_se(crate::pq_wrap::HalfId::Se050HalfE, 0, &half_e)
-                .map_err(|_| SeError::InternalError)?,
-        );
-        #[cfg(not(feature = "mlkem-inner-wrap"))]
-        let (mut se_half_o, mut se_half_e) = (half_o, half_e);
+            // Under the ML-KEM hybrid inner wrap (#28), seal each half BEFORE it
+            // crosses I²C: the SE stores the 32-byte AES-GCM ciphertext (object
+            // size unchanged), and the 1568-byte ML-KEM ct + 16-byte tag go to
+            // the ct-store. Without the feature the direct-half flow remains
+            // byte-for-byte identical; the two Copy aliases are also Zeroizing.
+            #[cfg(feature = "mlkem-inner-wrap")]
+            let (se_half_o, se_half_e) = (
+                Zeroizing::new(
+                    crate::pq_wrap::seal_half_for_se(
+                        crate::pq_wrap::HalfId::OptigaHalfO,
+                        0,
+                        &half_o,
+                    )
+                    .map_err(|_| SeError::InternalError)?,
+                ),
+                Zeroizing::new(
+                    crate::pq_wrap::seal_half_for_se(
+                        crate::pq_wrap::HalfId::Se050HalfE,
+                        0,
+                        &half_e,
+                    )
+                    .map_err(|_| SeError::InternalError)?,
+                ),
+            );
+            #[cfg(not(feature = "mlkem-inner-wrap"))]
+            let (se_half_o, se_half_e) =
+                (Zeroizing::new(*half_o), Zeroizing::new(*half_e));
 
-        // Both SEs get the same master_secret (derived from full entropy).
-        // This lets us cross-verify on unlock.
-        //
-        // OPTIGA Trust M stores its half-object + master_secret behind the HMAC
-        // auth reference PIN gate; SE050 stores its half-object behind hardware
-        // UserID PIN gating. The VK and bootstrap VK are identical on both chips.
-        if let Err(e) = self.optiga.provision(&se_half_o, master_secret, vk, bootstrap_vk, pin) {
-            secure_log!("[DUAL/prov] optiga.provision FAILED: {:?}", e);
-            return Err(e);
-        }
-        secure_log!("[DUAL/prov] optiga OK, calling se050.provision");
-        if let Err(e) = self.se050.provision(&se_half_e, master_secret, vk, bootstrap_vk, pin) {
-            secure_log!("[DUAL/prov] se050.provision FAILED: {:?}", e);
-            return Err(e);
-        }
+            // Both SEs get the same master_secret (derived from full entropy).
+            // This lets us cross-verify on unlock.
+            //
+            // OPTIGA Trust M stores its half-object + master_secret behind the
+            // HMAC auth reference PIN gate; SE050 stores its half-object behind
+            // hardware UserID PIN gating. The VK and bootstrap VK are identical
+            // on both chips.
+            if let Err(e) =
+                self.optiga
+                    .provision(&se_half_o, master_secret, vk, bootstrap_vk, pin)
+            {
+                secure_log!("[DUAL/prov] optiga.provision FAILED: {:?}", e);
+                return Err(e);
+            }
+            secure_log!("[DUAL/prov] optiga OK, calling se050.provision");
+            if let Err(e) =
+                self.se050
+                    .provision(&se_half_e, master_secret, vk, bootstrap_vk, pin)
+            {
+                secure_log!("[DUAL/prov] se050.provision FAILED: {:?}", e);
+                return Err(e);
+            }
+            Ok(())
+        })();
 
-        half_o.zeroize();
-        half_e.zeroize();
-        se_half_o.zeroize();
-        se_half_e.zeroize();
+        // The closure's Zeroizing locals have dropped on every exit. Keep an
+        // explicit compiler barrier at the security boundary before exposing
+        // its Result to the caller.
         crate::fi::zeroize_barrier();
+        provision_result?;
 
         secure_log!("[DUAL] Provisioned: entropy XOR-split across OPTIGA Trust M + SE050");
         Ok(())
@@ -534,17 +561,16 @@ impl WalletStore for DualSecureElement {
         }
     }
 
-    /// Pull random bytes from both SEs and XOR-mix them in-place. The
-    /// per-source bytes never leave this function — only the XOR is
-    /// returned to the caller. `hw::rng_strong::fill` further folds
-    /// this in with the STM32 TRNG before any cryptographic use, so
-    /// the final output is `STM32 ⊕ OPTIGA ⊕ SE050`.
+    /// Legacy combined-SE helper for non-key protocol callers. Pull random
+    /// bytes from both SEs and XOR-mix them in-place; per-source bytes never
+    /// leave this function. Security-critical entropy does not use this
+    /// already-combined result: `rng_strong` calls `random_optiga` and
+    /// `random_se050` separately and verifies each contribution.
     ///
     /// **Strict (both-or-fail).** Both OPTIGA and SE050 MUST contribute.
     /// If either chip fails to provide entropy we return `Err` — the
-    /// caller (`rng_strong::fill`) propagates that and the signing call
-    /// aborts. Degrading to a single SE under EMFI / I2C glitching on
-    /// one of the two buses would let an attacker reduce entropy to
+    /// caller propagates that. Degrading to a single SE under EMFI / I2C
+    /// glitching on one of the two buses would let an attacker reduce entropy to
     /// effectively two sources (STM32 + one SE) without anything
     /// noticing; refusing the call is the loud failure mode.
     fn random(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
@@ -577,6 +603,18 @@ impl WalletStore for DualSecureElement {
         Ok(())
     }
 
+    fn random_optiga(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
+        self.optiga
+            .random(buf)
+            .map_err(|_| SeError::InternalError)
+    }
+
+    fn random_se050(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
+        self.se050
+            .random(buf)
+            .map_err(|_| SeError::InternalError)
+    }
+
     /// Wipe both SEs via their admin recovery paths and clear SRAM caches.
     ///
     /// OPTIGA: `optiga.factory_reset()` overwrites every user OID through
@@ -591,7 +629,7 @@ impl WalletStore for DualSecureElement {
     /// A best-effort attempt is made on each backend — if one fails we
     /// still try the other and wipe SRAM state.
     fn factory_reset_admin(&mut self) -> Result<(), SeError> {
-        let optiga_result = self.optiga.factory_reset_admin();
+        let optiga_result = self.reset_optiga_for_admin();
         let se050_result = self.se050.factory_reset_admin();
 
         self.zeroize_caches();
@@ -678,7 +716,7 @@ impl DualSecureElement {
         secure_log!("[DUAL-E2E-ADMIN] step 1: pre-clean");
 
         // OPTIGA: Conf(E140) wipe. Idempotent on blank chips.
-        if let Err(e) = self.optiga.factory_reset() {
+        if let Err(e) = self.reset_optiga_for_admin() {
             secure_log!("[DUAL-E2E-ADMIN] step 1: OPTIGA factory_reset error {:?} (continuing)", e);
         }
 
@@ -922,7 +960,7 @@ impl DualSecureElement {
                 secure_log!("[DUAL-MULTI] boot state: probe unlock FAILED → fresh provisioning");
             }
 
-            if let Err(e) = self.optiga.factory_reset() {
+            if let Err(e) = self.reset_optiga_for_admin() {
                 secure_log!("[DUAL-MULTI] pre-clean: OPTIGA factory_reset error {:?} (continuing)", e);
             }
 

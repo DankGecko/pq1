@@ -145,6 +145,11 @@ mod nsc;
 mod rng;
 #[cfg(not(test))]
 mod rng_strong;
+// Pure word-level health predicates shared by the STM32 driver and host
+// tests. The driver adds the MMIO ordering/state-machine checks.
+mod rng_health;
+// Exact-response helper for hardware RNG APDUs; kept pure for sentinel tests.
+mod rng_exact;
 // Pure per-chunk SE-entropy fold used by `rng_strong` — kept OUT of
 // that `#[cfg(not(test))]` module so its logic (including the F27
 // fresh-block-per-chunk discipline) is compiled and exercised by the
@@ -481,16 +486,16 @@ static mut SE: optiga::OptigaTrustM = optiga::OptigaTrustM::new();
 #[cfg(all(feature = "dual-se", not(test)))]
 static mut SE: dual_se::DualSecureElement = dual_se::DualSecureElement::new();
 
-/// Strong-RNG accessor for `hw::rng_strong::fill`. Returns
-/// `Err(SeError)` when the active backend has no TRNG (`mock-se`),
-/// which the caller treats as "skip the SE-side XOR layer".
+/// Strong-RNG OPTIGA accessor. This is deliberately source-specific: the
+/// mixer records OPTIGA and SE050 independently instead of trusting a single
+/// already-XORed SE result.
 ///
 /// SAFETY: must be called only after the SE has been initialised —
 /// i.e. from a code path that runs after `init`/`unlock`. The sign
 /// path (the only consumer) is gated on `pin_verified`, which only
 /// becomes true after a successful unlock that has touched the SE.
 #[cfg(not(test))]
-pub unsafe fn se_random(
+pub unsafe fn se_random_optiga(
     buf: &mut [u8],
 ) -> Result<(), crate::secure_element::SeError> {
     use crate::secure_element::WalletStore;
@@ -499,7 +504,17 @@ pub unsafe fn se_random(
     // (the standalone Se050/OptigaTrustM types have inherent
     // `random` methods returning their backend-specific error
     // type; the trait method returns `Result<_, SeError>`).
-    <_ as WalletStore>::random(se, buf)
+    <_ as WalletStore>::random_optiga(se, buf)
+}
+
+/// Strong-RNG SE050 accessor; see [`se_random_optiga`].
+#[cfg(not(test))]
+pub unsafe fn se_random_se050(
+    buf: &mut [u8],
+) -> Result<(), crate::secure_element::SeError> {
+    use crate::secure_element::WalletStore;
+    let se = &mut *core::ptr::addr_of_mut!(SE);
+    <_ as WalletStore>::random_se050(se, buf)
 }
 
 /// ML-KEM inner-wrap self-test — runs under `mlkem-self-test` only. Round-trips
@@ -1063,7 +1078,10 @@ fn main() -> ! {
     // and the SAU is live. Safe to touch 0x520C_0800 from the secure world.
     #[cfg(feature = "stm32u585")]
     unsafe {
-        hw::rng::init();
+        if hw::rng::init().is_err() {
+            panic!("TRNG initialization failed; refusing entropy consumers");
+        }
+        rng::retain_backend_receipt();
         #[cfg(feature = "boot-pulse")]
         hw::boot_pulse::pulse(5);
         secure_log!("[S] TRNG initialised");
@@ -1181,6 +1199,15 @@ fn main() -> ! {
         let run_bhk_block = true;
 
         if run_bhk_block {
+            #[cfg(feature = "rdp2-self-lock")]
+            if !hw::bhk::is_provisioned() {
+                // ALL_DONE means SE050 has already rotated to BHK-derived final
+                // credentials. A missing wrapped BHK here is lifecycle/tamper
+                // damage, not permission to invent a platform-only replacement
+                // that can never match those credentials.
+                panic!("BHK missing after first-boot ALL_DONE; refusing reprovision");
+            }
+            #[cfg(not(feature = "rdp2-self-lock"))]
             if !hw::bhk::is_provisioned() {
                 match hw::bhk::provision() {
                     Ok(()) => {
@@ -3445,7 +3472,7 @@ fn main() -> ! {
             secure_log!("[S][e2e] dual-se pre-clean: cascade start");
             let se = &mut *core::ptr::addr_of_mut!(SE);
 
-            let _ = se.optiga.factory_reset();
+            let _ = se.reset_optiga_for_admin();
 
             // Admin-auth wipe via the v6 HUK-derived admin PIN
             // (`factory_reset_admin` → `secret_keys::se050_admin_pin`

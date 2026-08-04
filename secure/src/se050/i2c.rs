@@ -134,9 +134,7 @@ pub fn write(data: &[u8]) -> Result<(), I2cError> {
         if offset == 0 {
             configure_transfer(SE050_ADDR, chunk as u8, 0, flags);
         } else {
-            let cr2 = ((SE050_ADDR as u32) << 1)
-                | ((chunk as u32) << 16)
-                | flags;
+            let cr2 = ((SE050_ADDR as u32) << 1) | ((chunk as u32) << 16) | flags;
             REG.cr2.write(cr2);
         }
 
@@ -182,10 +180,7 @@ pub fn read(buf: &mut [u8]) -> Result<(), I2cError> {
             configure_transfer(SE050_ADDR, chunk as u8, CR2_RD_WRN, flags);
         } else {
             // RELOAD: update NBYTES and flags in CR2 (no new START)
-            let cr2 = ((SE050_ADDR as u32) << 1)
-                | CR2_RD_WRN
-                | ((chunk as u32) << 16)
-                | flags;
+            let cr2 = ((SE050_ADDR as u32) << 1) | CR2_RD_WRN | ((chunk as u32) << 16) | flags;
             REG.cr2.write(cr2);
         }
 
@@ -208,4 +203,3 @@ pub fn read(buf: &mut [u8]) -> Result<(), I2cError> {
 
     Ok(())
 }
-

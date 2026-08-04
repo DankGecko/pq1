@@ -55,6 +55,7 @@ const CONSUMPTION_MASK_SRC: &str = include_str!("../hw/consumption_mask.rs");
 const SCA_TRIGGER_SRC: &str = include_str!("../hw/sca_trigger.rs");
 const RCC_SRC: &str = include_str!("../hw/rcc.rs");
 const RNG_SRC: &str = include_str!("../hw/rng.rs");
+const RNG_EXACT_SRC: &str = include_str!("../rng_exact.rs");
 const BOOT_PULSE_SRC: &str = include_str!("../hw/boot_pulse.rs");
 const BOOT_STATE_SRC: &str = include_str!("../hw/boot_state.rs");
 const HW_MOD_SRC: &str = include_str!("../hw/mod.rs");
@@ -65,13 +66,10 @@ const HW_MOD_SRC: &str = include_str!("../hw/mod.rs");
 
 #[test]
 fn positive_flash_key_page_127() {
-    assert_eq!(
-        crate::flash_policy::FIRST_BOOT_JOURNAL_ADDR,
-        0x0C0F_E000
+    assert_eq!(crate::flash_policy::FIRST_BOOT_JOURNAL_ADDR, 0x0C0F_E000);
+    assert!(
+        FLASH_SRC.contains("pub const KEY_PAGE_ADDR: u32 = flash_policy::FIRST_BOOT_JOURNAL_ADDR;")
     );
-    assert!(FLASH_SRC.contains(
-        "pub const KEY_PAGE_ADDR: u32 = flash_policy::FIRST_BOOT_JOURNAL_ADDR;"
-    ));
 }
 
 #[test]
@@ -142,9 +140,7 @@ fn positive_flash_slot_layout_bank1_secure() {
     assert!(FLASH_SRC.contains("pub const SLOT_B_SECURE_ADDR: u32 = 0x0C08_2000;"));
     assert!(FLASH_SRC.contains("pub const SLOT_B_SECURE_FIRST_PAGE: u32 = 65;"));
     assert!(FLASH_SRC.contains("pub const SLOT_B_SECURE_LAST_PAGE: u32 = 122;"));
-    assert!(FLASH_SRC.contains(
-        "pub use fw_manifest::{SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY};"
-    ));
+    assert!(FLASH_SRC.contains("pub use fw_manifest::{SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY};"));
 }
 
 #[test]
@@ -155,9 +151,7 @@ fn positive_flash_slot_layout_bank2_ns() {
     assert!(FLASH_SRC.contains("pub const SLOT_B_NS_ADDR: u32 = 0x0818_0000;"));
     assert!(FLASH_SRC.contains("pub const SLOT_B_NS_FIRST_PAGE: u32 = 64;"));
     assert!(FLASH_SRC.contains("pub const SLOT_B_NS_LAST_PAGE: u32 = 127;"));
-    assert!(FLASH_SRC.contains(
-        "pub use fw_manifest::{SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY};"
-    ));
+    assert!(FLASH_SRC.contains("pub use fw_manifest::{SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY};"));
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -419,7 +413,9 @@ fn positive_boot_state_copy_addresses() {
     // Copy A at page base, copy B at +0x1000 inside the same 8 KB
     // page. The +0x1000 gap is what defends against torn writes.
     assert!(BOOT_STATE_SRC.contains("pub const BSTATE_COPY_A_ADDR: u32 = BOOT_STATE_ADDR;"));
-    assert!(BOOT_STATE_SRC.contains("pub const BSTATE_COPY_B_ADDR: u32 = BOOT_STATE_ADDR + 0x1000;"));
+    assert!(
+        BOOT_STATE_SRC.contains("pub const BSTATE_COPY_B_ADDR: u32 = BOOT_STATE_ADDR + 0x1000;")
+    );
 }
 
 #[test]
@@ -432,7 +428,11 @@ fn positive_boot_state_encode_slot_a_layout() {
     assert_eq!(&buf[0..4], b"BSTE", "magic at offset 0");
     assert_eq!(buf[4], 0x00, "slot A byte must be 0x00");
     assert_eq!(&buf[5..8], &[0x00, 0x00, 0x00], "reserved bytes 0x00");
-    assert_eq!(&buf[8..12], &[0xDE, 0xAD, 0xBE, 0xEF], "last_good_version BE");
+    assert_eq!(
+        &buf[8..12],
+        &[0xDE, 0xAD, 0xBE, 0xEF],
+        "last_good_version BE"
+    );
     let crc = fw_manifest::crc32_ieee(&buf[..12]);
     assert_eq!(&buf[12..16], &crc.to_be_bytes(), "CRC32 over bytes [0..12)");
 }
@@ -459,8 +459,7 @@ fn positive_boot_state_round_trip_crc_validates() {
                 last_good_version: v,
             };
             let buf = encode_ref(&s);
-            let stored_crc =
-                u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]]);
+            let stored_crc = u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]]);
             assert_eq!(stored_crc, fw_manifest::crc32_ieee(&buf[..12]));
         }
     }
@@ -508,10 +507,16 @@ fn positive_entry_qw_count_packing_is_7_byte_be() {
 #[test]
 fn positive_entry_qw_min_count_zero() {
     let qw = entry_qw_ref(&[0u8; 8], 0x02, 0);
-    assert_eq!(qw, [0u8; 8].iter().copied()
-        .chain([0x02u8].iter().copied())
-        .chain([0u8; 7].iter().copied())
-        .collect::<Vec<u8>>().as_slice());
+    assert_eq!(
+        qw,
+        [0u8; 8]
+            .iter()
+            .copied()
+            .chain([0x02u8].iter().copied())
+            .chain([0u8; 7].iter().copied())
+            .collect::<Vec<u8>>()
+            .as_slice()
+    );
 }
 
 #[test]
@@ -624,20 +629,26 @@ fn positive_sca_trigger_off_state_trig_high_is_no_op() {
     // and empty. Without the inline hint, the cold-path no-op would
     // still cost a call/ret in the released binary; that's a real
     // power-trace artefact on a constant-time crypto path.
-    assert!(SCA_TRIGGER_SRC.contains(r##"#[cfg(not(feature = "sca-trigger"))]
+    assert!(SCA_TRIGGER_SRC.contains(
+        r##"#[cfg(not(feature = "sca-trigger"))]
 #[inline(always)]
-pub fn trig_high() {}"##));
-    assert!(SCA_TRIGGER_SRC.contains(r##"#[cfg(not(feature = "sca-trigger"))]
+pub fn trig_high() {}"##
+    ));
+    assert!(SCA_TRIGGER_SRC.contains(
+        r##"#[cfg(not(feature = "sca-trigger"))]
 #[inline(always)]
-pub fn trig_low() {}"##));
+pub fn trig_low() {}"##
+    ));
 }
 
 #[test]
 fn positive_sca_trigger_off_state_init_is_no_op() {
     // Same shape as the trig_{high,low} stubs.
-    assert!(SCA_TRIGGER_SRC.contains(r##"#[cfg(not(feature = "sca-trigger"))]
+    assert!(SCA_TRIGGER_SRC.contains(
+        r##"#[cfg(not(feature = "sca-trigger"))]
 #[inline(always)]
-pub fn init() {}"##));
+pub fn init() {}"##
+    ));
 }
 
 #[test]
@@ -655,7 +666,8 @@ fn positive_sca_trigger_raise_calls_trig_high_before_returning() {
     // Pin the call order: raise must trig_high THEN construct Self
     // (so an early panic during construction never leaves the trigger
     // dangling). Source text pins it.
-    assert!(SCA_TRIGGER_SRC.contains("pub fn raise() -> Self {\n        trig_high();\n        Self\n    }"));
+    assert!(SCA_TRIGGER_SRC
+        .contains("pub fn raise() -> Self {\n        trig_high();\n        Self\n    }"));
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -675,7 +687,8 @@ fn negative_sca_trigger_module_warns_production_fence() {
         "sca_trigger.rs must keep its production-fence prose warning"
     );
     assert!(
-        SCA_TRIGGER_SRC.contains("NEVER ship") || SCA_TRIGGER_SRC.contains("refuses to compile a release"),
+        SCA_TRIGGER_SRC.contains("NEVER ship")
+            || SCA_TRIGGER_SRC.contains("refuses to compile a release"),
         "sca_trigger.rs must say it does not ship"
     );
 }
@@ -708,8 +721,10 @@ fn negative_consumption_mask_implies_stm32u585() {
     // TIM2 / GPIOA registers. The mod.rs feature gate must include
     // both `stm32u585` and `consumption-mask`.
     assert!(
-        HW_MOD_SRC.contains(r##"#[cfg(all(feature = "stm32u585", feature = "consumption-mask"))]
-pub mod consumption_mask;"##),
+        HW_MOD_SRC.contains(
+            r##"#[cfg(all(feature = "stm32u585", feature = "consumption-mask"))]
+pub mod consumption_mask;"##
+        ),
         "hw/mod.rs must gate consumption_mask on stm32u585 + consumption-mask together"
     );
 }
@@ -720,8 +735,10 @@ fn negative_tamp_module_dual_feature_gated() {
     // single-feature gate would let the QEMU build pick up the
     // STM32U585-specific MMIO addresses and silently bus-fault.
     assert!(
-        HW_MOD_SRC.contains(r##"#[cfg(all(feature = "stm32u585", feature = "tamp"))]
-pub mod tamp;"##),
+        HW_MOD_SRC.contains(
+            r##"#[cfg(all(feature = "stm32u585", feature = "tamp"))]
+pub mod tamp;"##
+        ),
         "hw/mod.rs must gate tamp on stm32u585 + tamp together"
     );
 }
@@ -812,7 +829,9 @@ fn negative_offchain_count_bump_readback_verified() {
     // it, a glitch that suppresses the program leaves the caller
     // thinking the bump succeeded and signs again with the same
     // count — duplicate sig, on-chain revert, no FI alarm.
-    assert!(FLASH_SRC.contains("let post = offchain_count_read(slot_key);\n    if post != new_count {"));
+    assert!(
+        FLASH_SRC.contains("let post = offchain_count_read(slot_key);\n    if post != new_count {")
+    );
     assert!(FLASH_SRC.contains("crate::fi::check_true_into_sentinel"));
     assert!(FLASH_SRC.contains("crate::fi::OK_SENTINEL"));
 }
@@ -825,15 +844,15 @@ fn negative_durable_counter_commits_readback_verified() {
     // value-level read-back + FI-sentinel re-check —
     // `write_quadword_verified` only proves the QW landed AS GIVEN, not
     // that `entry_qw` produced the intended (slot key, count) value.
-    assert!(FLASH_SRC.contains(
-        "let post = offchain_count_read(slot_key);\n    if post != target {"
-    ));
+    assert!(
+        FLASH_SRC.contains("let post = offchain_count_read(slot_key);\n    if post != target {")
+    );
     assert!(FLASH_SRC.contains(
         "crate::fi::check_true_into_sentinel(|| offchain_count_read(slot_key) == target)"
     ));
-    assert!(FLASH_SRC.contains(
-        "let post = last_userop_count_read(slot_key);\n    if post != count {"
-    ));
+    assert!(
+        FLASH_SRC.contains("let post = last_userop_count_read(slot_key);\n    if post != count {")
+    );
     assert!(FLASH_SRC.contains(
         "crate::fi::check_true_into_sentinel(|| last_userop_count_read(slot_key) == count)"
     ));
@@ -868,7 +887,8 @@ fn negative_pin_attempts_bump_readback_verified_with_fi_sentinel() {
     // attempt bump's "did the bump land?" check must use the FI
     // sentinel and a double read.
     assert!(FLASH_SRC.contains("if post != pre + 1 {"));
-    assert!(FLASH_SRC.contains("crate::fi::check_true_into_sentinel(|| pin_attempts_read() == pre + 1)"));
+    assert!(FLASH_SRC
+        .contains("crate::fi::check_true_into_sentinel(|| pin_attempts_read() == pre + 1)"));
 }
 
 #[test]
@@ -887,7 +907,8 @@ fn negative_pin_attempts_bump_capacity_check_fails_closed() {
     // Refuse to bump past capacity. Without this gate the next
     // saturating_add would silently wrap u8 to 0 on overflow and
     // an attacker could keep guessing forever.
-    assert!(FLASH_SRC.contains("if (pre as u32) >= PIN_ATTEMPTS_CAPACITY {\n        return Err(());\n    }"));
+    assert!(FLASH_SRC
+        .contains("if (pre as u32) >= PIN_ATTEMPTS_CAPACITY {\n        return Err(());\n    }"));
 }
 
 #[test]
@@ -915,9 +936,13 @@ fn negative_last_userop_count_set_tolerates_regression_but_logs() {
 fn negative_no_classical_signer_in_platform_slice() {
     // CLAUDE.md invariant #5: One signature primitive (SPHINCS+C10).
     for needle in [
-        "ecdsa", "Ecdsa", "ECDSA",
-        "ed25519", "Ed25519",
-        "secp256k1", "Secp256k1",
+        "ecdsa",
+        "Ecdsa",
+        "ECDSA",
+        "ed25519",
+        "Ed25519",
+        "secp256k1",
+        "Secp256k1",
     ] {
         for (name, src) in [
             ("flash.rs", FLASH_SRC),
@@ -957,13 +982,20 @@ fn negative_no_software_prng_seed_in_rng_module() {
 fn negative_consumption_mask_xorshift_seeded_from_hw_trng() {
     // The xorshift32 in consumption_mask is deliberate and
     // documented: it's a PWM-duty randomiser, NOT a key-derivation
-    // RNG. The seed MUST come from the strong TRNG; a refactor that
-    // dropped the rng_strong call and started seeding from
-    // SystemView ticks or similar would make the mask predictable.
+    // RNG. This boot-time, non-secret PWM seed is intentionally platform-only:
+    // it runs before I2C/SE initialization, and routing it through rng_strong
+    // would violate that API's initialized-SE precondition. It still MUST use
+    // the STM32 hardware driver, propagate failure, and never substitute a
+    // deterministic software seed.
     assert!(
-        CONSUMPTION_MASK_SRC.contains("crate::rng_strong::fill(&mut seed_bytes)?"),
-        "consumption_mask's xorshift32 must seed from rng_strong::fill (and propagate its error)"
+        CONSUMPTION_MASK_SRC.contains("crate::rng::fill(&mut seed_bytes)?"),
+        "consumption_mask's xorshift32 must seed from platform TRNG and propagate its error"
     );
+    let seed_body = extract_body(
+        CONSUMPTION_MASK_SRC,
+        "unsafe fn seed_prng_from_rng() -> Result<(), ()> {",
+    );
+    assert!(!seed_body.contains("rng_strong"));
     // Fail closed on a zero / failed seed (finding F12): the mask must NOT
     // substitute a fixed constant — that produced a deterministic, attacker-
     // predictable PWM duty. A zero seed is an RNG fault and returns Err.
@@ -986,10 +1018,14 @@ fn negative_no_reset_or_increase_max_path_in_flash() {
     // slice may expose. Anything labelled bootstrap/slot/master
     // reset would be a new bypass.
     for forbidden in [
-        "rotate_master", "rotateMaster",
-        "reset_bootstrap", "resetBootstrap",
-        "reset_slot_uses", "resetSlotUses",
-        "increase_max", "increaseMax",
+        "rotate_master",
+        "rotateMaster",
+        "reset_bootstrap",
+        "resetBootstrap",
+        "reset_slot_uses",
+        "resetSlotUses",
+        "increase_max",
+        "increaseMax",
     ] {
         assert!(
             !FLASH_SRC.contains(forbidden),
@@ -1004,7 +1040,10 @@ fn negative_flash_unlock_keys_are_st_canonical_not_swapped() {
     // OPTLOCK and requires a system reset to recover. Pin the order.
     let idx_1 = FLASH_SRC.find("const KEY1: u32 = 0x4567_0123;").unwrap();
     let idx_2 = FLASH_SRC.find("const KEY2: u32 = 0xCDEF_89AB;").unwrap();
-    assert!(idx_1 < idx_2, "KEY1 must be declared before KEY2 for source-order grep tooling");
+    assert!(
+        idx_1 < idx_2,
+        "KEY1 must be declared before KEY2 for source-order grep tooling"
+    );
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1019,7 +1058,10 @@ fn negative_flash_unlock_keys_are_st_canonical_not_swapped() {
 
 #[test]
 fn negative_flash_write_quadword_inside_interrupt_free() {
-    let body = extract_body(FLASH_SRC, "unsafe fn write_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {");
+    let body = extract_body(
+        FLASH_SRC,
+        "unsafe fn write_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {",
+    );
     assert!(
         body.contains("cortex_m::interrupt::free"),
         "raw bank-1 writer MUST run inside cortex_m::interrupt::free (HIGH-12 fix)"
@@ -1028,7 +1070,10 @@ fn negative_flash_write_quadword_inside_interrupt_free() {
 
 #[test]
 fn negative_flash_erase_secure_page_inside_interrupt_free() {
-    let body = extract_body(FLASH_SRC, "pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {");
+    let body = extract_body(
+        FLASH_SRC,
+        "pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {",
+    );
     assert!(
         body.contains("cortex_m::interrupt::free"),
         "erase_secure_page MUST run inside cortex_m::interrupt::free"
@@ -1037,7 +1082,10 @@ fn negative_flash_erase_secure_page_inside_interrupt_free() {
 
 #[test]
 fn negative_flash_erase_ns_page_inside_interrupt_free() {
-    let body = extract_body(FLASH_SRC, "pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {");
+    let body = extract_body(
+        FLASH_SRC,
+        "pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {",
+    );
     assert!(
         body.contains("cortex_m::interrupt::free"),
         "erase_ns_page MUST run inside cortex_m::interrupt::free"
@@ -1046,7 +1094,10 @@ fn negative_flash_erase_ns_page_inside_interrupt_free() {
 
 #[test]
 fn negative_flash_pin_attempts_reset_inside_interrupt_free() {
-    let body = extract_body(FLASH_SRC, "pub unsafe fn pin_attempts_reset() -> Result<(), ()> {");
+    let body = extract_body(
+        FLASH_SRC,
+        "pub unsafe fn pin_attempts_reset() -> Result<(), ()> {",
+    );
     assert!(
         body.contains("cortex_m::interrupt::free"),
         "pin_attempts_reset MUST run inside cortex_m::interrupt::free"
@@ -1166,7 +1217,10 @@ fn negative_flash_write_quadword_verified_compares_every_byte() {
 #[test]
 fn negative_boot_state_parse_rejects_bad_magic() {
     // Refuse to parse without the BSTE magic.
-    let body = extract_body(BOOT_STATE_SRC, "fn parse_copy(addr: u32) -> Option<BootState> {");
+    let body = extract_body(
+        BOOT_STATE_SRC,
+        "fn parse_copy(addr: u32) -> Option<BootState> {",
+    );
     assert!(body.contains("if buf[0..4] != BSTATE_MAGIC {"));
     assert!(body.contains("return None;"));
 }
@@ -1176,7 +1230,10 @@ fn negative_boot_state_parse_rejects_unknown_slot_byte() {
     // 0x00 = A, 0x01 = B; anything else (including 0xFF blank) must
     // return None so the read() fallback picks the other copy or
     // surfaces Unavailable.
-    let body = extract_body(BOOT_STATE_SRC, "fn parse_copy(addr: u32) -> Option<BootState> {");
+    let body = extract_body(
+        BOOT_STATE_SRC,
+        "fn parse_copy(addr: u32) -> Option<BootState> {",
+    );
     assert!(body.contains("0x00 => Slot::A,"));
     assert!(body.contains("0x01 => Slot::B,"));
     assert!(body.contains("_ => return None,"));
@@ -1186,7 +1243,10 @@ fn negative_boot_state_parse_rejects_unknown_slot_byte() {
 fn negative_boot_state_parse_rejects_crc_mismatch() {
     // Without the CRC compare, a single-bit flip in flash would
     // misroute FSBL's slot pick.
-    let body = extract_body(BOOT_STATE_SRC, "fn parse_copy(addr: u32) -> Option<BootState> {");
+    let body = extract_body(
+        BOOT_STATE_SRC,
+        "fn parse_copy(addr: u32) -> Option<BootState> {",
+    );
     assert!(body.contains("if stored_crc != actual_crc {"));
     assert!(body.contains("return None;"));
 }
@@ -1195,7 +1255,10 @@ fn negative_boot_state_parse_rejects_crc_mismatch() {
 fn negative_boot_state_read_falls_back_through_both_copies() {
     // A torn write may leave copy A corrupt and copy B valid. The
     // read() function MUST try both before returning Unavailable.
-    let body = extract_body(BOOT_STATE_SRC, "pub fn read() -> Result<BootState, BootStateError> {");
+    let body = extract_body(
+        BOOT_STATE_SRC,
+        "pub fn read() -> Result<BootState, BootStateError> {",
+    );
     assert!(body.contains("BSTATE_COPY_A_ADDR"));
     assert!(body.contains("BSTATE_COPY_B_ADDR"));
     assert!(body.contains("Err(BootStateError::Unavailable)"));
@@ -1206,7 +1269,10 @@ fn negative_boot_state_write_updates_both_copies() {
     // After any boot-state change, both copies must be programmed
     // — otherwise the next torn write leaves only one copy fresh
     // and the "redundant" pair degrades to single-copy.
-    let body = extract_body(BOOT_STATE_SRC, "pub unsafe fn write(state: &BootState) -> Result<(), BootStateError> {");
+    let body = extract_body(
+        BOOT_STATE_SRC,
+        "pub unsafe fn write(state: &BootState) -> Result<(), BootStateError> {",
+    );
     assert!(body.contains("BSTATE_COPY_A_ADDR"));
     assert!(body.contains("BSTATE_COPY_B_ADDR"));
     // Erase before write — required because flash bits can only
@@ -1336,7 +1402,10 @@ fn negative_entry_qw_top_byte_silently_truncated() {
     let sk = [0u8; 8];
     let qw_low = entry_qw_ref(&sk, 0x01, 0x0123_4567_89AB_CDEF);
     let qw_high = entry_qw_ref(&sk, 0x01, 0xFF23_4567_89AB_CDEF);
-    assert_eq!(qw_low, qw_high, "top byte must be dropped — current encoding");
+    assert_eq!(
+        qw_low, qw_high,
+        "top byte must be dropped — current encoding"
+    );
 }
 
 #[test]
@@ -1451,21 +1520,27 @@ fn negative_rng_recovers_from_latched_seis_ceis_once() {
     // Per RM0456, a latched seed/clock error must be cleared and
     // the conditioning reset re-run. Removing this would leave the
     // RNG permanently inert on the first transient seed glitch.
-    let body = extract_body(RNG_SRC, "pub fn fill(buf: &mut [u8]) -> Result<(), ()> {");
-    assert!(body.contains("if sr0 & (SEIS | CEIS) != 0 {"));
-    assert!(body.contains("REG.sr.write(sr0 & !(SEIS | CEIS));"));
-    assert!(body.contains("init();"));
+    let body = extract_body(RNG_SRC, "unsafe fn fill_bound(");
+    assert!(body.contains("if sr0 & ERROR_FLAGS != 0 {"));
+    assert!(body.contains("init_locked()?;"));
+    let init = extract_body(RNG_SRC, "fn init_locked() -> Result<(), ()> {");
+    assert!(init.contains("REG.sr.write(sr & !(SEIS | CEIS));"));
+    assert!(init.contains("wait_for_conditioning_reset()?;"));
 }
 
 #[test]
 fn negative_rng_bounded_timeout_returns_err_not_hangs() {
     // The DRDY polling loop has a hard cap (1_000_000). Without
     // it, an underpowered or under-clocked RNG would deadlock the
-    // boot path. The function MUST return Err on timeout, not
-    // panic / loop forever.
-    let body = extract_body(RNG_SRC, "pub fn fill(buf: &mut [u8]) -> Result<(), ()> {");
-    assert!(body.contains("if timeout > 1_000_000 {"));
-    assert!(body.contains("return Err(());"));
+    // boot path. The function MUST return with its caller-owned receipt still
+    // failed on timeout, not publish success or loop forever.
+    let body = extract_body(
+        RNG_SRC,
+        "fn read_healthy_word_into(word_out: &mut u32, read_receipt: &mut u32) {",
+    );
+    assert!(body.contains("if timeout >= POLL_LIMIT {"));
+    assert!(body.contains("core::ptr::write_volatile(read_receipt, crate::fi::FAIL_SENTINEL)"));
+    assert!(body.contains("return;"));
 }
 
 #[test]
@@ -1565,11 +1640,9 @@ fn negative_page_127_has_no_generic_erase_or_key_storage_owner() {
         .find(|line| line.contains("unsafe fn write_verified_raw("))
         .expect("raw verified-writer declaration");
     assert!(raw_decl.trim_start().starts_with("unsafe fn write_raw("));
-    assert!(
-        verified_decl
-            .trim_start()
-            .starts_with("unsafe fn write_verified_raw(")
-    );
+    assert!(verified_decl
+        .trim_start()
+        .starts_with("unsafe fn write_verified_raw("));
 }
 
 #[test]
@@ -1691,7 +1764,178 @@ fn negative_hal_rng_contract_does_not_claim_impl_satisfies_sp800_90b() {
     );
     // The impl contract the doc now states is the one rng.rs actually meets.
     assert!(
-        RNG_SRC.contains("if sr & (SECS | CECS) != 0"),
+        RNG_SRC.contains("const ERROR_FLAGS: u32 = SEIS | SECS | CEIS | CECS;")
+            && RNG_SRC.contains("fn status_is_clean(sr: u32) -> bool")
+            && RNG_SRC.contains("let sr_after = REG.sr.read();"),
         "hw/rng.rs must fail closed on the RNG's health-test current-status bits"
+    );
+}
+
+#[test]
+fn negative_rng_serializes_isr_and_checks_after_dr() {
+    assert!(RNG_SRC.contains("static DRIVER_BUSY: AtomicBool"));
+    assert!(RNG_SRC.contains("DriverGuard::try_acquire()?"));
+    let entry = extract_body(RNG_SRC, "pub fn fill(buf: &mut [u8]) -> Result<(), ()> {");
+    assert!(entry.contains("fill_bound("));
+    assert!(entry.matches("buf.as_mut_ptr(),").count() >= 2);
+    assert!(entry.matches("buf.len(),").count() >= 2);
+    assert!(RNG_SRC.contains("#[export_name = \"pqsigner_hw_rng_fill_bound\"]"));
+    assert!(RNG_SRC.contains("fn verify_fill_region_binding_into("));
+    let fill = extract_body(RNG_SRC, "unsafe fn fill_bound(");
+    assert!(fill.contains("verify_fill_region_binding_into("));
+    assert!(fill.contains("expected_destination_base"));
+    assert!(fill.contains("expected_destination_len"));
+    let binding = fill
+        .find("verify_fill_region_binding_into(")
+        .expect("entry binding call");
+    let slice = fill
+        .find("core::slice::from_raw_parts_mut(destination_base, destination_len)")
+        .expect("bound destination slice construction");
+    assert!(
+        slice > binding
+            && fill[..slice]
+                .matches("core::ptr::read_volatile(&fill_binding_receipt)")
+                .count()
+                >= 2,
+        "no raw slice or cleanup target may be constructed before both entry-binding gates"
+    );
+    assert!(
+        fill.matches("core::ptr::read_volatile(&fill_binding_receipt)")
+            .count()
+            >= 2,
+        "the duplicated entry binding needs two caller-side receipt gates"
+    );
+    assert!(
+        !fill.contains("buf.fill(0);") && fill.contains("Do not clear through the raw entry pointer"),
+        "fill_bound must return a failed receipt without rematerializing an untrusted bulk-wipe target"
+    );
+    let body = extract_body(
+        RNG_SRC,
+        "fn read_healthy_word_into(word_out: &mut u32, read_receipt: &mut u32) {",
+    );
+    let dr = body.find("let word = REG.dr.read();").expect("DR read");
+    let post = body[dr..]
+        .find("let sr_after = REG.sr.read();")
+        .expect("post-DR status read");
+    assert!(post > 0);
+    assert!(body.contains("word_is_acceptable(status_clean, word, previous)"));
+    assert!(body.contains("core::ptr::write_volatile(read_receipt, crate::fi::FAIL_SENTINEL)"));
+    assert!(body.contains("core::ptr::write_volatile(read_receipt, crate::fi::OK_SENTINEL)"));
+    assert!(
+        RNG_SRC.matches("read_healthy_word_into(&mut word_").count() >= 2,
+        "each returned STM32 word must combine two independently receipted draws"
+    );
+    assert!(RNG_SRC.contains("crate::rng_exact::copy_exact_into("));
+    assert!(RNG_SRC.contains("crate::rng_exact::initialize_exact_progress_into("));
+    assert!(RNG_SRC.contains("fn publish_verified_word_progress_into("));
+    assert!(RNG_SRC.contains("let i = unsafe { core::ptr::read_volatile(&completed_bytes) };"));
+    assert!(RNG_SRC.contains("completed_a != current_a || current_a >= total_a"));
+    assert!(RNG_SRC.contains("take_a != expected_take_a"));
+    assert!(RNG_SRC.contains("take_b != expected_take_b"));
+    assert!(RNG_SRC.contains("publish_verified_word_progress_into("));
+    assert!(
+        RNG_SRC
+            .matches("core::ptr::read_volatile(&progress_init_receipt)")
+            .count()
+            >= 2
+    );
+    assert!(
+        RNG_SRC
+            .matches("core::ptr::read_volatile(&progress_receipt)")
+            .count()
+            >= 2
+    );
+    assert!(RNG_SRC.contains("fn validate_word_take_into("));
+    assert!(RNG_SRC.contains("take_a > 4 || take_a > remaining_a"));
+    assert!(RNG_SRC.contains("take_b > 4 || take_b > remaining_b"));
+    assert!(RNG_SRC.contains("validate_word_take_into(remaining, take, &mut take_receipt)"));
+    assert!(
+        RNG_SRC
+            .matches("core::ptr::read_volatile(&take_receipt)")
+            .count()
+            >= 2,
+        "word-fragment bounds need two caller receipt gates before slicing"
+    );
+    assert!(
+        RNG_SRC
+            .matches("core::ptr::write_volatile(&mut word_storage, word.to_le())")
+            .count()
+            >= 2,
+        "combined STM32 word needs two volatile publications before exact copy"
+    );
+    assert!(RNG_SRC.contains("word_bytes.as_ptr(),"));
+    assert!(RNG_SRC.contains("buf.as_mut_ptr(),"));
+    assert!(RNG_SRC.contains("i,"));
+    assert!(
+        RNG_SRC
+            .matches("crate::rng_exact::publish_region_pointer_into(")
+            .count()
+            >= 2,
+        "source and destination must be published before rematerialization at the exact-copy call"
+    );
+    assert!(RNG_SRC.contains("core::ptr::addr_of!(published_source)"));
+    assert!(RNG_SRC.contains("core::ptr::addr_of!(published_destination)"));
+    assert!(RNG_SRC.contains("fn verify_current_word_fragment_into("));
+    assert!(RNG_SRC.contains("let expected_word_a = word_a ^ word_b;"));
+    assert!(RNG_SRC.contains("let expected_word_b = word_a_b ^ word_b_b;"));
+    assert!(RNG_SRC.contains("core::ptr::write_volatile(&mut processed_a, i + 1)"));
+    assert!(RNG_SRC.contains("core::ptr::write_volatile(&mut processed_b, i + 1)"));
+    assert!(RNG_SRC.contains("verify_current_word_fragment_into("));
+    assert!(
+        RNG_SRC
+            .matches("core::ptr::read_volatile(&word_relation_receipt)")
+            .count()
+            >= 2,
+        "the copied STM32 fragment must pass two caller-side current-word relation gates"
+    );
+    let exact_copy = fill
+        .find("crate::rng_exact::copy_exact_into(")
+        .expect("exact STM32 copy");
+    let word_relation = fill[exact_copy..]
+        .find("verify_current_word_fragment_into(")
+        .expect("current-word postcondition")
+        + exact_copy;
+    let progress = fill[word_relation..]
+        .find("publish_verified_word_progress_into(")
+        .expect("verified word progress")
+        + word_relation;
+    assert!(
+        exact_copy < word_relation && word_relation < progress,
+        "current-word postcondition must gate progress after the exact copy"
+    );
+    assert!(RNG_EXACT_SRC.contains("source: *const u8,"));
+    assert!(RNG_EXACT_SRC.contains("expected_source_slot: *const *const u8,"));
+    assert!(RNG_EXACT_SRC.contains("destination_base: *mut u8,"));
+    assert!(RNG_EXACT_SRC.contains("destination_offset: usize,"));
+    assert!(RNG_EXACT_SRC.contains(
+        "expected_destination_slot: *const *const u8,"
+    ));
+    assert!(RNG_EXACT_SRC.contains(
+        "let destination = destination_base.wrapping_add(destination_offset);"
+    ));
+    assert!(RNG_EXACT_SRC.contains("source_ptr_a != expected_source_ptr_a"));
+    assert!(RNG_EXACT_SRC.contains(
+        "destination_ptr_a.cast_const() != expected_destination_ptr_a"
+    ));
+    assert!(
+        RNG_EXACT_SRC
+            .matches("copy_regions_are_disjoint(")
+            .count()
+            >= 3,
+        "the exact copy needs its helper plus two independent raw-region checks"
+    );
+    assert!(RNG_EXACT_SRC.contains(
+        "core::ptr::write_volatile(&mut source_pointer_slot, core::ptr::null())"
+    ));
+    assert!(RNG_EXACT_SRC.contains(
+        "core::ptr::write_volatile(&mut destination_pointer_slot, core::ptr::null_mut())"
+    ));
+    assert!(RNG_EXACT_SRC.contains("pub(crate) fn publish_region_pointer_into("));
+    assert!(
+        RNG_SRC
+            .matches("core::ptr::read_volatile(&copy_receipt)")
+            .count()
+            >= 2,
+        "exact word-to-output copy must have two caller receipt gates"
     );
 }

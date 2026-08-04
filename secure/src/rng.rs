@@ -8,6 +8,78 @@ use crate::host_rng;
 #[cfg(feature = "stm32u585")]
 use crate::hw::rng as hw_rng;
 
+// Final-artifact receipt for the backend selected by the SAME cfg predicate
+// as `fill`/`byte` below.  `scripts/prod_symbol_audit.sh` requires the hardware
+// value and rejects the host value in every candidate production ELF.  This
+// closes the source-vs-linked-artifact gap that made the Coldcard Yasmarang
+// fallback possible: reviewing a hardware driver is not evidence that the
+// final image actually selected it.
+#[cfg(feature = "stm32u585")]
+#[used]
+#[no_mangle]
+#[link_section = ".pqsigner.rng_backend"]
+pub static PQSIGNER_RNG_BACKEND: [u8; b"PQ1_RNG_BACKEND=STM32U585_TRNG\0".len()] =
+    *b"PQ1_RNG_BACKEND=STM32U585_TRNG\0";
+
+#[cfg(not(feature = "stm32u585"))]
+#[used]
+#[no_mangle]
+#[link_section = ".pqsigner.rng_backend"]
+pub static PQSIGNER_RNG_BACKEND: [u8; b"PQ1_RNG_BACKEND=HOST_URANDOM\0".len()] =
+    *b"PQ1_RNG_BACKEND=HOST_URANDOM\0";
+
+// Final-artifact receipt for the complete strong-RNG source set. Runtime
+// contribution checks still live in `rng_strong`; this marker proves that the
+// linked image selected all three physical backends rather than a reduced
+// development configuration.
+#[cfg(all(
+    feature = "stm32u585",
+    feature = "dual-se",
+    feature = "optiga-trust-m",
+    feature = "se050",
+    not(feature = "mock-se"),
+))]
+#[used]
+#[no_mangle]
+#[link_section = ".pqsigner.rng_backend"]
+pub static PQSIGNER_STRONG_RNG_SOURCES: [u8;
+    b"PQ1_STRONG_RNG_SOURCES=STM32U585+OPTIGA_TRUST_M+SE050\0".len()] =
+    *b"PQ1_STRONG_RNG_SOURCES=STM32U585+OPTIGA_TRUST_M+SE050\0";
+
+#[cfg(not(all(
+    feature = "stm32u585",
+    feature = "dual-se",
+    feature = "optiga-trust-m",
+    feature = "se050",
+    not(feature = "mock-se"),
+)))]
+#[used]
+#[no_mangle]
+#[link_section = ".pqsigner.rng_backend"]
+pub static PQSIGNER_STRONG_RNG_SOURCES: [u8;
+    b"PQ1_STRONG_RNG_SOURCES=DEVELOPMENT_OR_INCOMPLETE\0".len()] =
+    *b"PQ1_STRONG_RNG_SOURCES=DEVELOPMENT_OR_INCOMPLETE\0";
+
+/// Keep the cfg-coupled backend receipt live through linker section-GC.
+///
+/// `#[used]` forces object emission but GNU ld may still garbage-collect an
+/// unreferenced custom section. The volatile load creates a reachable runtime
+/// edge from `main`; the artifact audit can therefore require the full marker.
+#[inline(never)]
+pub fn retain_backend_receipt() {
+    // SAFETY: points to the first byte of an immutable static allocation.
+    let first = unsafe { core::ptr::read_volatile(PQSIGNER_RNG_BACKEND.as_ptr()) };
+    let strong_first = unsafe { core::ptr::read_volatile(PQSIGNER_STRONG_RNG_SOURCES.as_ptr()) };
+    if first != b'P' || strong_first != b'P' {
+        panic!("RNG backend receipt corrupted");
+    }
+}
+
+/// Fill from the selected platform backend.
+///
+/// The contents of `buf` are unspecified on `Err`; callers must discard them.
+/// Security-critical consumers use `rng_strong`, which pre-zeroes and wipes
+/// its authoritative typed slice on every platform-source failure.
 pub fn fill(buf: &mut [u8]) -> Result<(), ()> {
     #[cfg(not(feature = "stm32u585"))]
     { host_rng::fill(buf) }

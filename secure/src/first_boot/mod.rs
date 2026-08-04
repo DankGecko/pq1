@@ -277,13 +277,34 @@ impl FirstBootHw for FirstBootHwImpl<'_> {
     fn bhk_provision_and_lock(&mut self) -> Result<(), FirstBootError> {
         // Anti-pre-plant (#36 hardening #2): erase page 126 UNCONDITIONALLY so
         // a known BHK planted at RDP-0 (which survives RDP 0→2, no mass-erase)
-        // is destroyed before we provision a fresh TRNG BHK. `bhk::provision`
-        // refuses a non-blank page, so the erase must precede it.
+        // is destroyed before we provision a fresh three-source BHK. The
+        // state machine established the OPTIGA transport shield immediately
+        // before this call. Establish SE050 explicitly under its OTP-rooted
+        // transport SCP03 keys too: ordinary `Se050::init` would select the
+        // not-yet-existing BHK-derived final keys and is circular here.
+        self.se
+            .se050
+            .establish_transport_for_entropy()
+            .map_err(|_| FirstBootError::BhkProvisionFailed)?;
+        // Use the explicit handle to avoid aliasing the global SE.
         // SAFETY: single-threaded secure world; page 126 is the BHK store.
         unsafe {
             crate::hw::flash::erase_secure_page(crate::hw::bhk::BHK_PAGE_NUM)
                 .map_err(|_| FirstBootError::BhkPageHostile)?;
-            crate::hw::bhk::provision().map_err(|_| FirstBootError::BhkProvisionFailed)?;
+        }
+        let mut bhk = [0u8; 32];
+        crate::rng_strong::fill_with_source_draw(&mut bhk, |source, block| match source {
+            crate::rng_strong_fold::SeSource::Optiga => self.se.optiga.random(block).is_ok(),
+            crate::rng_strong_fold::SeSource::Se050 => self
+                .se
+                .se050
+                .random_from_established_transport(block)
+                .is_ok(),
+        })
+        .map_err(|_| FirstBootError::BhkProvisionFailed)?;
+        unsafe {
+            crate::hw::bhk::provision_from_entropy(&mut bhk)
+                .map_err(|_| FirstBootError::BhkProvisionFailed)?;
             crate::hw::bhk::load_and_lock().map_err(|_| FirstBootError::BhkProvisionFailed)?;
         }
         Ok(())
@@ -321,7 +342,8 @@ impl FirstBootHw for FirstBootHwImpl<'_> {
         // draw itself (a TRNG/leg fault or the all-zero gate) — distinct from
         // the journal-persist failure that keeps `OptigaSaltPersistFailed`.
         let mut salt = [0u8; 32];
-        crate::rng_strong::fill(&mut salt).map_err(|_| FirstBootError::TrngSaltDrawFailed)?;
+        crate::rng_strong::fill_with_store(&mut salt, self.se)
+            .map_err(|_| FirstBootError::TrngSaltDrawFailed)?;
         Ok(salt)
     }
 

@@ -412,7 +412,7 @@ impl Drop for ApduBuf {
 /// skipped here; treating it as part of OutLen would corrupt every response
 /// whose chip happened to put a non-zero byte there.
 fn parse_response(resp: &[u8], len: usize) -> Result<&[u8], OptigaError> {
-    if len < 4 {
+    if len < 4 || len > resp.len() {
         return Err(OptigaError::Transport);
     }
     let status = resp[0];
@@ -429,15 +429,96 @@ fn parse_response(resp: &[u8], len: usize) -> Result<&[u8], OptigaError> {
         return Err(OptigaError::Status(status));
     }
 
-    if 4 + data_len > len {
+    // Critical responses (including GetRandom) must consume the complete
+    // transport record. Accepting `4 + data_len < len` would let a malformed
+    // or fault-extended response hide bytes after the declared payload while
+    // the exact-payload copier only observed the prefix. Bind both the exact
+    // frame length and the already-checked status to an out-of-line,
+    // fail-initialized receipt: one omitted optimized rejection branch must
+    // not turn malformed chip bytes into an accepted TRNG contribution.
+    let framed_len = 4usize + data_len;
+    let mut frame_receipt = crate::fi::FAIL_SENTINEL;
+    unsafe {
+        core::ptr::write_volatile(&mut frame_receipt, crate::fi::FAIL_SENTINEL);
+    }
+    crate::rng_exact::verify_exact_pair_into(
+        framed_len,
+        len,
+        status as usize,
+        OPTIGA_STATUS_SUCCESS as usize,
+        &mut frame_receipt,
+    );
+    if unsafe { core::ptr::read_volatile(&frame_receipt) } != crate::fi::OK_SENTINEL {
         return Err(OptigaError::Transport);
     }
-    Ok(&resp[4..4 + data_len])
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&frame_receipt) } != crate::fi::OK_SENTINEL {
+        return Err(OptigaError::Transport);
+    }
+    Ok(&resp[4..framed_len])
+}
+
+#[cfg(test)]
+pub(crate) fn parse_response_for_test(resp: &[u8], len: usize) -> Result<&[u8], OptigaError> {
+    parse_response(resp, len)
 }
 
 // ---------------------------------------------------------------------------
 // Core send helper (transparently wraps in shielded connection when active)
 // ---------------------------------------------------------------------------
+
+/// Send one APDU over an already-authenticated Shielded Connection. There is
+/// deliberately no plaintext branch: callers whose security contract requires
+/// PRL authentication must fail if either independent active-state gate in
+/// `wrap_command` / `unwrap_response` rejects the session.
+#[inline(never)]
+#[export_name = "pqsigner_optiga_send_command_protected"]
+unsafe fn send_command_protected(
+    ifx: &mut IfxState,
+    shield: &mut ShieldedConnection,
+    apdu: &[u8],
+    resp_buf: &mut [u8],
+) -> Result<usize, OptigaError> {
+    resp_buf.fill(0);
+    crate::fi::zeroize_barrier();
+
+    let mut enc_buf = [0u8; 900];
+    let enc_len = shield.wrap_command(apdu, &mut enc_buf)
+        .map_err(|_| OptigaError::Shield)?;
+
+    let mut enc_resp = [0u8; 900];
+    // Protected records MUST be routed through the PRL layer via
+    // PCTR_PRESENCE_BIT — that's the same flag path handshake messages used.
+    let n = ifx.transceive_prl(&enc_buf[..enc_len], &mut enc_resp)?;
+
+    // Bind the returned length to a success receipt minted only after CCM,
+    // sequence validation, and sequence-state publication all complete.
+    let mut shield_receipt = crate::fi::FAIL_SENTINEL;
+    let dec_len = match shield.unwrap_response(
+        &enc_resp[..n],
+        resp_buf,
+        &mut shield_receipt,
+    ) {
+        Ok(len) => len,
+        Err(_) => {
+            resp_buf.fill(0);
+            crate::fi::zeroize_barrier();
+            return Err(OptigaError::Shield);
+        }
+    };
+    if core::ptr::read_volatile(&shield_receipt) != crate::fi::OK_SENTINEL {
+        resp_buf.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(OptigaError::Shield);
+    }
+    crate::fi::wait_random();
+    if core::ptr::read_volatile(&shield_receipt) != crate::fi::OK_SENTINEL {
+        resp_buf.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(OptigaError::Shield);
+    }
+    Ok(dec_len)
+}
 
 unsafe fn send_command(
     ifx: &mut IfxState,
@@ -446,21 +527,7 @@ unsafe fn send_command(
     resp_buf: &mut [u8],
 ) -> Result<usize, OptigaError> {
     if shield.active {
-        let mut enc_buf = [0u8; 900];
-        let enc_len = shield.wrap_command(apdu, &mut enc_buf)
-            .map_err(|_| OptigaError::Shield)?;
-
-        let mut enc_resp = [0u8; 900];
-        // Protected records MUST be routed through the PRL layer via
-        // PCTR_PRESENCE_BIT — that's the same flag path handshake
-        // messages used. A plain `transceive` drops the frame into the
-        // chip's APDU parser, which reads our SCTR byte (0x23) as a
-        // CMD and the PRL responds with a fatal alert (SCTR=0x40).
-        let n = ifx.transceive_prl(&enc_buf[..enc_len], &mut enc_resp)?;
-
-        let dec_len = shield.unwrap_response(&enc_resp[..n], resp_buf)
-            .map_err(|_| OptigaError::Shield)?;
-        Ok(dec_len)
+        send_command_protected(ifx, shield, apdu, resp_buf)
     } else {
         Ok(ifx.transceive(apdu, resp_buf)?)
     }
@@ -627,10 +694,33 @@ pub unsafe fn get_random(
     let apdu = ab.finish();
 
     let mut resp = [0u8; 512];
-    let n = send_command(ifx, shield, apdu, &mut resp)?;
+    // Entropy provenance requires authenticated PRL transport. Never call the
+    // transparent helper here: its inactive branch is intentionally available
+    // to provisioning-era APDUs and would be a silent RNG downgrade.
+    let n = send_command_protected(ifx, shield, apdu, &mut resp)?;
     let payload = parse_response(&resp, n)?;
 
-    copy_exact_payload(payload, out)
+    copy_exact_payload(payload, unsafe { resp.as_ptr().add(4) }, out)
+}
+
+/// Reversible factory-line transport probe. This deliberately bypasses the
+/// Shielded Connection before a PBS exists and is compiled only into prodtest.
+/// Production entropy must use [`get_random`] instead.
+#[cfg(feature = "prodtest")]
+pub unsafe fn get_random_plain(
+    ifx: &mut IfxState,
+    out: &mut [u8],
+) -> Result<usize, OptigaError> {
+    let length = out.len() as u16;
+    let mut ab = ApduBuf::new(CMD_GET_RANDOM, 0x00);
+    ab.write_u16(length);
+    let apdu = ab.finish();
+
+    let mut resp = [0u8; 512];
+    let n = ifx.transceive(apdu, &mut resp)?;
+    let payload = parse_response(&resp, n)?;
+
+    copy_exact_payload(payload, unsafe { resp.as_ptr().add(4) }, out)
 }
 
 /// Copy a length-bound APDU payload without accepting truncation or padding.
@@ -640,13 +730,78 @@ pub unsafe fn get_random(
 /// diagnostics, falsely attest the requested response shape.
 pub(crate) fn copy_exact_payload(
     payload: &[u8],
+    expected_payload_pointer: *const u8,
     out: &mut [u8],
 ) -> Result<usize, OptigaError> {
-    if payload.len() != out.len() {
+    let mut published_expected_source = core::ptr::null();
+    let mut source_publication_receipt = crate::fi::FAIL_SENTINEL;
+    crate::rng_exact::publish_region_pointer_into(
+        expected_payload_pointer,
+        &mut published_expected_source,
+        &mut source_publication_receipt,
+    );
+    if unsafe { core::ptr::read_volatile(&source_publication_receipt) }
+        != crate::fi::OK_SENTINEL
+    {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
         return Err(OptigaError::Transport);
     }
-    out.copy_from_slice(payload);
-    Ok(payload.len())
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&source_publication_receipt) }
+        != crate::fi::OK_SENTINEL
+    {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(OptigaError::Transport);
+    }
+
+    let mut published_destination = core::ptr::null();
+    let mut destination_publication_receipt = crate::fi::FAIL_SENTINEL;
+    crate::rng_exact::publish_region_pointer_into(
+        out.as_ptr(),
+        &mut published_destination,
+        &mut destination_publication_receipt,
+    );
+    if unsafe { core::ptr::read_volatile(&destination_publication_receipt) }
+        != crate::fi::OK_SENTINEL
+    {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(OptigaError::Transport);
+    }
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&destination_publication_receipt) }
+        != crate::fi::OK_SENTINEL
+    {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(OptigaError::Transport);
+    }
+
+    let mut copy_receipt = crate::fi::FAIL_SENTINEL;
+    crate::rng_exact::copy_exact_into(
+        payload.as_ptr(),
+        core::ptr::addr_of!(published_expected_source),
+        payload.len(),
+        out.as_mut_ptr(),
+        0,
+        core::ptr::addr_of!(published_destination),
+        out.len(),
+        &mut copy_receipt,
+    );
+    if unsafe { core::ptr::read_volatile(&copy_receipt) } != crate::fi::OK_SENTINEL {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(OptigaError::Transport);
+    }
+    crate::fi::wait_random();
+    if unsafe { core::ptr::read_volatile(&copy_receipt) } != crate::fi::OK_SENTINEL {
+        out.fill(0);
+        crate::fi::zeroize_barrier();
+        return Err(OptigaError::Transport);
+    }
+    Ok(out.len())
 }
 
 /// `GenerateAuthCode` — `GetRandom` variant that *also binds* the random

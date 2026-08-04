@@ -77,6 +77,27 @@ mod sig_wrapper;
 mod state;
 mod trailer;
 
+// Coldcard-class configuration fence: a production claim is valid only when
+// the hardware platform and the complete three-source entropy backend are
+// selected by value. In particular, `mode-production` without `stm32u585`
+// would compile `rng.rs`'s QEMU `/dev/urandom` backend; checking only that an
+// RNG-related macro/feature exists is not sufficient evidence of its value.
+#[cfg(all(
+    feature = "mode-production",
+    any(
+        not(feature = "stm32u585"),
+        not(feature = "dual-se"),
+        not(feature = "optiga-trust-m"),
+        not(feature = "se050"),
+    ),
+))]
+compile_error!(
+    "PRODUCTION_ENTROPY_BACKENDS_REQUIRED: mode-production requires the \
+     stm32u585 hardware TRNG plus dual-se (OPTIGA Trust M + SE050). Refusing \
+     a production-declared image that could select host randomness or omit a \
+     mandatory hardware entropy source."
+);
+
 // Refuse to build hardware images that also enable any of the dev-only
 // features. `debug-log` and `ui-semihosting` leak secure-world state via
 // the semihosting channel; `ui-mirror` streams the OLED over RTT;

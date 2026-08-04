@@ -135,19 +135,29 @@ pub trait WalletStore {
     fn sync_remaining_with_mcu(&mut self, _mcu_used: u8) {}
 
     /// Draw `buf.len()` bytes from the active SE backend's TRNG(s).
-    /// For multi-source backends (`DualSecureElement` = OPTIGA + SE050),
-    /// the implementation XOR-mixes per-source internally so the caller
-    /// sees a single combined stream. Returns `Err(SlotNotFound)` when
-    /// the backend has no TRNG to offer (the mock); callers must
-    /// tolerate this and treat it as "skip the SE-side XOR layer" —
-    /// see `hw::rng_strong::fill`.
+    /// This legacy combined-stream API remains for non-key protocol callers.
+    /// Security-critical entropy composition does **not** use it: it calls
+    /// [`Self::random_optiga`] and [`Self::random_se050`] separately so each
+    /// chip has an independent success/nonzero receipt before either stream is
+    /// mixed into the platform TRNG output.
     ///
-    /// The bytes returned MUST NOT be used in isolation. They are one
-    /// of three contributing sources (STM32 TRNG + OPTIGA TRNG + SE050
-    /// TRNG) that `rng_strong::fill` XOR-folds together. The
-    /// security argument is: if *any* of the three sources is
-    /// unbroken, the XOR preserves entropy from the remaining sources.
+    /// The bytes returned MUST NOT be used as a substitute for the strict
+    /// source-specific strong-RNG API. This method exists only for reviewed
+    /// protocol/test callers that need the legacy combined SE stream.
     fn random(&mut self, _buf: &mut [u8]) -> Result<(), SeError> {
+        Err(SeError::SlotNotFound)
+    }
+
+    /// Draw specifically from the OPTIGA hardware TRNG. The default is a
+    /// hard failure, so a backend/configuration that lacks OPTIGA can never be
+    /// mistaken for a valid three-source provider.
+    fn random_optiga(&mut self, _buf: &mut [u8]) -> Result<(), SeError> {
+        Err(SeError::SlotNotFound)
+    }
+
+    /// Draw specifically from the SE050 hardware TRNG. The default is a hard
+    /// failure for the same reason as [`Self::random_optiga`].
+    fn random_se050(&mut self, _buf: &mut [u8]) -> Result<(), SeError> {
         Err(SeError::SlotNotFound)
     }
 
@@ -733,9 +743,9 @@ mod tests {
         assert_eq!(out_a, out_b);
     }
 
-    /// Default `random()` impl returns `SlotNotFound` because the mock
-    /// has no TRNG to offer (this is the documented "skip the SE-side
-    /// XOR layer" sentinel for `hw::rng_strong::fill`).
+    /// Default source methods return `SlotNotFound` because the mock has no
+    /// hardware TRNG. The production strong mixer requires both source-
+    /// specific methods; only its explicitly cfg-gated mock branch omits them.
     #[test]
     fn positive_default_random_returns_slot_not_found() {
         let mut se = MockSecureElement::new();
@@ -743,9 +753,16 @@ mod tests {
         let res = se.random(&mut buf);
         assert!(
             matches!(res, Err(SeError::SlotNotFound)),
-            "default random() must return SlotNotFound; rng_strong relies on this \
-             to treat the mock as 'no SE-side XOR layer'"
+            "default random() must return SlotNotFound"
         );
+        assert!(matches!(
+            se.random_optiga(&mut buf),
+            Err(SeError::SlotNotFound)
+        ));
+        assert!(matches!(
+            se.random_se050(&mut buf),
+            Err(SeError::SlotNotFound)
+        ));
     }
 
     /// Default `pin_attempt_count()` is `None` on the mock.

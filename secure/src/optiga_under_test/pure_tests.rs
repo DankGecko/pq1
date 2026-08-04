@@ -44,17 +44,36 @@ use super::shield;
 fn get_random_payload_copy_requires_exact_length() {
     let exact = [0x5Au8; 16];
     let mut out = [0u8; 16];
-    assert_eq!(apdu::copy_exact_payload(&exact, &mut out).unwrap(), 16);
+    assert_eq!(
+        apdu::copy_exact_payload(&exact, exact.as_ptr(), &mut out).unwrap(),
+        16
+    );
     assert_eq!(out, exact);
 
     for payload in [&[0x11u8; 15][..], &[0x22u8; 17][..]] {
         let mut guarded = [0xA5u8; 16];
         assert!(matches!(
-            apdu::copy_exact_payload(payload, &mut guarded),
+            apdu::copy_exact_payload(payload, payload.as_ptr(), &mut guarded),
             Err(apdu::OptigaError::Transport)
         ));
-        assert_eq!(guarded, [0xA5u8; 16]);
+        assert_eq!(guarded, [0u8; 16]);
     }
+}
+
+#[test]
+fn get_random_payload_copy_requires_response_pointer_provenance() {
+    let payload = [0x5Au8; 16];
+    let wrong_source = [0x3Cu8; 16];
+    let mut out = [0xA5u8; 16];
+    assert!(matches!(
+        apdu::copy_exact_payload(&payload, wrong_source.as_ptr(), &mut out),
+        Err(apdu::OptigaError::Transport)
+    ));
+    assert_eq!(out, [0u8; 16]);
+    assert!(APDU_SRC.contains("copy_exact_payload(payload, unsafe { resp.as_ptr().add(4) }, out)"));
+    assert!(APDU_SRC.contains("let mut published_expected_source = core::ptr::null();"));
+    assert!(APDU_SRC.contains("core::ptr::addr_of!(published_expected_source)"));
+    assert!(APDU_SRC.contains("core::ptr::addr_of!(published_destination)"));
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -66,6 +85,43 @@ const SHIELD_SRC: &str = include_str!("../optiga/shield.rs");
 const IFX_SRC: &str = include_str!("../optiga/ifx_i2c.rs");
 const I2C_SRC: &str = include_str!("../optiga/i2c.rs");
 const MOD_SRC: &str = include_str!("../optiga/mod.rs");
+
+#[test]
+fn transient_e120_authorization_is_caller_supplied_and_never_platform_only() {
+    let start = MOD_SRC
+        .find("unsafe fn reset_e120_via_transient_auth(")
+        .expect("transient E120 reset helper must exist");
+    let end = MOD_SRC[start..]
+        .find("    /// Read the silicon PIN counter")
+        .map(|n| start + n)
+        .expect("transient E120 helper boundary must exist");
+    let body = &MOD_SRC[start..end];
+
+    assert!(body.contains("transient_secret: &mut [u8; 32]"));
+    assert!(body.contains("if nonzero == 0"));
+    assert!(body.contains("transient_secret.zeroize();"));
+    assert!(body.contains("Self::hmac_sha256(transient_secret, &nonce)"));
+    assert!(
+        !body.contains("crate::rng::fill"),
+        "OPTIGA must not replace a failed three-source draw with STM32-only bytes"
+    );
+
+    let reset_start = MOD_SRC
+        .find("fn factory_reset_body(")
+        .expect("factory_reset_body must exist");
+    let reset_body = &MOD_SRC[reset_start..];
+    let supplied_gate = reset_body
+        .find("if let Some(secret) = transient_secret")
+        .expect("transient auth must require an explicitly supplied secret");
+    let transient_call = reset_body
+        .find("self.reset_e120_via_transient_auth(secret)")
+        .expect("supplied secret must reach transient E120 authentication");
+    let destructive_counter_write = reset_body
+        .find("apdu::OID_COUNTER")
+        .expect("factory reset must still publish its reset sentinel");
+    assert!(supplied_gate < transient_call && transient_call < destructive_counter_write);
+    assert!(reset_body.contains("no three-source transient auth"));
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Re-implementation of the IFX I²C CRC-16 (Infineon's custom nibble
@@ -233,14 +289,27 @@ fn positive_build_metadata_protected_require_shielded_uses_and() {
     //   sits at byte 6 of the 9-byte block → buffer index 11+5 = 16.
     assert_eq!(len_yes, 23, "shielded variant has 23-byte metadata");
     assert_eq!(buf_yes[2], 0xD0, "Change tag at byte 2");
-    assert_eq!(buf_yes[7], 0xFE, "Change uses OR (Auto OR Conf) in both variants");
-    assert_eq!(buf_yes[11], 0xD1, "Read tag at byte 11 (after Change's 9 bytes)");
-    assert_eq!(buf_yes[16], 0xFD, "shielded Read uses AC_AND (Auto AND Conf)");
+    assert_eq!(
+        buf_yes[7], 0xFE,
+        "Change uses OR (Auto OR Conf) in both variants"
+    );
+    assert_eq!(
+        buf_yes[11], 0xD1,
+        "Read tag at byte 11 (after Change's 9 bytes)"
+    );
+    assert_eq!(
+        buf_yes[16], 0xFD,
+        "shielded Read uses AC_AND (Auto AND Conf)"
+    );
 
     let (buf_no, len_no) = apdu::build_metadata_protected(0xF1D0, false);
     // Non-shielded Read is the simpler 5-byte form: D1 03 23 F1 D0.
     // No AC_AND/AC_OR slot exists, and the total metadata is 4 bytes shorter.
-    assert_eq!(len_no + 4, len_yes, "non-shielded saves the 4 bytes of the compound operand");
+    assert_eq!(
+        len_no + 4,
+        len_yes,
+        "non-shielded saves the 4 bytes of the compound operand"
+    );
     assert_eq!(buf_no[11], 0xD1, "Read tag still at byte 11");
     assert_eq!(buf_no[12], 0x03, "Read AC is 3 bytes long (just Auto-Ref)");
 }
@@ -248,7 +317,10 @@ fn positive_build_metadata_protected_require_shielded_uses_and() {
 #[test]
 fn positive_is_metadata_operational_detects_lcs_07() {
     let (locked_buf, locked_len) = apdu::build_metadata_lock();
-    assert!(apdu::is_metadata_operational(&locked_buf[..locked_len], locked_len));
+    assert!(apdu::is_metadata_operational(
+        &locked_buf[..locked_len],
+        locked_len
+    ));
 
     let (auth_buf, auth_len) = apdu::build_metadata_auth_ref();
     assert!(
@@ -267,10 +339,15 @@ fn positive_build_metadata_ta_junk_emits_no_trust_anchor_assertion() {
     // tag. Omission is deliberately NOT treated as proof that an existing
     // TrustAnchor type was removed; the executable lockdown path is fenced.
     let (buf, len) = apdu::build_metadata_ta_junk();
-    let expected: [u8; 11] =
-        [0x20, 0x09, 0xD0, 0x01, 0xFF, 0xD1, 0x01, 0xFF, 0xD3, 0x01, 0xFF];
+    let expected: [u8; 11] = [
+        0x20, 0x09, 0xD0, 0x01, 0xFF, 0xD1, 0x01, 0xFF, 0xD3, 0x01, 0xFF,
+    ];
     assert_eq!(len, expected.len());
-    assert_eq!(&buf[..len], &expected, "TA-junk metadata is wire-frozen (S-2)");
+    assert_eq!(
+        &buf[..len],
+        &expected,
+        "TA-junk metadata is wire-frozen (S-2)"
+    );
     assert!(
         !buf[..len].windows(3).any(|w| w == [0xE8, 0x01, 0x11]),
         "candidate metadata must not itself assert DataType=TrustAnchor(0x11)"
@@ -431,11 +508,15 @@ fn positive_build_metadata_auth_ref_luc_change_auto_exact_bytes() {
     // Execute=LUC(E120), DataType=AUTHREF. Inner len = 5+3+5+3 = 16 (0x10).
     let (buf, len) = apdu::build_metadata_auth_ref_luc_oid(apdu::OID_PIN_CTR, true);
     let expected: [u8; 18] = [
-        0x20, 0x10, 0xD0, 0x03, 0x23, 0xF1, 0xD0, 0xD1, 0x01, 0xFF, 0xD3, 0x03, 0x40, 0xE1,
-        0x20, 0xE8, 0x01, 0x31,
+        0x20, 0x10, 0xD0, 0x03, 0x23, 0xF1, 0xD0, 0xD1, 0x01, 0xFF, 0xD3, 0x03, 0x40, 0xE1, 0x20,
+        0xE8, 0x01, 0x31,
     ];
     assert_eq!(len, expected.len());
-    assert_eq!(&buf[..len], &expected, "S-1 locked F1D0 metadata is wire-frozen");
+    assert_eq!(
+        &buf[..len],
+        &expected,
+        "S-1 locked F1D0 metadata is wire-frozen"
+    );
 
     // change_is_auto=false keeps Change=ALW (the dev / duress-twin shape).
     let (dbuf, _dlen) = apdu::build_metadata_auth_ref_luc_oid(apdu::OID_PIN_CTR, false);
@@ -457,29 +538,58 @@ fn make_active_shield(seed: u8) -> shield::ShieldedConnection {
     let mut sc = shield::ShieldedConnection::new();
     let pbs = [seed; 64];
     sc.load_pbs(&pbs);
-    // `derive_session_keys` is private — drive it indirectly by forging
-    // the post-handshake state. Since this struct's fields aren't pub,
-    // we synthesise a partial handshake by hand: invoke `derive` via
-    // serializing through `establish()` requires a chip. Instead, we
-    // accept that the wrap/unwrap roundtrip test sets up a known state
-    // by calling `load_pbs` + `establish` would. The shortcut here is
-    // that all fields used by wrap/unwrap (enc_key, dec_key, *_nonce_base,
-    // *_seq, active) start zeroed in `new()`, and after `derive_session_keys`
-    // is driven by the chip's random_S the field layout is deterministic.
-    //
-    // We can't call the private `derive_session_keys` directly from here,
-    // so we instead test the public API contract by setting up the
-    // smallest synthesised session via the public `load_pbs` + a flag
-    // flip the `wrap_command` API checks. The fields are read-only from
-    // outside; we therefore route most tests through the *failure path*
-    // (NotActive, wrong-SCTR, replay) which only needs the constructor.
+    sc.activate_for_test([seed; 16], [seed; 4], 7, 100);
     sc
+}
+
+fn make_protected_response(
+    key: &[u8; 16],
+    nonce_base: &[u8; 4],
+    sequence: u32,
+    plaintext: &[u8],
+    out: &mut [u8],
+) -> usize {
+    let sequence_bytes = sequence.to_be_bytes();
+    let nonce = [
+        nonce_base[0],
+        nonce_base[1],
+        nonce_base[2],
+        nonce_base[3],
+        sequence_bytes[0],
+        sequence_bytes[1],
+        sequence_bytes[2],
+        sequence_bytes[3],
+    ];
+    let plaintext_len = plaintext.len() as u16;
+    let aad = [
+        0x23,
+        sequence_bytes[0],
+        sequence_bytes[1],
+        sequence_bytes[2],
+        sequence_bytes[3],
+        0x01,
+        (plaintext_len >> 8) as u8,
+        plaintext_len as u8,
+    ];
+    out[0] = 0x23;
+    out[1..5].copy_from_slice(&sequence_bytes);
+    let protected_len = shield::ccm_encrypt_for_test(
+        key,
+        &nonce,
+        &aad,
+        plaintext,
+        &mut out[5..],
+    );
+    5 + protected_len
 }
 
 #[test]
 fn positive_shield_new_starts_inactive_and_unloaded() {
     let sc = shield::ShieldedConnection::new();
-    assert!(!sc.active, "freshly-constructed ShieldedConnection must NOT be active");
+    assert!(
+        !sc.active,
+        "freshly-constructed ShieldedConnection must NOT be active"
+    );
     assert!(
         !sc.pbs_loaded,
         "freshly-constructed ShieldedConnection has not loaded a PBS"
@@ -521,8 +631,10 @@ fn negative_shield_wrap_when_inactive_rejected() {
 fn negative_shield_unwrap_when_inactive_rejected() {
     let mut sc = shield::ShieldedConnection::new();
     let mut out = [0u8; 256];
-    let res = sc.unwrap_response(&[0u8; 32], &mut out);
+    let mut receipt = crate::fi::OK_SENTINEL;
+    let res = sc.unwrap_response(&[0u8; 32], &mut out, &mut receipt);
     assert!(matches!(res, Err(shield::ShieldError::NotActive)));
+    assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
 }
 
 #[test]
@@ -531,16 +643,229 @@ fn negative_shield_unwrap_too_short_rejected() {
     // CCM_TAG(8) = 13 bytes) is rejected without indexing past the end
     // of the buffer.
     let mut sc = make_active_shield(0xAA);
-    // Force the session into a state where the active check passes by
-    // *not* taking the active path — the short-input check must trip
-    // before the active check is even relevant. Since we can't reach
-    // `active=true` without a real chip, we accept that this test only
-    // exercises the NotActive branch and pin the short-input branch
-    // separately via source text.
     let mut out = [0u8; 256];
-    let res = sc.unwrap_response(&[0u8; 12], &mut out);
+    let mut receipt = crate::fi::OK_SENTINEL;
+    let res = sc.unwrap_response(&[0u8; 12], &mut out, &mut receipt);
     // We don't care WHICH error here — just that it's an Err and didn't panic.
     assert!(res.is_err(), "must not accept a 12-byte record");
+    assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+}
+
+#[test]
+fn response_sequence_accepts_only_reference_driver_forward_window() {
+    for delta in 1..=3u32 {
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        shield::verify_response_sequence_into(100, !100, 100 + delta, &mut receipt);
+        assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    }
+
+    for received in [99u32, 100, 104, 1000, 0xFFFF_FFF0] {
+        let mut receipt = crate::fi::OK_SENTINEL;
+        shield::verify_response_sequence_into(100, !100, received, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    let mut receipt = crate::fi::OK_SENTINEL;
+    shield::verify_response_sequence_into(100, !101, 101, &mut receipt);
+    assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+
+    // Once B+3 is authenticated and published, the window advances from that
+    // new baseline. Each allowed value is checked independently.
+    for received in 104..=106u32 {
+        receipt = crate::fi::FAIL_SENTINEL;
+        shield::verify_response_sequence_into(103, !103, received, &mut receipt);
+        assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    }
+    for received in [102u32, 103, 107] {
+        receipt = crate::fi::OK_SENTINEL;
+        shield::verify_response_sequence_into(103, !103, received, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    // The reference permits a final response to advance beyond the threshold
+    // by its bounded retry window. The next command then renegotiates.
+    for received in 0xFFFF_FFF0..=0xFFFF_FFF2u32 {
+        receipt = crate::fi::FAIL_SENTINEL;
+        shield::verify_response_sequence_into(
+            0xFFFF_FFEF,
+            !0xFFFF_FFEF,
+            received,
+            &mut receipt,
+        );
+        assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    }
+}
+
+#[test]
+fn shield_response_sequence_and_ccm_state_move_only_after_both_validate() {
+    const KEY: [u8; 16] = [0x31; 16];
+    const NONCE_BASE: [u8; 4] = [0x41; 4];
+    const PLAINTEXT: [u8; 12] = [0x5A; 12];
+
+    // A correctly tagged response outside the 1..=3 window is rejected,
+    // wipes caller output, and leaves the authenticated baseline untouched.
+    let mut sc = shield::ShieldedConnection::new();
+    sc.activate_for_test(KEY, NONCE_BASE, 7, 100);
+    let mut record = [0u8; 64];
+    let record_len = make_protected_response(&KEY, &NONCE_BASE, 104, &PLAINTEXT, &mut record);
+    let mut out = [0xA5u8; 12];
+    let mut receipt = crate::fi::OK_SENTINEL;
+    assert!(sc
+        .unwrap_response(&record[..record_len], &mut out, &mut receipt)
+        .is_err());
+    assert_eq!(out, [0u8; 12]);
+    assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    assert_eq!(sc.sequence_state_for_test().2, 100);
+
+    // An in-window response with a bad tag has the same fail-closed outcome.
+    let record_len = make_protected_response(&KEY, &NONCE_BASE, 103, &PLAINTEXT, &mut record);
+    record[record_len - 1] ^= 1;
+    out.fill(0xA5);
+    receipt = crate::fi::OK_SENTINEL;
+    assert!(sc
+        .unwrap_response(&record[..record_len], &mut out, &mut receipt)
+        .is_err());
+    assert_eq!(out, [0u8; 12]);
+    assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    assert_eq!(sc.sequence_state_for_test().2, 100);
+
+    // Only a response satisfying both relations publishes plaintext and the
+    // new value/complement baseline. Replaying it then fails closed.
+    let record_len = make_protected_response(&KEY, &NONCE_BASE, 103, &PLAINTEXT, &mut record);
+    receipt = crate::fi::FAIL_SENTINEL;
+    assert_eq!(
+        sc.unwrap_response(&record[..record_len], &mut out, &mut receipt)
+            .unwrap(),
+        PLAINTEXT.len()
+    );
+    assert_eq!(out, PLAINTEXT);
+    assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    assert_eq!(sc.sequence_state_for_test().2, 103);
+    assert_eq!(sc.sequence_state_for_test().3, !103);
+
+    out.fill(0xA5);
+    receipt = crate::fi::OK_SENTINEL;
+    assert!(sc
+        .unwrap_response(&record[..record_len], &mut out, &mut receipt)
+        .is_err());
+    assert_eq!(out, [0u8; 12]);
+    assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    assert_eq!(sc.sequence_state_for_test().2, 103);
+}
+
+#[test]
+fn shield_transmit_sequence_is_consumed_even_without_a_response() {
+    let mut sc = make_active_shield(0x27);
+    let mut first = [0u8; 64];
+    let mut second = [0u8; 64];
+
+    let first_len = sc.wrap_command(b"first", &mut first).unwrap();
+    // Deliberately provide no response, modeling a transport failure after the
+    // command sequence was reserved.
+    let second_len = sc.wrap_command(b"second", &mut second).unwrap();
+
+    assert_eq!(&first[..5], &[0x23, 0, 0, 0, 7]);
+    assert_eq!(&second[..5], &[0x23, 0, 0, 0, 8]);
+    assert_ne!(&first[..first_len], &second[..second_len]);
+    assert_eq!(sc.sequence_state_for_test().0, 9);
+    assert_eq!(sc.sequence_state_for_test().1, !9);
+}
+
+#[test]
+fn response_sequence_commit_publishes_bound_value_and_complement() {
+    let mut sequence = 0xAAAA_AAAAu32;
+    let mut sequence_inv = 0xBBBB_BBBBu32;
+    let mut receipt = crate::fi::FAIL_SENTINEL;
+    shield::commit_sequence_state_into(
+        0x1234_5678,
+        &mut sequence,
+        &mut sequence_inv,
+        &mut receipt,
+    );
+    assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    assert_eq!(sequence, 0x1234_5678);
+    assert_eq!(sequence_inv, !0x1234_5678);
+
+    receipt = crate::fi::OK_SENTINEL;
+    shield::commit_sequence_state_into(
+        0xFFFF_FFF0,
+        &mut sequence,
+        &mut sequence_inv,
+        &mut receipt,
+    );
+    assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    assert_eq!(sequence, 0xFFFF_FFF0);
+    assert_eq!(sequence_inv, !0xFFFF_FFF0);
+}
+
+#[test]
+fn transmit_sequence_reservation_advances_before_ciphertext_use() {
+    let mut next = 7u32;
+    let mut next_inv = !7u32;
+    let mut receipt = crate::fi::FAIL_SENTINEL;
+    shield::reserve_transmit_sequence_into(7, !7, &mut next, &mut next_inv, &mut receipt);
+    assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    assert_eq!(next, 8);
+    assert_eq!(next_inv, !8);
+
+    receipt = crate::fi::OK_SENTINEL;
+    shield::reserve_transmit_sequence_into(8, !9, &mut next, &mut next_inv, &mut receipt);
+    assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+
+    receipt = crate::fi::FAIL_SENTINEL;
+    shield::reserve_transmit_sequence_into(
+        0xFFFF_FFF0,
+        !0xFFFF_FFF0,
+        &mut next,
+        &mut next_inv,
+        &mut receipt,
+    );
+    assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    assert_eq!(next, 0xFFFF_FFF1);
+
+    receipt = crate::fi::OK_SENTINEL;
+    shield::reserve_transmit_sequence_into(next, next_inv, &mut next, &mut next_inv, &mut receipt);
+    assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+}
+
+#[test]
+fn negative_shield_ccm_tamper_keeps_auth_receipt_failed_and_wipes_plaintext() {
+    let key = [0x11u8; 16];
+    let nonce = [0x22u8; 8];
+    let aad = [0x23u8, 0, 0, 0, 7, 0, 24];
+    let plaintext = [0x5Au8; 24];
+    let mut record = [0u8; 64];
+    let record_len =
+        shield::ccm_encrypt_for_test(&key, &nonce, &aad, &plaintext, &mut record);
+
+    let mut out = [0xA5u8; 24];
+    let mut receipt = crate::fi::FAIL_SENTINEL;
+    shield::aes128_ccm_decrypt_into(
+        &key,
+        &nonce,
+        &aad,
+        &record[..record_len],
+        &mut out,
+        &mut receipt,
+    );
+    assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    assert_eq!(out, plaintext);
+
+    // Start from an apparently successful receipt and nonzero output to prove
+    // the production helper owns fail initialization and rejection cleanup.
+    record[record_len - 1] ^= 1;
+    out.fill(0xA5);
+    receipt = crate::fi::OK_SENTINEL;
+    shield::aes128_ccm_decrypt_into(
+        &key,
+        &nonce,
+        &aad,
+        &record[..record_len],
+        &mut out,
+        &mut receipt,
+    );
+    assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    assert_eq!(out, [0u8; 24]);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -724,6 +1049,39 @@ fn negative_response_parser_skips_undef_byte() {
 }
 
 #[test]
+fn response_parser_requires_exact_declared_transport_length() {
+    let exact = [0x00, 0xA5, 0x00, 0x03, 0x11, 0x22, 0x33];
+    assert_eq!(
+        apdu::parse_response_for_test(&exact, exact.len()).unwrap(),
+        &[0x11, 0x22, 0x33]
+    );
+
+    let trailing = [0x00, 0xA5, 0x00, 0x03, 0x11, 0x22, 0x33, 0x99];
+    assert!(matches!(
+        apdu::parse_response_for_test(&trailing, trailing.len()),
+        Err(apdu::OptigaError::Transport)
+    ));
+
+    let declared_too_long = [0x00, 0xA5, 0x00, 0x04, 0x11, 0x22, 0x33];
+    assert!(matches!(
+        apdu::parse_response_for_test(&declared_too_long, declared_too_long.len()),
+        Err(apdu::OptigaError::Transport)
+    ));
+    assert!(matches!(
+        apdu::parse_response_for_test(&exact, exact.len() + 1),
+        Err(apdu::OptigaError::Transport)
+    ));
+
+    let failed_status = [0x01, 0xA5, 0x00, 0x03, 0x11, 0x22, 0x33];
+    assert!(matches!(
+        apdu::parse_response_for_test(&failed_status, failed_status.len()),
+        Err(apdu::OptigaError::Status(0x01))
+    ));
+    assert!(APDU_SRC.contains("crate::rng_exact::verify_exact_pair_into("));
+    assert!(APDU_SRC.contains("core::ptr::read_volatile(&frame_receipt)"));
+}
+
+#[test]
 fn negative_session_oid_reserved_e100() {
     assert!(
         APDU_SRC.contains("pub const OID_SESSION: u16 = 0xE100;"),
@@ -828,29 +1186,124 @@ fn negative_shield_session_key_layout_2x16_plus_2x4() {
 
 #[test]
 fn negative_shield_nonce_wrap_threshold_closes_session() {
-    // ASSUMPTION ATTACKED: at enc_seq >= 0xFFFFFFF0 the connection is
-    // forced closed before the nonce wraps. A silent removal would
-    // let the AEAD nonce repeat — CCM keystream recovery becomes
-    // trivial.
+    // ASSUMPTION ATTACKED: the final reference-permitted master sequence is
+    // 0xFFFFFFF0; the following transaction is forced to renegotiate. The
+    // receive direction similarly refuses to begin another transaction once
+    // its last authenticated sequence reaches that threshold.
     assert!(
-        SHIELD_SRC.contains("if self.enc_seq >= 0xFFFF_FFF0 {")
+        SHIELD_SRC.contains("if self.enc_seq > PRL_SEQUENCE_THRESHOLD {")
             && SHIELD_SRC.contains("self.active = false;"),
         "wrap_command must force session close before nonce wrap"
     );
     assert!(
-        SHIELD_SRC.contains("if seq >= 0xFFFF_FFF0 {"),
-        "unwrap_response must symmetrically refuse near-wrap seq numbers"
+        SHIELD_SRC.matches("PRL_SEQUENCE_THRESHOLD - 1").count() >= 2
+            && SHIELD_SRC
+                .matches("core::ptr::addr_of!(self.dec_seq)")
+                .count()
+                >= 2,
+        "wrap_command must double-check the receive threshold before a transaction"
+    );
+}
+
+#[test]
+fn negative_shield_transmit_sequence_is_reserved_before_ciphertext() {
+    let wrap = &SHIELD_SRC[SHIELD_SRC
+        .find("pub fn wrap_command(")
+        .expect("shielded command wrapper missing")..];
+    let unwrap = wrap
+        .find("pub fn unwrap_response(")
+        .expect("shielded response wrapper missing");
+    let reserve = wrap[..unwrap]
+        .find("reserve_transmit_sequence_into(")
+        .expect("transmit-sequence reservation missing");
+    let encrypt = wrap[..unwrap]
+        .find("let ct_len = aes128_ccm_encrypt(")
+        .expect("CCM encryption missing");
+    assert!(reserve < encrypt, "the next sequence must commit before encryption");
+    assert!(
+        wrap[..unwrap]
+            .matches("core::ptr::read_volatile(&sequence_reservation_receipt)")
+            .count()
+            >= 2
+    );
+    assert!(!wrap[..unwrap].contains("self.enc_seq += 1;"));
+    assert!(SHIELD_SRC.contains("enc_seq_inv: u32"));
+}
+
+#[test]
+fn negative_shield_handshake_frames_have_exact_reference_shape() {
+    assert!(SHIELD_SRC.contains("if n != SLAVE_HELLO_LEN"));
+    assert!(SHIELD_SRC.contains("resp[0] != SCTR_HANDSHAKE_HELLO"));
+    assert!(SHIELD_SRC.contains("resp[1] != PROTOCOL_VERSION"));
+    assert!(
+        SHIELD_SRC.contains(
+            "const SLAVE_FINISHED_LEN: usize = SC_HEADER_LEN + 36 + CCM_TAG_LEN;"
+        ) && SHIELD_SRC.contains("if n2 != SLAVE_FINISHED_LEN {")
     );
 }
 
 #[test]
 fn negative_shield_replay_guard_present() {
     // ASSUMPTION ATTACKED: an attacker captures a valid response and
-    // replays it. The driver MUST refuse `seq < dec_seq`.
+    // replays it, or jumps outside the reference driver's retry window.
     assert!(
-        SHIELD_SRC.contains("if seq < self.dec_seq {"),
-        "unwrap_response must refuse replayed (lower-seq) records — HIGH-10 mitigation"
+        SHIELD_SRC.contains("const PRL_MAX_FORWARD_DELTA: u32 = 3;")
+            && SHIELD_SRC.contains("fn verify_response_sequence_into(")
+            && SHIELD_SRC.contains("fn response_sequence_window_volatile(")
+            && SHIELD_SRC.contains("received > last")
+            && SHIELD_SRC
+                .contains("received.wrapping_sub(last) <= PRL_MAX_FORWARD_DELTA")
+            && SHIELD_SRC.contains("core::ptr::read_volatile(received_sequence)")
+            && SHIELD_SRC.contains("self.dec_seq_inv"),
+        "unwrap_response must bind responses to the authenticated 1..=3 slave-sequence window"
     );
+    let unwrap = &SHIELD_SRC[SHIELD_SRC
+        .find("pub fn unwrap_response(")
+        .expect("steady-state unwrap missing")..];
+    let handshake = unwrap
+        .find("pub unsafe fn establish(")
+        .expect("handshake boundary missing");
+    assert!(
+        unwrap[..handshake]
+            .matches("core::ptr::read_volatile(&sequence_receipt)")
+            .count()
+            >= 2
+            && unwrap[..handshake].contains("commit_sequence_state_into("),
+        "steady-state sequence validation needs two caller gates and a bound state commit"
+    );
+    assert!(
+        unwrap[handshake..].contains("commit_sequence_state_into(\n            slave_seq,"),
+        "the authenticated SlaveHello counter must seed the record-response baseline"
+    );
+}
+
+#[test]
+fn negative_get_random_has_no_plaintext_transport_branch() {
+    let get_random = &APDU_SRC[APDU_SRC
+        .find("pub unsafe fn get_random(")
+        .expect("GetRandom helper missing")..];
+    let plain = get_random
+        .find("pub unsafe fn get_random_plain(")
+        .expect("cfg-gated prodtest plaintext helper missing");
+    assert!(get_random[..plain].contains("send_command_protected("));
+    assert!(!get_random[..plain].contains("let n = send_command(ifx"));
+
+    let protected = &APDU_SRC[APDU_SRC
+        .find("unsafe fn send_command_protected(")
+        .expect("protected-only transport helper missing")..];
+    let transparent = protected
+        .find("unsafe fn send_command(")
+        .expect("transparent provisioning transport helper missing");
+    assert!(!protected[..transparent].contains("if shield.active"));
+    assert!(!protected[..transparent].contains("ifx.transceive(apdu"));
+    assert!(
+        protected[..transparent]
+            .matches("core::ptr::read_volatile(&shield_receipt)")
+            .count()
+            >= 2,
+        "protected transport must double-check the authenticated unwrap receipt"
+    );
+    assert!(MOD_SRC.contains("apdu::get_random_plain(&mut self.ifx, out)"));
 }
 
 #[test]
@@ -871,9 +1324,49 @@ fn negative_shield_constant_time_tag_compare() {
     // `==` with early return) would let an attacker recover the tag
     // byte-by-byte.
     assert!(
-        SHIELD_SRC.contains("diff |= received_tag[i] ^ expected_tag[i];")
-            && SHIELD_SRC.contains("diff == 0"),
-        "CCM tag compare must be constant-time (XOR-accumulate then equality)"
+        SHIELD_SRC.contains("use subtle::ConstantTimeEq;")
+            && SHIELD_SRC.contains(".ct_eq(expected_tag.as_slice())"),
+        "CCM tag compare must use the constant-time comparison primitive"
+    );
+    let verifier = &SHIELD_SRC[SHIELD_SRC
+        .find("fn verify_ccm_tag_into(")
+        .expect("out-of-line CCM verifier missing")..];
+    let decrypt = verifier
+        .find("pub(crate) fn aes128_ccm_decrypt_into(")
+        .expect("receipt-based CCM decrypt missing");
+    assert!(
+        verifier[..decrypt].matches("ccm_tag_matches(").count() >= 2,
+        "CCM authentication must be recomputed independently twice before publishing success"
+    );
+    let unwrap = &SHIELD_SRC[SHIELD_SRC
+        .find("pub fn unwrap_response(")
+        .expect("steady-state unwrap missing")..];
+    let handshake = unwrap
+        .find("pub unsafe fn establish(")
+        .expect("handshake boundary missing");
+    assert!(
+        unwrap[..handshake]
+            .matches("core::ptr::read_volatile(&ccm_receipt)")
+            .count()
+            >= 2,
+        "steady-state plaintext release must check the caller-owned CCM receipt twice"
+    );
+    let decrypt_helper = &SHIELD_SRC[SHIELD_SRC
+        .find("pub(crate) fn aes128_ccm_decrypt_into(")
+        .expect("receipt-based CCM decrypt missing")..];
+    let cleanup = decrypt_helper
+        .find("if unsafe { core::ptr::read_volatile(auth_receipt) }")
+        .expect("decrypt cleanup receipt gate missing");
+    let cleanup_tail = &decrypt_helper[cleanup..];
+    let poison = cleanup_tail
+        .find("core::ptr::write_volatile(auth_receipt, crate::fi::FAIL_SENTINEL);")
+        .expect("cleanup must poison its receipt");
+    let wipe = cleanup_tail
+        .find("out[..ct_len].zeroize();")
+        .expect("cleanup plaintext wipe missing");
+    assert!(
+        poison < wipe,
+        "a fault-entered cleanup must poison the receipt before changing authenticated plaintext"
     );
     // Same constant-time pattern in establish() for the random_S echo
     // check.
@@ -1189,7 +1682,7 @@ fn negative_find_metadata_tag_handles_inner_overflow() {
     buf[1] = 0x06; // claims 6 bytes of inner content
     buf[2] = 0xC0; // META_LCSO
     buf[3] = 0xFF; // but claims 255 bytes of value — overflows
-    // The fn should return None (treated as not operational) without panic.
+                   // The fn should return None (treated as not operational) without panic.
     assert!(!apdu::is_metadata_operational(&buf, 8));
 }
 
@@ -1224,8 +1717,7 @@ fn negative_hw_counter_get_random_auto_state_request_size_16() {
     // and the counter does not increment as expected — silently
     // breaking the silicon PIN lockout.
     assert!(
-        APDU_SRC.contains("ab.write_u16(16);")
-            && APDU_SRC.contains("get_random_auto_state"),
+        APDU_SRC.contains("ab.write_u16(16);") && APDU_SRC.contains("get_random_auto_state"),
         "hw-counter get_random_auto_state must request 16 bytes (Trezor wire shape)"
     );
 }

@@ -509,7 +509,9 @@ mod fi_source_text {
         // elsewhere in fi.rs MAY mention rng_strong by name (as the
         // rationale block does), so we restrict the check to the
         // function body.
-        let pos = FI_SRC.find("fn rng_byte() -> u8").expect("rng_byte not found");
+        let pos = FI_SRC
+            .find("fn rng_byte() -> u8")
+            .expect("rng_byte not found");
         let end = FI_SRC[pos..]
             .find("\n}\n")
             .map(|i| pos + i + 2)
@@ -1419,8 +1421,8 @@ mod sign_rate_source_text {
     fn negative_triple_read_failure_fails_closed_into_wait() {
         // The disagreement branch enters an inner WFI loop.
         assert!(
-            SIGN_RATE_SRC.contains("cortex_m::asm::wfi();") &&
-            SIGN_RATE_SRC.contains("if crate::fi::read_volatile_voted(last_addr).is_ok() {"),
+            SIGN_RATE_SRC.contains("cortex_m::asm::wfi();")
+                && SIGN_RATE_SRC.contains("if crate::fi::read_volatile_voted(last_addr).is_ok() {"),
             "Disagreement on the LAST_SIGN_MS triple-read must keep the \
              function inside the wait until reads agree — silently \
              breaking out would let a glitched read defeat the rate limit."
@@ -1779,10 +1781,17 @@ mod rng_source_text {
     #[test]
     fn negative_rng_strong_keeps_all_zero_fail_closed_gate() {
         assert!(
-            RNG_STRONG_SRC.contains("if acc == 0 {\n        return Err(());"),
+            RNG_STRONG_FOLD_SRC.contains("fn verify_nonzero_output_into")
+                && RNG_STRONG_FOLD_SRC.contains("pub(crate) fn verify_nonzero_output_twice_into")
+                && RNG_STRONG_SRC
+                    .contains("verify_nonzero_output_twice_into(buf, &mut output_receipt)")
+                && RNG_STRONG_SRC
+                    .matches("core::ptr::read_volatile(&output_receipt)")
+                    .count()
+                    >= 2,
             "rng_strong::fill must keep the all-zero acceptance gate — \
-             rationale at rng_strong.rs:86-98. Removing it lets a stuck-\
-             at-0 fault deliver a predictable 'random' to the signer."
+             it requires two exact volatile scans plus two caller-owned \
+             receipt gates so one skipped Thumb branch cannot release zero."
         );
     }
 
@@ -1792,11 +1801,19 @@ mod rng_source_text {
     /// the F-13 follow-up's fail-closed semantics hold).
     #[test]
     fn negative_rng_strong_uses_platform_trng_as_baseline() {
+        let start = RNG_STRONG_SRC
+            .find("pub(crate) fn fill_with_source_draw(")
+            .expect("strict common three-source facade must exist");
+        let end = RNG_STRONG_SRC[start..]
+            .find("/// Strict three-source fill for a caller")
+            .map(|n| start + n)
+            .expect("strict common facade boundary must exist");
+        let common = &RNG_STRONG_SRC[start..end];
         assert!(
-            RNG_STRONG_SRC.contains("crate::rng::fill(buf)?;"),
-            "rng_strong::fill must call `crate::rng::fill(buf)?` as the \
-             baseline — the `?` operator propagates Err so a platform-\
-             TRNG failure aborts the whole signing call."
+            common.contains("let platform_result = crate::rng::fill(buf);")
+                && common.contains("platform_result.is_ok() && platform_nonzero != 0")
+                && common.matches("buf.zeroize();").count() >= 3,
+            "the strict common rng_strong path must fail and wipe when the platform TRNG fails"
         );
     }
 
@@ -1808,12 +1825,9 @@ mod rng_source_text {
     /// `rng_strong` module so host tests can exercise it.)
     #[test]
     fn negative_rng_strong_xor_folds_se_bytes() {
-        let pos = RNG_STRONG_FOLD_SRC
-            .find("for i in 0..len {")
-            .expect("XOR-fold loop not found");
-        let body = &RNG_STRONG_FOLD_SRC[pos..pos + 200];
         assert!(
-            body.contains("buf[off + i] ^= block[i];"),
+            RNG_STRONG_FOLD_SRC.contains("buf[off + i] ^= optiga_block[i];")
+                && RNG_STRONG_FOLD_SRC.contains("buf[off + i] ^= se050_block[i];"),
             "rng_strong must XOR SE bytes into the buffer (^=) — using \
              `=` lets a compromised SE clamp the buffer and defeats the \
              multi-source entropy preservation argument."
@@ -1828,14 +1842,19 @@ mod rng_source_text {
     /// layer (guarded by `#[cfg(feature = "mock-se")]`).
     #[test]
     fn negative_rng_strong_se_failure_is_fatal() {
-        // Production path: the fold's `false` return gates an early
-        // `Err` — NOT a silent fall-through to platform-only entropy.
-        let pos = RNG_STRONG_SRC
-            .find("not(feature = \"mock-se\")")
-            .expect("rng_strong must gate a production-only SE branch");
-        let body = &RNG_STRONG_SRC[pos..pos + 1200];
+        // Production path: the fold itself owns receipt promotion and wipes
+        // the platform baseline on failure. There must be no caller-side
+        // plain-bool promotion branch that a single instruction fault can
+        // invert into OK.
         assert!(
-            body.contains("return Err(());"),
+            RNG_STRONG_SRC
+                .contains("fold_se_sources(buf, source_draw, source_history, &mut fold_receipt);")
+                && !RNG_STRONG_SRC.contains("if fold_ok")
+                && RNG_STRONG_FOLD_SRC
+                    .contains("core::ptr::write_volatile(fold_receipt, crate::fi::OK_SENTINEL)")
+                && RNG_STRONG_FOLD_SRC.contains("buf.zeroize();")
+                && RNG_STRONG_SRC.contains("if se_ok != crate::fi::OK_SENTINEL")
+                && RNG_STRONG_SRC.contains("return Err(());"),
             "rng_strong production branch must propagate SE failure as \
              Err — silent fall-through would let an EMFI attacker \
              degrade entropy unnoticed."
@@ -1856,20 +1875,300 @@ mod rng_source_text {
     /// attacker-bypass-target gates are Hamming-distant sentinels.
     #[test]
     fn negative_rng_strong_se_failure_gate_uses_fi_sentinel() {
-        let pos = RNG_STRONG_SRC
-            .find("not(feature = \"mock-se\")")
-            .expect("rng_strong must gate a production-only SE branch");
-        let body = &RNG_STRONG_SRC[pos..pos + 1200];
         assert!(
-            body.contains("check_true_into_sentinel"),
+            RNG_STRONG_SRC.contains("check_true_into_sentinel"),
             "rng_strong production SE-failure gate must evaluate through \
              fi::check_true_into_sentinel (S2-F13/#442) — a plain `if !bool` \
              is one instruction-skip away from waiving the fatal-SE check"
         );
         assert!(
-            body.contains("!= crate::fi::OK_SENTINEL"),
+            RNG_STRONG_SRC.contains("!= crate::fi::OK_SENTINEL"),
             "rng_strong production SE-failure gate must compare the sentinel \
              VALUE against OK_SENTINEL, not branch on a bool (S2-F13/#442)"
+        );
+        assert!(
+            RNG_STRONG_FOLD_SRC
+                .matches("core::ptr::read_volatile(&source_receipt)")
+                .count()
+                >= 2,
+            "the fold must retain two independent volatile source-receipt checks; \
+             ordinary duplicate comparisons are folded into one branch by LLVM"
+        );
+    }
+
+    /// Phase-D partial-fold regression: source-presence receipts alone do not
+    /// prove that the stateful XOR loop reached every byte or stayed inside the
+    /// current chunk. The fold must retain a platform baseline, publish an
+    /// exact volatile output-store count, independently read back the exact
+    /// P^O^S relation twice, and advance `off` only after all fail-initialized
+    /// receipts pass. Otherwise a skipped loop backedge can publish OK after
+    /// mixing byte 0, while a skipped decrement can overwrite byte `len` and
+    /// let the next chunk adopt that corruption as its platform baseline.
+    #[test]
+    fn negative_rng_strong_binds_success_to_exact_chunk_completion() {
+        let verify_pos = RNG_STRONG_FOLD_SRC
+            .find("fn verify_mixed_chunk_into")
+            .expect("exact mix verifier missing");
+        let fold_pos = RNG_STRONG_FOLD_SRC
+            .find("pub(crate) fn fold_se_sources")
+            .expect("SE fold missing");
+        let verifier = &RNG_STRONG_FOLD_SRC[verify_pos..fold_pos];
+        assert!(RNG_STRONG_FOLD_SRC.contains("#[inline(never)]\nfn verify_mixed_chunk_into"));
+        for needle in [
+            "core::ptr::write_volatile(mix_receipt, crate::fi::FAIL_SENTINEL)",
+            "core::ptr::read_volatile(mixed.as_ptr().add(i))",
+            "core::ptr::read_volatile(platform.as_ptr().add(i))",
+            "core::ptr::read_volatile(optiga.as_ptr().add(i))",
+            "core::ptr::read_volatile(se050.as_ptr().add(i))",
+            "core::ptr::write_volatile(&mut processed, i as u32 + 1)",
+            "core::ptr::read_volatile(&processed)",
+            "processed != mixed.len() as u32 || diff != 0",
+            "core::ptr::write_volatile(mix_receipt, crate::fi::OK_SENTINEL)",
+        ] {
+            assert!(verifier.contains(needle), "mix verifier missing {needle}");
+        }
+
+        let fold_end = RNG_STRONG_FOLD_SRC[fold_pos..]
+            .find("\n#[cfg(test)]")
+            .map(|p| p + fold_pos)
+            .expect("SE fold test-module boundary missing");
+        let fold = &RNG_STRONG_FOLD_SRC[fold_pos..fold_end];
+        let baseline = fold
+            .find("platform_block[..len].copy_from_slice(&buf[off..off + len]);")
+            .expect("platform baseline copy missing");
+        let xor = fold
+            .find("buf[off + i] ^= optiga_block[i];")
+            .expect("OPTIGA fold missing");
+        let xor_se050 = fold
+            .find("buf[off + i] ^= se050_block[i];")
+            .expect("SE050 fold missing");
+        let mixer_publish = fold
+            .find("core::ptr::write_volatile(&mut mixed_bytes, i + 1)")
+            .expect("volatile mixer store-count publication missing");
+        let mixer_verify = fold
+            .find("verify_exact_completion_into(&mixed_bytes, len, &mut mixer_receipt)")
+            .expect("exact mixer store-count proof missing");
+        let verify_a = fold
+            .find("verify_mixed_chunk_into(")
+            .expect("first exact mix proof missing");
+        let verify_b = fold[verify_a + 1..]
+            .find("verify_mixed_chunk_into(")
+            .map(|p| p + verify_a + 1)
+            .expect("second exact mix proof missing");
+        let advance = fold
+            .find("publish_verified_progress_into(")
+            .expect("receipt-bound chunk advance missing");
+        let promote = fold
+            .find("core::ptr::write_volatile(fold_receipt, crate::fi::OK_SENTINEL)")
+            .expect("fold success promotion missing");
+        assert!(
+            baseline < xor
+                && xor < xor_se050
+                && xor_se050 < mixer_publish
+                && mixer_publish < mixer_verify
+                && mixer_verify < verify_a
+                && verify_a < verify_b
+        );
+        assert!(verify_b < advance && advance < promote);
+        assert!(
+            !fold.contains("off += len;"),
+            "a raw cursor advance can be hoisted into a stale pre-draw spill"
+        );
+        assert!(
+            fold.matches("core::ptr::read_volatile(&mixer_receipt)")
+                .count()
+                >= 2,
+            "the exact mixer count needs two volatile rejection gates"
+        );
+        assert!(
+            fold.matches("core::ptr::read_volatile(&mix_receipt)")
+                .count()
+                >= 2,
+            "both exact-mix calls need independent volatile receipt gates"
+        );
+        assert!(
+            fold.contains("platform_block.zeroize();"),
+            "the retained platform baseline must be wiped"
+        );
+    }
+
+    /// A verified chunk is still only a prefix of a multi-chunk request. The
+    /// outer loop's fall-through must independently prove that the volatile
+    /// completed-byte count equals the original buffer length; otherwise a
+    /// skipped outer backedge after chunk 1 can still mint fold success.
+    #[test]
+    fn negative_rng_strong_binds_success_to_exact_total_completion() {
+        let exact_pos = RNG_STRONG_FOLD_SRC
+            .find("fn verify_exact_completion_into")
+            .expect("exact total-completion verifier missing");
+        let progress_pos = RNG_STRONG_FOLD_SRC
+            .find("fn publish_verified_progress_into")
+            .expect("verified progress publisher missing");
+        let mix_pos = RNG_STRONG_FOLD_SRC
+            .find("fn verify_mixed_chunk_into")
+            .expect("exact mix verifier missing");
+        let exact = &RNG_STRONG_FOLD_SRC[exact_pos..progress_pos];
+        assert!(RNG_STRONG_FOLD_SRC.contains("#[inline(never)]\nfn verify_exact_completion_into"));
+        for needle in [
+            "core::ptr::write_volatile(completion_receipt, crate::fi::FAIL_SENTINEL)",
+            "core::ptr::read_volatile(completed_bytes)",
+            "!= expected_bytes",
+            "crate::fi::wait_random();",
+            "core::ptr::write_volatile(completion_receipt, crate::fi::OK_SENTINEL)",
+        ] {
+            assert!(
+                exact.contains(needle),
+                "completion verifier missing {needle}"
+            );
+        }
+        assert!(
+            exact
+                .matches("core::ptr::read_volatile(completed_bytes)")
+                .count()
+                >= 2,
+            "exact completion must independently read volatile progress twice"
+        );
+
+        let progress = &RNG_STRONG_FOLD_SRC[progress_pos..mix_pos];
+        assert!(RNG_STRONG_FOLD_SRC.contains("#[inline(never)]\nfn publish_verified_progress_into"));
+        for needle in [
+            "core::ptr::write_volatile(progress_receipt, crate::fi::FAIL_SENTINEL)",
+            "current_a.checked_add(len_a)",
+            "completed_a != current_a",
+            "current_b.checked_add(len_b)",
+            "completed_b != current_b",
+            "mixed_a != len_a",
+            "mixed_b != len_b",
+            "next_b != next_a",
+            "core::ptr::write_volatile(completed_ptr_a, next_a)",
+            "core::ptr::write_volatile(completed_ptr_b, next_b)",
+            "core::ptr::write_volatile(progress_receipt, crate::fi::OK_SENTINEL)",
+        ] {
+            assert!(
+                progress.contains(needle),
+                "progress publisher missing {needle}"
+            );
+        }
+        assert!(
+            progress
+                .matches("core::ptr::read_volatile(completed_ptr")
+                .count()
+                >= 4,
+            "progress publisher needs two cursor proofs and two publication readbacks"
+        );
+        assert!(progress.contains("completed_bytes: *mut usize"));
+        assert!(progress.contains("mixed_bytes: *const usize"));
+        assert!(
+            progress
+                .matches("core::ptr::eq(completed_ptr")
+                .count()
+                >= 2,
+            "fault-created cursor/mixer alias needs two independent rejection checks"
+        );
+        assert!(
+            progress
+                .matches("core::ptr::read_volatile(&completed_pointer_slot)")
+                .count()
+                >= 2
+                && progress
+                    .matches("core::ptr::read_volatile(&mixed_pointer_slot)")
+                    .count()
+                    >= 2,
+            "both raw pointer identities must be snapshotted twice with volatile loads"
+        );
+
+        let fold_pos = RNG_STRONG_FOLD_SRC
+            .find("pub(crate) fn fold_se_sources")
+            .expect("SE fold missing");
+        let fold_end = RNG_STRONG_FOLD_SRC[fold_pos..]
+            .find("\n#[cfg(test)]")
+            .map(|p| p + fold_pos)
+            .expect("SE fold test-module boundary missing");
+        let fold = &RNG_STRONG_FOLD_SRC[fold_pos..fold_end];
+        let init = fold
+            .find("crate::rng_exact::initialize_exact_progress_into(")
+            .expect("receipted canonical progress initialization missing");
+        let cursor = fold
+            .find("let off = unsafe { core::ptr::read_volatile(&completed_bytes) };")
+            .expect("canonical volatile loop cursor missing");
+        let publish = fold
+            .find("publish_verified_progress_into(")
+            .expect("verified-prefix publication missing");
+        let published_verify = fold
+            .find("let mut published_completion_receipt = crate::fi::FAIL_SENTINEL;")
+            .expect("post-publication canonical cursor proof missing");
+        let verify = fold
+            .find("verify_exact_completion_into(&completed_bytes, buf.len(), &mut completion_receipt)")
+            .expect("post-loop exact completion proof missing");
+        let promote = fold
+            .find("core::ptr::write_volatile(fold_receipt, crate::fi::OK_SENTINEL)")
+            .expect("fold success promotion missing");
+        assert!(
+            init < cursor
+                && cursor < publish
+                && publish < published_verify
+                && published_verify < verify
+                && verify < promote
+        );
+        assert!(fold[..cursor].contains("let mut completed_bytes = usize::MAX;"));
+        assert!(
+            fold[..cursor]
+                .matches("core::ptr::read_volatile(&progress_init_receipt)")
+                .count()
+                >= 2,
+            "canonical progress initialization needs two caller receipt gates"
+        );
+        assert!(fold.contains("core::ptr::addr_of_mut!(completed_bytes),"));
+        assert!(fold.contains("core::ptr::addr_of!(mixed_bytes),"));
+        assert!(
+            !fold.contains("off += len;")
+                && !fold.contains("core::ptr::write_volatile(&mut completed_bytes, off)"),
+            "final completion must not consume a separately advanced cursor"
+        );
+        assert!(
+            fold.matches("core::ptr::read_volatile(&progress_receipt)")
+                .count()
+                >= 2,
+            "verified progress publication needs two caller receipt gates"
+        );
+        assert!(
+            fold.matches("core::ptr::read_volatile(&completion_receipt)")
+                .count()
+                >= 2,
+            "post-loop completion receipt needs two volatile rejection gates"
+        );
+        assert!(
+            fold.matches("core::ptr::read_volatile(&published_completion_receipt)")
+                .count()
+                >= 2,
+            "each chunk needs two caller gates on the canonical post-publication proof"
+        );
+    }
+
+    /// Whole-program LTO must not specialize the fold to today's ≤32-byte
+    /// callers and erase its documented 33/40/48/65-byte chunking behavior.
+    /// The exported, non-inlined selector is also required by the final-ELF
+    /// audit, so loss of the artifact boundary becomes a release-gate failure.
+    #[test]
+    fn negative_rng_strong_retains_generic_chunk_selector_in_linked_artifact() {
+        for needle in [
+            "#[inline(never)]\n#[export_name = \"pqsigner_rng_source_chunk_len\"]",
+            "pub(crate) extern \"C\" fn source_chunk_len",
+            "core::ptr::read_volatile(&remaining_live)",
+            "let len = source_chunk_len(remaining);",
+            "fn validate_source_chunk_len_into",
+            "len_a > MAX_SOURCE_BLOCK",
+            "len_b > MAX_SOURCE_BLOCK",
+            "validate_source_chunk_len_into(remaining, len, &mut chunk_receipt)",
+        ] {
+            assert!(RNG_STRONG_FOLD_SRC.contains(needle), "missing {needle}");
+        }
+        assert!(
+            RNG_STRONG_FOLD_SRC
+                .matches("core::ptr::read_volatile(&chunk_receipt)")
+                .count()
+                >= 2,
+            "the caller must reject an unchecked selector result twice before slicing scratch"
         );
     }
 
@@ -1886,19 +2185,131 @@ mod rng_source_text {
     #[test]
     fn negative_rng_strong_zeroes_block_before_every_se_draw() {
         let pos = RNG_STRONG_FOLD_SRC
-            .find("fn fold_se_blocks")
-            .expect("rng_strong must fold SE bytes via fold_se_blocks");
+            .find("fn fold_se_sources")
+            .expect("rng_strong must fold separate SE sources");
         let body = &RNG_STRONG_FOLD_SRC[pos..];
         let zero = body
-            .find("block[..len].fill(0);")
-            .expect("fold_se_blocks must zero the block before every SE draw (F27)");
-        let draw = body
-            .find("se_draw(&mut block[..len])")
-            .expect("fold_se_blocks must invoke the SE draw per chunk");
+            .find("optiga_block[..len].fill(0);")
+            .expect("OPTIGA zero");
+        let zero2 = body
+            .find("se050_block[..len].fill(0);")
+            .expect("SE050 zero");
+        let draw = body.find("draw(SeSource::Optiga").expect("OPTIGA draw");
+        let draw2 = body.find("draw(SeSource::Se050").expect("SE050 draw");
         assert!(
-            zero < draw,
-            "the block must be zeroed BEFORE the SE draw, not after (F27)"
+            zero < draw && zero2 < draw2,
+            "each source block must be zeroed BEFORE its draw"
         );
+    }
+
+    #[test]
+    fn negative_rng_strong_rejects_replayed_physical_source_responses() {
+        for needle in [
+            "pub(crate) struct SourceRepeatState",
+            "optiga_history_differ",
+            "se050_history_differ",
+            "history_overlap != 0 && optiga_history_differ == 0",
+            "history_overlap != 0 && se050_history_differ == 0",
+            "fn commit_source_history_into",
+            "fn verify_committed_source_history_into",
+            "SOURCE_HISTORY_POISONED",
+            "crate::rng_exact::publish_region_pointer_into(",
+            "core::ptr::addr_of!(published_history_optiga_source)",
+            "core::ptr::addr_of!(published_history_se050_source)",
+            "core::ptr::addr_of!(published_history_optiga_destination)",
+            "core::ptr::addr_of!(published_history_se050_destination)",
+            "core::ptr::write_volatile(&mut processed_a, i + 1)",
+            "core::ptr::write_volatile(&mut processed_b, i + 1)",
+        ] {
+            assert!(RNG_STRONG_FOLD_SRC.contains(needle), "missing {needle}");
+        }
+        for needle in [
+            "static STRONG_RNG_BUSY: AtomicBool",
+            "static mut SOURCE_REPEAT_STATE: SourceRepeatState",
+            "StrongRngGuard::try_acquire()",
+        ] {
+            assert!(RNG_STRONG_SRC.contains(needle), "missing {needle}");
+        }
+
+        let fold = &RNG_STRONG_FOLD_SRC[RNG_STRONG_FOLD_SRC
+            .find("fn fold_se_sources")
+            .expect("strong-RNG fold missing")..];
+        let caller_poison = fold
+            .find("core::ptr::write_volatile(&mut history.status, SOURCE_HISTORY_POISONED);")
+            .expect("caller-side history poison missing");
+        let first_history_endpoint = fold
+            .find("let mut published_history_optiga_source")
+            .expect("first fallible history endpoint publication missing");
+        let commit = fold
+            .find("commit_source_history_into(")
+            .expect("history commit call missing");
+        assert!(
+            caller_poison < first_history_endpoint,
+            "history must be poisoned immediately after health acceptance and before any fallible endpoint setup"
+        );
+        assert!(
+            fold[..first_history_endpoint]
+                .matches("core::ptr::write_volatile(&mut history.status, SOURCE_HISTORY_POISONED);")
+                .count()
+                >= 2,
+            "caller needs duplicate volatile poison stores before the first fallible endpoint gate"
+        );
+        let relation = fold[commit..]
+            .find("verify_committed_source_history_into(")
+            .expect("independent committed-history postcondition missing")
+            + commit;
+        assert!(
+            commit < relation,
+            "the committed history must be checked against the live caller blocks"
+        );
+        assert!(
+            fold[relation..]
+                .matches("core::ptr::read_volatile(&history_relation_receipt)")
+                .count()
+                >= 2,
+            "the caller must gate on the committed-history relation twice"
+        );
+    }
+
+    #[test]
+    fn negative_rng_strong_requires_independent_optiga_and_se050_receipts() {
+        for needle in [
+            "optiga_ok",
+            "se050_ok",
+            "platform_nonzero == 0",
+            "optiga_nonzero == 0",
+            "se050_nonzero == 0",
+            "optiga_se050_differ == 0",
+            "platform_optiga_differ == 0",
+            "platform_se050_differ == 0",
+            "fn verify_source_health_into",
+            "core::ptr::write_volatile(&mut processed, i + 1)",
+            "processed != platform.len()",
+            "SeSource::Optiga",
+            "SeSource::Se050",
+        ] {
+            assert!(RNG_STRONG_FOLD_SRC.contains(needle), "missing {needle}");
+        }
+        assert!(
+            RNG_STRONG_FOLD_SRC
+                .matches("verify_source_health_into(")
+                .count()
+                >= 3,
+            "one definition plus two independent full health scans are required"
+        );
+        assert!(RNG_STRONG_SRC.contains("store.random_optiga(block)"));
+        assert!(RNG_STRONG_SRC.contains("store.random_se050(block)"));
+    }
+
+    #[test]
+    fn negative_rng_backend_receipt_is_cfg_coupled_and_retained() {
+        assert!(RNG_SRC.contains("PQ1_RNG_BACKEND=STM32U585_TRNG\\0"));
+        assert!(RNG_SRC.contains("PQ1_RNG_BACKEND=HOST_URANDOM\\0"));
+        assert!(RNG_SRC.contains("PQ1_STRONG_RNG_SOURCES=STM32U585+OPTIGA_TRUST_M+SE050\\0"));
+        assert!(RNG_SRC.contains("PQ1_STRONG_RNG_SOURCES=DEVELOPMENT_OR_INCOMPLETE\\0"));
+        assert!(RNG_SRC.contains("#[link_section = \".pqsigner.rng_backend\"]"));
+        assert!(RNG_SRC.contains("read_volatile(PQSIGNER_RNG_BACKEND.as_ptr())"));
+        assert!(RNG_SRC.contains("read_volatile(PQSIGNER_STRONG_RNG_SOURCES.as_ptr())"));
     }
 
     /// `host_rng::fill` uses the semihosting OPEN/READ/CLOSE sequence
@@ -1979,8 +2390,12 @@ mod pin_diag_source_text {
             .map(|i| pos + 1 + i)
             .unwrap_or(PIN_DIAG_SRC.len());
         let body = &PIN_DIAG_SRC[pos..next_fn];
-        let pa4_pos = body.find("pulse_low(GPIOA_BASE, 4,").expect("PA4 pulse missing");
-        let pd5_pos = body.find("pulse_low(GPIOD_BASE, 5,").expect("PD5 pulse missing");
+        let pa4_pos = body
+            .find("pulse_low(GPIOA_BASE, 4,")
+            .expect("PA4 pulse missing");
+        let pd5_pos = body
+            .find("pulse_low(GPIOD_BASE, 5,")
+            .expect("PD5 pulse missing");
         let pe0_pos = body
             .find("pulse_low_cycles(GPIOE_BASE, 0,")
             .expect("PE0 pulse missing (datasheet-bounded pulse_low_cycles form)");

@@ -172,7 +172,7 @@ fn c10_sign_verified_with_progress_inner(
     //
     // **Non-deterministic OptRand (work-todo #18 / Trezor parity).**
     // We draw a fresh 16-byte randomiser per signing call via
-    // `hw::rng_strong::fill` (STM32 TRNG ⊕ OPTIGA TRNG ⊕ SE050 TRNG,
+    // `rng_strong::fill` (STM32 TRNG ⊕ OPTIGA TRNG ⊕ SE050 TRNG,
     // 3-source XOR mirroring Trezor's `rng_fill_buffer_strong`).
     // Defends against:
     //   - the deterministic-PRF-tree class (Genêt TCHES 2023): adding
@@ -196,9 +196,9 @@ fn c10_sign_verified_with_progress_inner(
     // per sign would still be cryptographically sound but would
     // produce divergent sigs, breaking the byte-equality FI gate.
     //
-    // Under `mock-se` (no SE backend) the strong-RNG falls through to
-    // STM32 TRNG only. Under any real-SE feature flag the active
-    // backend's `random()` is XOR-mixed in.
+    // Under `mock-se` (QEMU/dev only) the strong-RNG uses the platform source.
+    // Hardware production is compile-fenced to both source-specific SE calls;
+    // either missing/failing/non-contributing chip aborts the signature.
     let mut opt_rand_buf = [0u8; sphincs_c10::params::N];
     #[cfg(not(test))]
     if crate::rng_strong::fill(&mut opt_rand_buf).is_err() {
@@ -492,6 +492,18 @@ pub fn provision_from_mnemonic(
 /// generation is feature-gated in one place. Returns `Err` (rather than
 /// panicking) so the caller can roll back the real wallet atomically.
 #[cfg(feature = "duress-pin")]
+fn fill_strong_with_store<const N: usize>(
+    store: &mut impl crate::secure_element::WalletStore,
+    out: &mut [u8; N],
+) -> Result<(), crate::secure_element::SeError> {
+    // Calling the global entry point while `store` is already borrowed would
+    // alias the backend. The explicit-handle API executes the same mandatory
+    // STM32 + OPTIGA + SE050 composition without re-entering the global.
+    crate::rng_strong::fill_with_store(out, store)
+        .map_err(|()| crate::secure_element::SeError::InternalError)
+}
+
+#[cfg(feature = "duress-pin")]
 fn provision_duress_wallet(
     store: &mut impl crate::secure_element::WalletStore,
     duress_pin: Option<&[u8; 8]>,
@@ -500,15 +512,7 @@ fn provision_duress_wallet(
     // (OPTIGA ⊕ SE050 via the store) — same multi-source quality as the
     // real seed path, no re-entrancy (we are not inside a store method).
     let mut decoy_entropy = [0u8; 32];
-    crate::rng::fill(&mut decoy_entropy)
-        .map_err(|_| crate::secure_element::SeError::InternalError)?;
-    let mut se_buf = [0u8; 32];
-    if store.random(&mut se_buf).is_ok() {
-        for i in 0..32 {
-            decoy_entropy[i] ^= se_buf[i];
-        }
-    }
-    se_buf.zeroize();
+    fill_strong_with_store(store, &mut decoy_entropy)?;
 
     // Resolve the duress PIN: user-chosen, or a fresh random 8 bytes when
     // declined (never entered by anyone → unguessable; the chip can't
@@ -517,8 +521,11 @@ fn provision_duress_wallet(
     let mut actual_duress_pin: [u8; 8] = match duress_pin {
         Some(p) => *p,
         None => {
-            crate::rng::fill(&mut random_pin)
-                .map_err(|_| crate::secure_element::SeError::InternalError)?;
+            if let Err(e) = fill_strong_with_store(store, &mut random_pin) {
+                decoy_entropy.zeroize();
+                crate::fi::zeroize_barrier();
+                return Err(e);
+            }
             random_pin
         }
     };

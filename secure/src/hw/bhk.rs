@@ -63,7 +63,7 @@
 #![cfg(feature = "bhk")]
 
 use core::ptr::{read_volatile, write_volatile};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::hw::flash;
 use crate::hw::saes::{self, KeySel, SaesError};
@@ -173,10 +173,10 @@ pub fn is_provisioned() -> bool {
     false
 }
 
-/// First-boot provisioning: generate 32 TRNG bytes, DHUK-ECB-wrap them,
-/// write the wrapped bytes to the flash page. Refuses (`AlreadyProvisioned`)
-/// if the page is non-blank — re-provisioning would invalidate any SE
-/// channel paired against the previous BHK.
+/// Bench/legacy provisioning wrapper: generate 32 bytes from the platform
+/// TRNG and pass them to [`provision_from_entropy`]. Production first boot
+/// does not use this wrapper; it supplies a mandatory STM32 + OPTIGA + SE050
+/// draw through the explicit-handle strong-RNG API.
 ///
 /// The plaintext BHK never leaves this function — it is wrapped under
 /// the DHUK and zeroized before return. The wrapped bytes in flash are
@@ -193,16 +193,33 @@ pub fn is_provisioned() -> bool {
 /// Programs a flash page — no other flash op may be in flight on this
 /// core. Callers run this single-threaded at first-boot provisioning,
 /// before any SE init. `saes::init()` must have run first.
+#[cfg(not(feature = "rdp2-self-lock"))]
 pub unsafe fn provision() -> Result<(), BhkError> {
-    if is_provisioned() {
-        return Err(BhkError::AlreadyProvisioned);
-    }
-
-    // 32 TRNG bytes.
     let mut bhk = [0u8; BHK_LEN];
     if crate::rng::fill(&mut bhk).is_err() {
         bhk.zeroize();
         return Err(BhkError::Rng);
+    }
+    provision_from_entropy(&mut bhk)
+}
+
+/// Persist a caller-supplied 32-byte BHK after wrapping it under the DHUK.
+///
+/// The production first-boot caller must obtain `bhk` from
+/// `rng_strong::fill_with_store`, which requires the STM32, OPTIGA, and SE050
+/// hardware sources. This split keeps flash/SAES ownership here while letting
+/// the already-borrowed dual-SE handle provide entropy without global aliasing.
+/// `bhk` and every wrapped temporary are zeroized on all return paths.
+///
+/// # Safety
+///
+/// Programs page 126. No other flash operation may be in flight, and
+/// `saes::init()` must have completed.
+pub unsafe fn provision_from_entropy(bhk: &mut [u8; 32]) -> Result<(), BhkError> {
+    if is_provisioned() {
+        bhk.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(BhkError::AlreadyProvisioned);
     }
 
     // DHUK-ECB wrap, block by block. ECB is unauthenticated, but the
@@ -210,27 +227,29 @@ pub unsafe fn provision() -> Result<(), BhkError> {
     // wrapped bytes from flash still has to break AES-256 under the
     // per-die DHUK to recover the BHK.
     let mut wrapped = [0u8; BHK_LEN];
-    {
-        let b0: [u8; 16] = bhk[..16].try_into().expect("16-byte slice");
-        let b1: [u8; 16] = bhk[16..].try_into().expect("16-byte slice");
+    let result = (|| -> Result<(), BhkError> {
+        let b0 = Zeroizing::new(bhk[..16].try_into().expect("16-byte slice"));
+        let b1 = Zeroizing::new(bhk[16..].try_into().expect("16-byte slice"));
         let c0 = saes::encrypt_ecb_block(KeySel::Dhuk, None, &b0)?;
         let c1 = saes::encrypt_ecb_block(KeySel::Dhuk, None, &b1)?;
         wrapped[..16].copy_from_slice(&c0);
         wrapped[16..].copy_from_slice(&c1);
-    }
-    bhk.zeroize();
 
-    // Erase + program the flash page (2 quad-words).
-    let res = (|| -> Result<(), ()> {
-        flash::erase_secure_page(BHK_PAGE_NUM)?;
+        // Erase + program the flash page (2 quad-words).
+        flash::erase_secure_page(BHK_PAGE_NUM).map_err(|()| BhkError::Flash)?;
         let qw0: [u8; 16] = wrapped[..16].try_into().expect("16-byte slice");
         let qw1: [u8; 16] = wrapped[16..].try_into().expect("16-byte slice");
-        flash::write_quadword_verified(BHK_PAGE_ADDR, &qw0)?;
-        flash::write_quadword_verified(BHK_PAGE_ADDR + 16, &qw1)?;
+        flash::write_quadword_verified(BHK_PAGE_ADDR, &qw0)
+            .map_err(|()| BhkError::Flash)?;
+        flash::write_quadword_verified(BHK_PAGE_ADDR + 16, &qw1)
+            .map_err(|()| BhkError::Flash)?;
         Ok(())
     })();
+
+    bhk.zeroize();
     wrapped.zeroize();
-    res.map_err(|()| BhkError::Flash)
+    crate::fi::zeroize_barrier();
+    result
 }
 
 /// Subsequent-boot path: read the wrapped BHK from flash, DHUK-ECB-
@@ -246,8 +265,8 @@ pub unsafe fn provision() -> Result<(), BhkError> {
 ///
 /// # Errors
 ///
-/// `NotProvisioned` if the flash page is blank (caller must `provision()`
-/// first); `Saes` if an unwrap block fails.
+/// `NotProvisioned` if the flash page is blank (only an explicit non-RDP bench
+/// flow may call `provision()` first); `Saes` if an unwrap block fails.
 ///
 /// # Safety
 ///

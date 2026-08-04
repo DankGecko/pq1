@@ -673,10 +673,12 @@ pub unsafe fn burn_device_master() -> Result<(), OtpError> {
         // is no second chance to regenerate it if the source RNG was
         // biased / broken at burn time. Use `rng_strong::fill` so any
         // unbroken TRNG (STM32 / OPTIGA / SE050) contributes entropy
-        // via XOR-fold. At very first boot the SE channels may not be
-        // up yet, in which case `rng_strong` gracefully falls through
-        // to the platform TRNG alone (strict no-regression vs the old
-        // `crate::rng::fill` baseline).
+        // via XOR-fold. There is deliberately no platform-only fallback: if
+        // both authenticated SE entropy channels are not already available,
+        // this irreversible burn fails. The factory transport master is a
+        // bootstrap root for those same channels, so the production factory
+        // ceremony must resolve that ordering explicitly; this routine must
+        // never hide it by silently burning platform-only entropy.
         if crate::rng_strong::fill(&mut key).is_err() {
             key.zeroize();
             return Err(OtpError::RngFailed);

@@ -1,9 +1,11 @@
 //! Pure-logic primitives for SE050 SCP03 — the AES / CMAC primitives, the
 //! NIST SP 800-108 counter-mode KDF inputs, the SCP03 KCV, the GP `PUT
-//! KEY` APDU builder, and the OEF-`0xA201` (SE050C2) factory key constants. Nothing
-//! in this module depends on `t1oi2c`, `crate::rng`, `secure_log!`, or any
-//! other firmware-only facility, so it compiles for the host target and
-//! `#[cfg(test)] mod tests` runs under `cargo test -p sphincs-tz-secure`.
+//! KEY` APDU builder, the OEF-`0xA201` (SE050C2) factory key constants, and
+//! the FI-hardened R-MAC authentication-receipt verifier. Nothing in this
+//! module depends on `t1oi2c`, `crate::rng`, `secure_log!`, or any other
+//! firmware-only facility (`crate::fi` is always-compiled and host-safe),
+//! so it compiles for the host target and `#[cfg(test)] mod tests` runs
+//! under `cargo test -p sphincs-tz-secure`.
 //!
 //! The session state machine (`Scp03Session`, `establish`, `wrap_apdu`,
 //! `load_platform_keys`) stays in `se050::scp03` because it depends on
@@ -141,6 +143,185 @@ pub fn cmac_aes128(key: &[u8; 16], inputs: &[&[u8]]) -> [u8; 16] {
     let mut out = [0u8; 16];
     out.copy_from_slice(&result.into_bytes());
     out
+}
+
+/// Publish R-MAC authentication only after two independent full R-MAC
+/// recomputations.
+///
+/// This is the authoritative release gate for every SCP03 protected
+/// response (both empty-body `R-MAC || SW` frames and full encrypted
+/// frames). The caller fail-initializes `receipt`, calls this helper, and
+/// then requires **two independent volatile success checks** (separated by
+/// `crate::fi::wait_random()`) before any protected-response copy, counter
+/// advance, or `Ok` return.
+///
+/// Design notes (F-28 rework, 2026-08-03 — see `tools/sca/README.md`
+/// §F-28):
+///
+/// * **Fail-initialized.** The receipt is forced to `FAIL_SENTINEL` first,
+///   so a skipped call, a skipped store, or any early return leaves
+///   failure authoritative. `OK_SENTINEL` has exactly one publication
+///   point, after both recomputations match.
+/// * **Two independent full recomputations.** The complete R-MAC
+///   (`CMAC(S-RMAC, MCV || body || SW)[..8]`) is recomputed twice, with a
+///   `wait_random()` between so one faulted or elided computation cannot
+///   satisfy both; `black_box` stops LLVM proving the two compares
+///   equivalent and folding them into one branch.
+/// * **No infective mask.** The previous gate folded the mismatch into
+///   the released bytes as an XOR-`0xFF` complement. That transform is a
+///   public bijection: a forging attacker who can form R-ENC ciphertext
+///   submits the *complement* of the desired payload and receives the
+///   exact attacker-selected plaintext (with attacker-chosen SW, advanced
+///   counter, and an `Ok` return) after a single fault skips the early
+///   rejection. Authentication is published as a receipt instead, and
+///   nothing is copied or advanced without it.
+/// * **Constant-time compare.** `subtle::ConstantTimeEq`, same as the
+///   `ct_eq_8` it replaces at this site.
+///
+/// `#[inline(never)]` + `#[export_name]` keep the duplicated verification a
+/// distinct optimized-ELF symbol that LTO cannot fold into the caller or
+/// collapse into a single check; the symbol is the production-audit
+/// receipt (`scripts/prod_symbol_audit.sh`).
+#[inline(never)]
+#[export_name = "pqsigner_se050_scp03_rmac_verify_into"]
+pub fn verify_rmac_into(
+    s_rmac: &[u8; 16],
+    mcv: &[u8; 16],
+    body: &[u8],
+    sw: &[u8],
+    rmac_recv: &[u8],
+    receipt: &mut u32,
+) {
+    use subtle::ConstantTimeEq;
+
+    debug_assert_eq!(rmac_recv.len(), 8);
+
+    // SAFETY: unique caller-owned receipt. A skipped or shortened
+    // verifier (or a skipped caller-side initialization) leaves failure
+    // authoritative: both sides write FAIL before any success path.
+    unsafe {
+        core::ptr::write_volatile(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    // First independent full R-MAC recomputation.
+    let mac_a = cmac_aes128(s_rmac, &[mcv, body, sw]);
+    let ok_a: bool = mac_a[..8].ct_eq(rmac_recv).into();
+    if !core::hint::black_box(ok_a) {
+        return;
+    }
+
+    crate::fi::wait_random();
+
+    // Second independent full R-MAC recomputation — an opaque possible-write
+    // call sits between the two, so the compiler cannot common them up and a
+    // single fault cannot falsify both.
+    let mac_b = cmac_aes128(s_rmac, &[mcv, body, sw]);
+    let ok_b: bool = mac_b[..8].ct_eq(rmac_recv).into();
+    if !core::hint::black_box(ok_b) {
+        return;
+    }
+
+    // SAFETY: both independent full recomputations matched the received
+    // R-MAC in constant time. This is the sole success publication.
+    unsafe {
+        core::ptr::write_volatile(receipt, crate::fi::OK_SENTINEL);
+    }
+}
+
+/// Publish ciphertext↔plaintext relation authentication only after two
+/// independent full R-ENC re-encryptions, each under an independently
+/// recomputed response ICV.
+///
+/// The R-MAC receipt (`verify_rmac_into`) authenticates the *ciphertext* of
+/// a protected response. It cannot see a fault that corrupts the
+/// *decryption*: a single skip of the per-block writeback inside
+/// `aes128_cbc_decrypt` leaves bus-visible ciphertext in the released
+/// "plaintext" (wave-18 GPT-5.6 blocker, coordinator-reproduced on the
+/// wave-18 candidate: `Ok` + intact TLV header + SW `9000` + advanced
+/// counter, with the second block byte-for-byte the on-wire ciphertext).
+///
+/// This helper binds the decrypted padded buffer back to the authenticated
+/// ciphertext: CBC re-encryption with the same key and response ICV is the
+/// identity on a faithfully decrypted buffer, so any skipped or corrupted
+/// staging copy, decrypt, or writeback fails the equality. The ICV is
+/// **recomputed inside each pass** (`AES-ECB(S-ENC, 0x80 || counter[1..])`,
+/// GP Amd D §6.2.7): sharing the caller's ICV would let one faulted ICV
+/// computation make the decrypt and this check consistently wrong (garbage
+/// first block, valid equality — observed in the FI sweep). Two independent
+/// full re-encryption passes (fresh buffer and fresh ICV each, constant-time
+/// compare, `black_box`ed, separated by `wait_random`) publish `OK_SENTINEL`
+/// at one point only; the receipt is fail-initialized on entry so any skip
+/// or early return leaves failure authoritative. The caller requires two
+/// independent volatile success checks before the plaintext is copied out.
+///
+/// `#[inline(never)]` + `#[export_name]` keep the duplicated verification a
+/// distinct optimized-ELF symbol that LTO cannot fold into the caller or
+/// collapse into a single pass; the symbol is the production-audit receipt
+/// (`scripts/prod_symbol_audit.sh`).
+#[inline(never)]
+#[export_name = "pqsigner_se050_scp03_renc_verify_into"]
+pub fn verify_renc_relation_into(
+    s_enc: &[u8; 16],
+    counter: &[u8; 16],
+    plain_padded: &[u8],
+    body: &[u8],
+    receipt: &mut u32,
+) {
+    use subtle::ConstantTimeEq;
+
+    // SAFETY: unique caller-owned receipt. A skipped or shortened
+    // verifier (or a skipped caller-side initialization) leaves failure
+    // authoritative: both sides write FAIL before any success path.
+    unsafe {
+        core::ptr::write_volatile(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    // Relation shape: equal lengths, AES-CBC blocks, bounded buffer.
+    if plain_padded.len() != body.len() || body.is_empty() || body.len() % 16 != 0 || body.len() > 1024
+    {
+        return;
+    }
+
+    // First independent full re-encryption + constant-time compare, under a
+    // freshly computed response ICV (GP Amd D §6.2.7).
+    let ok_a = {
+        let mut icv_block = *counter;
+        icv_block[0] = 0x80;
+        let icv = aes128_ecb_encrypt(s_enc, &icv_block);
+        let mut buf = zeroize::Zeroizing::new([0u8; 1024]);
+        buf[..body.len()].copy_from_slice(plain_padded);
+        aes128_cbc_encrypt(s_enc, &icv, &mut buf[..body.len()]);
+        let eq: bool = buf[..body.len()].ct_eq(body).into();
+        core::hint::black_box(eq)
+    };
+    if !ok_a {
+        return;
+    }
+
+    crate::fi::wait_random();
+
+    // Second independent full re-encryption — independent ICV recomputation
+    // as well, and an opaque possible-write call between the passes, so one
+    // faulted computation (ICV, encryption, or compare) cannot falsify both.
+    let ok_b = {
+        let mut icv_block = *counter;
+        icv_block[0] = 0x80;
+        let icv = aes128_ecb_encrypt(s_enc, &icv_block);
+        let mut buf = zeroize::Zeroizing::new([0u8; 1024]);
+        buf[..body.len()].copy_from_slice(plain_padded);
+        aes128_cbc_encrypt(s_enc, &icv, &mut buf[..body.len()]);
+        let eq: bool = buf[..body.len()].ct_eq(body).into();
+        core::hint::black_box(eq)
+    };
+    if !ok_b {
+        return;
+    }
+
+    // SAFETY: both independent full re-encryptions reproduced the
+    // authenticated ciphertext in constant time. Sole success publication.
+    unsafe {
+        core::ptr::write_volatile(receipt, crate::fi::OK_SENTINEL);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +597,237 @@ impl TransportAuthProof {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ----- F-28 rework: R-MAC authentication receipt -----
+    //
+    // Fixed SCP03 session material (arbitrary bytes; the verifier is
+    // key-value-independent). These tests pin the BEHAVIOUR of
+    // `verify_rmac_into`; the FI sweep (`make -C tools/sca scp03-fi`) and
+    // the source pins in `se050_under_test` pin the caller-side gate.
+    const T_S_RMAC: [u8; 16] = [
+        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+        0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f,
+    ];
+    const T_MCV: [u8; 16] = [
+        0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+        0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
+    ];
+    const T_BODY: [u8; 16] = [
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+        0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+    ];
+    const T_SW: [u8; 2] = [0x90, 0x00];
+
+    fn good_rmac(body: &[u8], sw: &[u8]) -> [u8; 8] {
+        let mac = cmac_aes128(&T_S_RMAC, &[&T_MCV, body, sw]);
+        let mut out = [0u8; 8];
+        out.copy_from_slice(&mac[..8]);
+        out
+    }
+
+    #[test]
+    fn verify_rmac_publishes_ok_on_exact_match_full_body() {
+        let rmac = good_rmac(&T_BODY, &T_SW);
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_rmac_into(&T_S_RMAC, &T_MCV, &T_BODY, &T_SW, &rmac, &mut receipt);
+        assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn verify_rmac_publishes_ok_on_exact_match_empty_body() {
+        // Case 2 shape (R-MAC over MCV || SW only) must pass the same gate.
+        let rmac = good_rmac(&[], &T_SW);
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_rmac_into(&T_S_RMAC, &T_MCV, &[], &T_SW, &rmac, &mut receipt);
+        assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn verify_rmac_rejects_all_zero_rmac() {
+        // The forged-frame shape from the FI harness: a valid R-ENC body
+        // with an all-zero R-MAC must never authenticate.
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_rmac_into(&T_S_RMAC, &T_MCV, &T_BODY, &T_SW, &[0u8; 8], &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+        let mut receipt_empty = crate::fi::FAIL_SENTINEL;
+        verify_rmac_into(&T_S_RMAC, &T_MCV, &[], &T_SW, &[0u8; 8], &mut receipt_empty);
+        assert_eq!(receipt_empty, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn verify_rmac_rejects_single_bit_flip() {
+        let mut rmac = good_rmac(&T_BODY, &T_SW);
+        rmac[3] ^= 0x01;
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_rmac_into(&T_S_RMAC, &T_MCV, &T_BODY, &T_SW, &rmac, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn verify_rmac_rejects_mac_for_tampered_body_or_sw() {
+        let rmac = good_rmac(&T_BODY, &T_SW);
+        let mut tampered_body = T_BODY;
+        tampered_body[0] ^= 0x01;
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_rmac_into(&T_S_RMAC, &T_MCV, &tampered_body, &T_SW, &rmac, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+
+        let tampered_sw: [u8; 2] = [0x69, 0x85];
+        let mut receipt_sw = crate::fi::FAIL_SENTINEL;
+        verify_rmac_into(&T_S_RMAC, &T_MCV, &T_BODY, &tampered_sw, &rmac, &mut receipt_sw);
+        assert_eq!(receipt_sw, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn verify_rmac_rejects_mac_from_other_mcv() {
+        // A MAC replayed from a different command (different MCV) must fail.
+        let other_mcv = [0x11u8; 16];
+        let mac = cmac_aes128(&T_S_RMAC, &[&other_mcv, &T_BODY, &T_SW]);
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_rmac_into(&T_S_RMAC, &T_MCV, &T_BODY, &T_SW, &mac[..8], &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn verify_rmac_fail_initializes_receipt_before_rejecting() {
+        // Mutation control: deleting the callee-side FAIL store (or the whole
+        // call) must leave a pre-seeded/stale receipt failed, never OK.
+        let mut receipt = crate::fi::OK_SENTINEL;
+        verify_rmac_into(&T_S_RMAC, &T_MCV, &T_BODY, &T_SW, &[0u8; 8], &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn verify_rmac_receipt_is_not_published_on_wrong_key() {
+        let rmac = good_rmac(&T_BODY, &T_SW);
+        let wrong_key = [0x42u8; 16];
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_rmac_into(&wrong_key, &T_MCV, &T_BODY, &T_SW, &rmac, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    // ----- Wave-18 rework: R-ENC decrypt-fidelity relation receipt -----
+
+    const T_S_ENC: [u8; 16] = [
+        0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+        0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,
+    ];
+    const T_COUNTER: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+
+    /// Response ICV for T_COUNTER (`AES-ECB(S-ENC, 0x80 || counter[1..])`,
+    /// GP Amd D §6.2.7) — what the helper recomputes internally per pass.
+    fn t_icv() -> [u8; 16] {
+        let mut block = T_COUNTER;
+        block[0] = 0x80;
+        aes128_ecb_encrypt(&T_S_ENC, &block)
+    }
+
+    /// A 48-byte padded plaintext (32-byte TLV + 0x80 pad) and its R-ENC
+    /// ciphertext — the valid3 shape from the FI harness.
+    fn valid3_plain_and_body() -> ([u8; 48], [u8; 48]) {
+        let mut plain = [0u8; 48];
+        plain[0] = 0x41;
+        plain[1] = 0x1e;
+        for (i, b) in plain[2..32].iter_mut().enumerate() {
+            *b = 0xA0 + i as u8;
+        }
+        plain[32] = 0x80;
+        let mut body = plain;
+        aes128_cbc_encrypt(&T_S_ENC, &t_icv(), &mut body);
+        (plain, body)
+    }
+
+    #[test]
+    fn verify_renc_relation_publishes_ok_on_faithful_decrypt() {
+        let (plain, body) = valid3_plain_and_body();
+        // Simulate the firmware path: decrypt the body, then verify the
+        // relation between the decrypted buffer and the ciphertext.
+        let mut decrypted = body;
+        aes128_cbc_decrypt(&T_S_ENC, &t_icv(), &mut decrypted);
+        assert_eq!(decrypted, plain);
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &T_COUNTER, &decrypted, &body, &mut receipt);
+        assert_eq!(receipt, crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn verify_renc_relation_rejects_skipped_writeback_ciphertext() {
+        // The confirmed wave-18 mechanism: a skipped per-block writeback in
+        // CBC decrypt leaves the raw (bus-visible) ciphertext block in the
+        // "plaintext" buffer. The relation must fail closed.
+        let (_plain, body) = valid3_plain_and_body();
+        let mut corrupted = body;
+        aes128_cbc_decrypt(&T_S_ENC, &t_icv(), &mut corrupted[..16]); // block 0 only
+        // block 1..3 still hold ciphertext — exactly the skipped-writeback shape.
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &T_COUNTER, &corrupted, &body, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn verify_renc_relation_rejects_decrypt_under_a_faulted_icv() {
+        // The ICV-sharing flaw the helper's per-pass ICV recomputation
+        // closes: decrypting under a WRONG ICV yields garbage block 0 but
+        // correct later blocks — and a relation check that shared that ICV
+        // would accept. The helper recomputes the ICV from the counter, so
+        // it must reject.
+        let (_plain, body) = valid3_plain_and_body();
+        let wrong_icv = [0xABu8; 16];
+        let mut corrupted = body;
+        aes128_cbc_decrypt(&T_S_ENC, &wrong_icv, &mut corrupted);
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &T_COUNTER, &corrupted, &body, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn verify_renc_relation_rejects_zeroed_or_flipped_plaintext() {
+        let (plain, body) = valid3_plain_and_body();
+        // Skipped staging copy leaves zeros.
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &T_COUNTER, &[0u8; 48], &body, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+        // A single flipped bit anywhere in the padded plaintext.
+        let mut flipped = plain;
+        flipped[47] ^= 0x01;
+        let mut receipt2 = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &T_COUNTER, &flipped, &body, &mut receipt2);
+        assert_eq!(receipt2, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn verify_renc_relation_fail_initializes_receipt_before_rejecting() {
+        let (_plain, body) = valid3_plain_and_body();
+        let mut receipt = crate::fi::OK_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &T_COUNTER, &[0u8; 48], &body, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn verify_renc_relation_rejects_wrong_key_counter_and_bad_shapes() {
+        let (plain, body) = valid3_plain_and_body();
+        let wrong_key = [0x99u8; 16];
+        let mut receipt = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&wrong_key, &T_COUNTER, &plain, &body, &mut receipt);
+        assert_eq!(receipt, crate::fi::FAIL_SENTINEL);
+        // A different counter derives a different ICV, so the honest
+        // plaintext no longer re-encrypts to `body`.
+        let wrong_counter = [9u8; 16];
+        let mut receipt2 = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &wrong_counter, &plain, &body, &mut receipt2);
+        assert_eq!(receipt2, crate::fi::FAIL_SENTINEL);
+        // Shape violations: length mismatch, non-block length, empty body.
+        let mut r3 = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &T_COUNTER, &plain[..32], &body, &mut r3);
+        assert_eq!(r3, crate::fi::FAIL_SENTINEL);
+        let mut r4 = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &T_COUNTER, &plain[..20], &body[..20], &mut r4);
+        assert_eq!(r4, crate::fi::FAIL_SENTINEL);
+        let mut r5 = crate::fi::FAIL_SENTINEL;
+        verify_renc_relation_into(&T_S_ENC, &T_COUNTER, &[], &[], &mut r5);
+        assert_eq!(r5, crate::fi::FAIL_SENTINEL);
+    }
+
 
     // ----- AES-128-ECB KAT — FIPS 197 §C.1 ("AES-128 Cipher Example") -----
     #[test]
