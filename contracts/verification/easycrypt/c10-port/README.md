@@ -1,7 +1,7 @@
 # C10 (SPHINCS+C) EUF-CMA — certified EasyCrypt artifact
 
 Snapshot of the `c10-eufcma-port` research workspace, taken at its commit
-`d878b5e` (2026-08-04, "run 23"), at which **both certification gates are
+`cceb814` (2026-08-04, "run 24"), at which **both certification gates are
 GREEN**.
 
 This directory supersedes the older `../drafts/*.ec` snapshot, which is an
@@ -51,7 +51,7 @@ closure files). A container recipe is in `../docker/`.
 
 ```sh
 export LC_ALL=C          # REQUIRED: identity hashing is collation-sensitive
-bash cert_gate_split.sh  # 23 targets, 75 pins, 1155 census rows
+bash cert_gate_split.sh  # 23 targets, 78 pins, 1156 census rows
 bash cert_gate_fork.sh   # 19 targets,  9 pins, 1089 census rows
 ```
 

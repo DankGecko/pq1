@@ -1,5 +1,11 @@
-# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-04 (run 23: FORS_C_TreePort admitted to the closure).
-# LEDGER=239  PARAMETERS=217  BINDINGS=341  MEANING=358  TOTAL=1155
+# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-04 (run 24: instrumented Gproc game).
+# LEDGER=239  PARAMETERS=217  BINDINGS=341  MEANING=359  TOTAL=1156
+#
+# 2026-08-04 (run 24) -- +1 ROW, AND IT IS A MEANING ROW, NOT A LEDGER ROW.
+# module:EUF_CMA_Gproc_V, the instrumented three-flag Gproc game (option (a)).
+# LEDGER IS UNCHANGED AT 239: the new game and its three lemmas introduce NO
+# assumption -- no admit, axiom, abstract parameter, clone obligation.  Only
+# MEANING moves, 358 -> 359, because there is one more module body to pin.
 #
 # 2026-08-04 (run 23) -- WHY THIS GREW BY 100 ROWS.  cdrafts-split/FORS_C_TreePort.ec
 # (1733 lines, the tree-layer reduction port) was in NEITHER closure, so nothing
@@ -1136,6 +1142,7 @@ cdrafts-split/GprocFORSC10.ec	module:eda793113d32	R_ITSRC10_Gproc	# line 481
 cdrafts-split/GprocFORSC10.ec	module:4113dcb608e8	O_CMA	# line 487
 cdrafts-split/GprocFORSC10.ec	module:0544d6e8b89e	R_fors_p	# line 588
 cdrafts-split/GprocFORSC10.ec	module:87d729951bcb	O_CMA	# line 595
+cdrafts-split/GprocFORSC10.ec	module:fbc0ec28fb21	EUF_CMA_Gproc_V	# line 1346
 cdrafts-split/Grind.ec	operand:716b338edd6c	CntrFT.t	# line 62
 cdrafts-split/Grind.ec	clone-obligation:FinType	CntrFT.enum_spec	# line 62
 cdrafts-split/Grind.ec	clone-discharge:none	CntrFT	# line 62

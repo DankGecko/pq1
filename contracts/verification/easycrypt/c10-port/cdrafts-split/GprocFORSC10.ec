@@ -1304,3 +1304,199 @@ move=> i hi; rewrite hsk.
 have [h1 [h2 h3]] := hR i hi.
 by split.
 qed.
+
+
+(* ===========================================================================
+   OPTION (a) -- THE INSTRUMENTED THREE-FLAG GPROC GAME AND ITS SPLIT.
+   Added 2026-08-04 (run 24).
+
+   WHY THIS SHAPE.  The three keygen bricks above (Gproc_uncovered_gives_witness,
+   GprocKg_sk_eq, GprocKg_keygen_eq) are true, admit-free, gate-certified -- and
+   INERT: grep shows zero consumers anywhere outside this file, and MM45's
+   bounding cascade contains no keygen~keygen step at all, so the correspondence
+   they establish is not a step the template ever takes.  The lesson taken here
+   is to ship the CONSUMER in the same commit as the artifact, which is why
+   gproc_V_split sits directly below the game it splits.
+
+   WHAT THIS BUYS, STATED FLATLY: NOTHING NUMERIC.  gproc_Q_decomposition is an
+   EXACT EQUALITY, and the decomposition step is pure probability algebra that
+   would hold for ANY two flags -- including constant ones.  All of its content
+   is in the flag DEFINITIONS being MM45's (FORS_ES.ec:3216-3242), which is what
+   makes each of the three terms a target for MM45's three reductions.  With all
+   three terms unreduced, Q = T1 + T2 + T3 is still compatible with Q = 1, so
+   this does NOT bound Q and the headline capstone bound is unchanged.
+   What it does is turn one opaque term into three whose reduction templates are
+   known and already written down in the base.
+   =========================================================================== *)
+(* ---------------------------------------------------------------------------
+   EUF_CMA_Gproc_V -- EUF_CMA_Gproc_I plus MM45's two extra ghost break
+   classifiers, ported from base-c10-split/FORS_ES.ec:3196-3243.
+
+   `covered` here IS MM45's valid_ITSR half (C10 states it as an `all`, MM45 as
+   a `forall ... => ... \in`; same predicate).  The two additions are:
+
+     valid_OpenPRE  <- leaf' = leaf     (forged leaf equals honest leaf)
+     valid_TRHTCR   <- root' = root     (forged root equals honest root)
+
+   The selector is MM45's, and it is the COMPUTABLE form of brick 1's
+   existential: `find` on the first index-triple of the forgery's hC that is not
+   in the recorded coverage.  Under !covered such an element exists, so `find`
+   lands in range -- which is what makes the ghost block total.
+   --------------------------------------------------------------------------- *)
+module EUF_CMA_Gproc_V (A : Adv_EUFCMA_Gproc) = {
+  var covered : bool
+  var valid_OpenPRE : bool
+  var valid_TRHTCR : bool
+
+  proc main() : bool = {
+    var ad : adrs;
+    var ps : pseed;
+    var pkFORSnt : FTWES.pkFORS list list;
+    var skFORSnt : FTWES.skFORS list list;
+    var m' : msg;
+    var sig' : sigGproc;
+    var mk' : mkey;
+    var sigFORSTW' : FTWES.sigFORSTW;
+    var cm : FTWES.msgFORSTW;
+    var idx : index;
+    var tidx, kpidx : int;
+    var pkFORS' : FTWES.pkFORS;
+    var is_valid, is_fresh : bool;
+    (* ghost *)
+    var lidxs', cov : (int * int * int) list;
+    var dfidx, dftidx, dflfidx : int;
+    var tidx2, kpidx2 : int;
+    var x' : dgstblock;
+    var ap' : FTWES.apFORSTW;
+    var skF : FTWES.skFORS;
+    var adT : adrs;
+    var leaf', leaf, root', root : dgstblock;
+
+    ad <- adz;
+    ps <$ dpseed;
+    (pkFORSnt, skFORSnt) <@ GprocKg.keygen(ps, ad);
+
+    O_CMA_Gproc_I.init(skFORSnt, ps, ad);
+    (m', sig') <@ A(O_CMA_Gproc_I).forge((pkFORSnt, ps, ad));
+
+    (mk', sigFORSTW') <- sig';
+    (cm, idx) <- FTWES.mco mk' m';
+    (tidx, kpidx) <- edivz (Index.val idx) l';
+
+    pkFORS' <@ FTWES.FL_FORS_ES.pkFORS_from_sigFORSTW(sigFORSTW', cm, ps,
+                 set_kpidx (set_tidx (set_typeidx ad trhftype) tidx) kpidx);
+
+    is_valid <- M.F.predC_fors (FTWES.mco mk' m')
+                /\ pkFORS' = nth witness (nth witness pkFORSnt tidx) kpidx;
+    is_fresh <@ O_CMA_Gproc_I.fresh(m');
+
+    covered <-
+      all (fun x => x \in flatten (map (fun (km : mkey * msg) => M.F.hC km.`1 km.`2)
+                                       O_CMA_Gproc_I.ts))
+          (M.F.hC sig'.`1 m');
+
+    (* ---- ghost instrumentation (MM45 FORS_ES.ec:3216-3242) ---------------- *)
+    lidxs' <- M.F.hC mk' m';
+    cov    <- flatten (map (fun (km : mkey * msg) => M.F.hC km.`1 km.`2)
+                           O_CMA_Gproc_I.ts);
+    (dfidx, dftidx, dflfidx) <-
+      nth witness lidxs' (find (fun i => ! (i \in cov)) lidxs');
+    (x', ap') <- nth witness (FTWES.DBAPKL.val sigFORSTW') dftidx;
+    (tidx2, kpidx2) <- edivz dfidx l';
+    skF <- nth witness (nth witness skFORSnt tidx2) kpidx2;
+    adT <- set_kpidx (set_tidx (set_typeidx ad trhftype) tidx2) kpidx2;
+    leaf' <- f ps (set_thtbidx adT 0 (dftidx * t + dflfidx)) (DigestBlock.val x');
+    leaf  <- nth witness (fors_leaves_op_cube skF ps adT dftidx) dflfidx;
+    valid_OpenPRE <- leaf' = leaf;
+    root' <- FTWES.val_ap_trh ps adT ap' dflfidx leaf' dftidx;
+    root  <- FTWES.val_bt_trh ps adT
+               (list2tree (fors_leaves_op_cube skF ps adT dftidx)) dftidx;
+    valid_TRHTCR <- root' = root;
+
+    return is_valid /\ is_fresh;
+  }
+}.
+
+(* The instrumentation is ghost: it reads only already-computed values and
+   writes only fresh variables, so it moves neither `res` nor `covered`. *)
+lemma gproc_V_eq
+  (A <: Adv_EUFCMA_Gproc{-O_CMA_Gproc_I, -EUF_CMA_Gproc_I, -EUF_CMA_Gproc_V}) &m :
+    Pr[EUF_CMA_Gproc_I(A).main() @ &m : res /\ ! EUF_CMA_Gproc_I.covered]
+  = Pr[EUF_CMA_Gproc_V(A).main() @ &m : res /\ ! EUF_CMA_Gproc_V.covered].
+proof.
+byequiv (_ : ={glob A} ==>
+             res{1} = res{2}
+          /\ EUF_CMA_Gproc_I.covered{1} = EUF_CMA_Gproc_V.covered{2}) => //.
+proc.
+wp.
+(* `sim` cannot decompose the post as displayed: it is an EQUALITY OF TWO `all`
+   APPLICATIONS, not a conjunction of `={...}`.  Strengthen to the ={...} form
+   it can drive; the ghost block has already been absorbed by `wp` and leaves
+   only dead `let` bindings, so nothing about it survives into this goal. *)
+conseq (_ : ={glob A}
+        ==> ={is_valid, is_fresh, sig', m'} /\ ={glob O_CMA_Gproc_I}).
++ by move=> />.
+sim.
+qed.
+
+(* ---------------------------------------------------------------------------
+   THE CONSUMER.  An instrumented game nobody splits on is dead weight -- that
+   is exactly what happened to the three keygen bricks, which have no consumer
+   anywhere in the closure.  So the split lands in the same file as the game.
+
+   This is MM45's first hop (FORS_ES.ec:3849, `rewrite Pr[mu_split ...]`),
+   ported: an EXACT partition of Q over the two new flags.  Equality, not <=;
+   no slack anywhere.
+   --------------------------------------------------------------------------- *)
+lemma gproc_V_split
+  (A <: Adv_EUFCMA_Gproc{-O_CMA_Gproc_I, -EUF_CMA_Gproc_I, -EUF_CMA_Gproc_V}) &m :
+    Pr[EUF_CMA_Gproc_V(A).main() @ &m : res /\ ! EUF_CMA_Gproc_V.covered]
+  =   Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           (res /\ ! EUF_CMA_Gproc_V.covered) /\ EUF_CMA_Gproc_V.valid_OpenPRE]
+    + Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           ((res /\ ! EUF_CMA_Gproc_V.covered) /\ ! EUF_CMA_Gproc_V.valid_OpenPRE)
+           /\ EUF_CMA_Gproc_V.valid_TRHTCR]
+    + Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           ((res /\ ! EUF_CMA_Gproc_V.covered) /\ ! EUF_CMA_Gproc_V.valid_OpenPRE)
+           /\ ! EUF_CMA_Gproc_V.valid_TRHTCR].
+proof.
+(* Each split gets its OWN `have`.  Doing both rewrites on the main goal fails:
+   `rewrite Pr[mu_split X]` picks an instantiation from the first match and then
+   splits EVERY occurrence of that instance -- so the second rewrite also split
+   the valid_OpenPRE term on the RIGHT-hand side, leaving a 3-vs-4 term goal
+   that `ring` cannot close.  Isolating each split keeps one instantiation per
+   rewrite. *)
+have h1 :
+    Pr[EUF_CMA_Gproc_V(A).main() @ &m : res /\ ! EUF_CMA_Gproc_V.covered]
+  =   Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           (res /\ ! EUF_CMA_Gproc_V.covered) /\ EUF_CMA_Gproc_V.valid_OpenPRE]
+    + Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           (res /\ ! EUF_CMA_Gproc_V.covered) /\ ! EUF_CMA_Gproc_V.valid_OpenPRE].
++ by rewrite Pr[mu_split EUF_CMA_Gproc_V.valid_OpenPRE].
+have h2 :
+    Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+         (res /\ ! EUF_CMA_Gproc_V.covered) /\ ! EUF_CMA_Gproc_V.valid_OpenPRE]
+  =   Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           ((res /\ ! EUF_CMA_Gproc_V.covered) /\ ! EUF_CMA_Gproc_V.valid_OpenPRE)
+           /\ EUF_CMA_Gproc_V.valid_TRHTCR]
+    + Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           ((res /\ ! EUF_CMA_Gproc_V.covered) /\ ! EUF_CMA_Gproc_V.valid_OpenPRE)
+           /\ ! EUF_CMA_Gproc_V.valid_TRHTCR].
++ by rewrite Pr[mu_split EUF_CMA_Gproc_V.valid_TRHTCR].
+by rewrite h1 h2; ring.
+qed.
+
+(* Q itself, decomposed.  Combining the two: the UNREDUCED bad-event probability
+   carried by EUFCMA_SPHINCS_PLUS_C10_GROUNDED is EQUAL to three named terms. *)
+lemma gproc_Q_decomposition
+  (A <: Adv_EUFCMA_Gproc{-O_CMA_Gproc_I, -EUF_CMA_Gproc_I, -EUF_CMA_Gproc_V}) &m :
+    Pr[EUF_CMA_Gproc_I(A).main() @ &m : res /\ ! EUF_CMA_Gproc_I.covered]
+  =   Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           (res /\ ! EUF_CMA_Gproc_V.covered) /\ EUF_CMA_Gproc_V.valid_OpenPRE]
+    + Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           ((res /\ ! EUF_CMA_Gproc_V.covered) /\ ! EUF_CMA_Gproc_V.valid_OpenPRE)
+           /\ EUF_CMA_Gproc_V.valid_TRHTCR]
+    + Pr[EUF_CMA_Gproc_V(A).main() @ &m :
+           ((res /\ ! EUF_CMA_Gproc_V.covered) /\ ! EUF_CMA_Gproc_V.valid_OpenPRE)
+           /\ ! EUF_CMA_Gproc_V.valid_TRHTCR].
+proof. by rewrite (gproc_V_eq A &m) (gproc_V_split A &m). qed.

@@ -86,3 +86,14 @@ cdrafts-split/FORS_C_TreePort.ec::op_preimage_core	0c318dbf51965a0c115d4f82aa18d
 cdrafts-split/FORS_C_TreePort.ec::op_extract_wins	ce5b5ae8e1ab95d9918efb9d0481b74c
 cdrafts-split/FORS_C_TreePort.ec::trh_collision_at_div	6baadd44c2f4c0a2a4a47ffdb99005e6
 cdrafts-split/FORS_C_TreePort.ec::op_win_satisfiable	97acef007c041e20ef5f4b87aeacd40d
+# --- option (a): the instrumented three-flag Gproc game (run 24) --------------
+# gproc_Q_decomposition is the deliverable: Q (the unreduced bad-event term in
+# EUFCMA_SPHINCS_PLUS_C10_GROUNDED) EQUALS three named terms over the
+# instrumented game.  Pinned because the decomposition is only as meaningful as
+# the FLAG DEFINITIONS it splits on -- the algebra would hold for constant flags,
+# so a silent edit to EUF_CMA_Gproc_V's ghost block would hollow these out while
+# leaving them provable.  The module body is separately pinned by the census
+# (module:fbc0ec28fb21).  NONE of these bounds Q.
+cdrafts-split/GprocFORSC10.ec::gproc_V_eq	433196c21382dfdc9a92b8b4995c2127
+cdrafts-split/GprocFORSC10.ec::gproc_V_split	22e700d9eaca1b7073af0c03a3079289
+cdrafts-split/GprocFORSC10.ec::gproc_Q_decomposition	0ef81d5067032e8dd67b7f70909ea8e3

@@ -54,6 +54,18 @@
 #         a spurious sortedness warning on the census comparison would mask a
 #         real one.  The FORK census itself is unchanged at 1089 rows.
 #
+# 2026-08-04 (run 24).  split 058ef102... -> e3625fdd....  Fork UNCHANGED
+#   (7ab20d2a...): nothing in the fork's hashed set moved.
+#   Option (a): the instrumented three-flag Gproc game EUF_CMA_Gproc_V, plus
+#   gproc_V_eq / gproc_V_split / gproc_Q_decomposition.  Census +1 row, and it is
+#   a MEANING row (module:fbc0ec28fb21), not a LEDGER row -- LEDGER STAYS AT 239,
+#   so this commit adds three theorems and NO assumption.  EXPECT_PINS 75 -> 78.
+#   IT DOES NOT BOUND Q.  gproc_Q_decomposition is an exact equality whose
+#   decomposition step is probability algebra valid for ANY flags; its content is
+#   that the flags are MM45's (FORS_ES.ec:3216-3242), making each of the three
+#   terms a target for a known reduction.  Q = T1+T2+T3 with all three unreduced
+#   is still compatible with Q = 1.
+#
 # tree	hash
-split	058ef1022c48f5268fd927e0bc1b44b5
+split	e3625fddfe44741b515822749ab3ee2d
 fork	7ab20d2ab0ba2c1f3942408a193b4836
