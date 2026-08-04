@@ -35,6 +35,25 @@
 #   Recomputed with LC_ALL=C on BOTH host and container; the split value agreed
 #   in both, which is the section-35 collation pin still holding.
 #
+# 2026-08-04 (run 23).  split c976d979... -> 058ef102..., fork 3949c473... ->
+#   7ab20d2a....  THIS ONE CHANGES THE ASSUMPTION SET ON PURPOSE -- read it.
+#     (a) cdrafts-split/FORS_C_TreePort.ec (1733 lines) ADMITTED TO THE SPLIT
+#         CLOSURE.  It was in NEITHER closure, so nothing in it was
+#         gate-enforced.  Split census 1055 -> 1155 rows (LEDGER 228->239,
+#         PARAMETERS 169->217, BINDINGS 334->341, MEANING 324->358).  The
+#         assumptions did not appear; they became VISIBLE.  Nine statements
+#         pinned, EXPECT_PINS 66 -> 75.  The new ledger admit is
+#         FORS_C_TreePort::extract_op (admit:3b102492d8ec) -- the OpenPRE branch,
+#         blocked on an UPSTREAM interface change, now impossible to lose track of.
+#     (b) BOTH gates: re-sort after `uniq -c` before `comm`.  `sort | uniq -c`
+#         orders by KEY then prefixes a COUNT, so the result is not whole-line
+#         sorted and `comm` -- which requires that -- warned on the live
+#         baselines.  I could NOT construct a wrong added/removed count in three
+#         attempts, so this is latent fragility, not a demonstrated defect; the
+#         fix is verified answer-preserving (added=100 both ways).  Fixed because
+#         a spurious sortedness warning on the census comparison would mask a
+#         real one.  The FORK census itself is unchanged at 1089 rows.
+#
 # tree	hash
-split	c976d9792285cc3b615e7b89a3056dd1
-fork	3949c47358377bc71c007e1a57a676ee
+split	058ef1022c48f5268fd927e0bc1b44b5
+fork	7ab20d2ab0ba2c1f3942408a193b4836

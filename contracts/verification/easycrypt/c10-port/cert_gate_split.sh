@@ -30,7 +30,7 @@ TMPD=$(mktemp -d) || { echo 'FAIL mktemp'; exit 1; }
 trap 'rm -rf "$TMPD"' EXIT
 # Expected inventory sizes, COMMITTED. A guard that recomputes its expectation
 # from the file it is checking cannot detect truncation of that file.
-EXPECT_PINS=66
+EXPECT_PINS=75
 fail=0
 
 # TREE IDENTITY AND TOOLCHAIN, in the receipt itself.  A green receipt that does
@@ -277,11 +277,24 @@ done < closure-c10-split.txt
 for n in WOTS_TW_ES FL_SL_XMSS_MT_ES FORS_ES SPHINCS_PLUS; do ROOTS="$ROOTS $B/$n.ec"; done
 CERT_CONE_DIRS="base-c10-split,cdrafts-split" python3 tools/cert_cone.py $ROOTS 2>/dev/null \
   | grep -v '^#' | grep -v '^[[:space:]]*$' \
-  | awk -F'\t' 'NF>=3{print $1"\t"$2"\t"$3}' | sort | uniq -c | sed 's/^ *//' > "$TMPD/cone_now.tsv"
+  | awk -F'\t' 'NF>=3{print $1"\t"$2"\t"$3}' | sort | uniq -c | sed 's/^ *//' | sort > "$TMPD/cone_now.tsv"
 if [ ! -s "$TMPD/cone_now.tsv" ]; then echo "FAIL cone census produced nothing"; fail=$((fail+1)); fi
 if [ -f cert-baseline-split.tsv ]; then
+  # RE-SORT AFTER `uniq -c` (added 2026-08-04, run 23).  `sort | uniq -c` emits
+  # lines sorted by KEY but prefixed with a COUNT, so the result is not sorted
+  # by WHOLE LINE -- for keys a<b with counts 19 and 1, it emits "19<TAB>a"
+  # before "1<TAB>b", yet "1<TAB>b" < "19<TAB>a" lexicographically.  `comm`
+  # REQUIRES whole-line-sorted input and warns "input is not in sorted order"
+  # on the live baseline (4 of 975 split rows carry two-digit counts).
+  # HONEST STATUS: I could NOT construct a case where this produced a WRONG
+  # added/removed count -- three attempts, including a hand-built minimal
+  # reproduction, all agreed with a correctly-sorted comparison.  So this is
+  # latent fragility, NOT a demonstrated defect, and the fix is verified
+  # answer-preserving on the live data (added=100 both ways for the TreePort
+  # delta).  It is fixed anyway because a spurious sortedness warning on the
+  # gate's core anti-drift comparison would mask a real one.
   grep -v '^#' cert-baseline-split.tsv | grep -v '^[[:space:]]*$' \
-  | awk -F'\t' 'NF>=3{print $1"\t"$2"\t"$3}' | sort | uniq -c | sed 's/^ *//' > "$TMPD/cone_base.tsv"
+  | awk -F'\t' 'NF>=3{print $1"\t"$2"\t"$3}' | sort | uniq -c | sed 's/^ *//' | sort > "$TMPD/cone_base.tsv"
   add=$(comm -23 "$TMPD/cone_now.tsv" "$TMPD/cone_base.tsv" | wc -l)
   gone=$(comm -13 "$TMPD/cone_now.tsv" "$TMPD/cone_base.tsv" | wc -l)
   echo "cone: keys now=$(wc -l < "$TMPD/cone_now.tsv") baseline=$(wc -l < "$TMPD/cone_base.tsv") | ROWS now=$(awk '{s+=$1} END{print s+0}' "$TMPD/cone_now.tsv") baseline=$(awk '{s+=$1} END{print s+0}' "$TMPD/cone_base.tsv") | added=$add removed=$gone"

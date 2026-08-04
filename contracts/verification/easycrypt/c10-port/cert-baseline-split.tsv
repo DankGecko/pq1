@@ -1,5 +1,27 @@
-# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-02 (adversarial review, run 13c).
-# LEDGER=228  PARAMETERS=169  BINDINGS=334  MEANING=324  TOTAL=1055
+# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-04 (run 23: FORS_C_TreePort admitted to the closure).
+# LEDGER=239  PARAMETERS=217  BINDINGS=341  MEANING=358  TOTAL=1155
+#
+# 2026-08-04 (run 23) -- WHY THIS GREW BY 100 ROWS.  cdrafts-split/FORS_C_TreePort.ec
+# (1733 lines, the tree-layer reduction port) was in NEITHER closure, so nothing
+# in it was gate-enforced: its "proved" claims were checked only by its own prose.
+# Admitting it to the split closure is a deliberate INCREASE in the recorded
+# assumption set, not a regression -- the assumptions were always there, they were
+# simply invisible.  Deltas: LEDGER 228->239, PARAMETERS 169->217, BINDINGS
+# 334->341, MEANING 324->358, TOTAL 1055->1155.
+#
+# THE ONE NEW ADMIT IS THE POINT.  cdrafts-split/FORS_C_TreePort.ec::extract_op
+# (admit:3b102492d8ec) is the OpenPRE branch of the FORS bad-event cascade.  Its
+# own comment records four un-discharged parts -- R-KEY, R-SIM, actual-oracle
+# R-INDEX, R-OPEN -- and states it "requires exposed randomized leaf keygen +
+# faithful simulator", i.e. an UPSTREAM INTERFACE CHANGE, not more proof effort.
+# It is now a pinned ledger row so that status cannot drift silently.
+# The neighbouring TRH branch (extract_trh) is a real byequiv; the file's second
+# apparent "admit" at :1701 is PROSE inside a comment, and the surrounding text
+# records TRCO as CLOSED and machine-checked.
+#
+# NOTE the 7 new `axiom` rows from FORS_C10.ec are the SAME axioms already in the
+# cone via other paths; they are counted per (file, kind, name) key, and TreePort
+# reaches FORS_C10 by a route the previous roots did not cover.
 #
 # THREE CLASSES OF ROW, REPORTED SEPARATELY SO THE HONEST NUMBER STAYS HONEST.
 #
@@ -97,8 +119,6 @@
 # (308 `<-`, 20 `<=`), reproduced by an independent scan of clone-statement heads.
 # Two reviewers reported 349 by methods I could not reproduce.  The row population
 # is the auditable figure; the discrepancy is recorded, not resolved.
-
-
 base-c10-split/FL_SL_XMSS_MT_ES.ec	axiom	dist_adrstypes	# line 92
 base-c10-split/FL_SL_XMSS_MT_ES.ec	axiom	valid_xidxvals_idxvals	# line 342
 base-c10-split/FL_SL_XMSS_MT_ES.ec	refined-const:654a63582c64	ge6_adrslen	# line 20
@@ -933,6 +953,48 @@ base-c10-split/WOTS_TW_ES.ec	module:87c4f34fd130	O_DistRCHi	# line 4560
 base-c10-split/WOTS_TW_ES.ec	module:94dfa2312ace	R	# line 4592
 base-c10-split/WOTS_TW_ES.ec	module:e21cf1d8598b	SM_DT_UD_Ci	# line 4686
 base-c10-split/WOTS_TW_ES.ec	module:1a0289cf30ad	SM_DT_UD_Cir	# line 4713
+cdrafts-split/FORS_C.ec	refined-const:56e286cdcc5d	ge1_k	# line 147
+cdrafts-split/FORS_C.ec	refined-const:66521e84933f	ge1_a	# line 148
+cdrafts-split/FORS_C.ec	operand:688967576dba	G.pp_t	# line 190
+cdrafts-split/FORS_C.ec	operand:dd9d3ae1f775	G.tw_t	# line 190
+cdrafts-split/FORS_C.ec	operand:522e163feb88	G.msg_t	# line 190
+cdrafts-split/FORS_C.ec	operand:17e94f917ca8	G.out_t	# line 190
+cdrafts-split/FORS_C.ec	operand:385363ef3829	G.cntr	# line 190
+cdrafts-split/FORS_C.ec	operand:99b630bd3750	G.f	# line 190
+cdrafts-split/FORS_C.ec	operand:4e9ac24060fd	G.prop	# line 190
+cdrafts-split/FORS_C.ec	clone-discharge:none	G	# line 190
+cdrafts-split/FORS_C.ec	op-annotation:lossless	dmkey	# line 166
+cdrafts-split/FORS_C.ec	op-annotation:lossless	dpseed	# line 167
+cdrafts-split/FORS_C.ec	abstract-type:915af8e092a1	mkey	# line 154
+cdrafts-split/FORS_C.ec	abstract-type:8751c1902df4	msg	# line 155
+cdrafts-split/FORS_C.ec	abstract-type:ec5fe8295274	out_t	# line 156
+cdrafts-split/FORS_C.ec	abstract-type:8b0a31e00a4a	cntr	# line 157
+cdrafts-split/FORS_C.ec	abstract-type:57d2e2e460a5	pseed	# line 159
+cdrafts-split/FORS_C.ec	abstract-type:473caf9371ea	adrs	# line 160
+cdrafts-split/FORS_C.ec	abstract-type:f3c7a62eb06e	pkFORS	# line 161
+cdrafts-split/FORS_C.ec	abstract-type:283becc57670	skFORS	# line 162
+cdrafts-split/FORS_C.ec	abstract-type:c5267f48e62b	sigFORSTW	# line 163
+cdrafts-split/FORS_C.ec	abstract-op:8173d7db4a13	dmkey	# line 166
+cdrafts-split/FORS_C.ec	abstract-op:1812d5a783dc	dpseed	# line 167
+cdrafts-split/FORS_C.ec	abstract-op:9038b82ed1c2	adz	# line 170
+cdrafts-split/FORS_C.ec	abstract-op:b8df9ab2a6e4	mco	# line 176
+cdrafts-split/FORS_C.ec	abstract-op:2222632d9b51	g	# line 177
+cdrafts-split/FORS_C.ec	abstract-op:7e6eab22980e	fkeygen	# line 324
+cdrafts-split/FORS_C.ec	abstract-op:33c823f1dd3f	fsign	# line 327
+cdrafts-split/FORS_C.ec	abstract-op:4ddef1d08e3a	fverify	# line 330
+cdrafts-split/FORS_C.ec	module-type:584708cfc301	Oracle_ITSRC	# line 241
+cdrafts-split/FORS_C.ec	module:26ecc1174808	O_ITSRC_Default	# line 247
+cdrafts-split/FORS_C.ec	module-type:adca8b3c5298	Adv_ITSRC	# line 272
+cdrafts-split/FORS_C.ec	module:942b21e79617	ITSRC	# line 276
+cdrafts-split/FORS_C.ec	module-type:387e97466aa3	SOracle_CMA_FORSC	# line 343
+cdrafts-split/FORS_C.ec	module-type:9306e6689e34	Oracle_CMA_FORSC	# line 347
+cdrafts-split/FORS_C.ec	module-type:d69e0d516f96	Adv_EUFCMA_FORSC	# line 353
+cdrafts-split/FORS_C.ec	module:0443fe670a4f	O_CMA_FORSC	# line 359
+cdrafts-split/FORS_C.ec	module:31fcb8e43fdb	EUF_CMA_FORSC	# line 399
+cdrafts-split/FORS_C.ec	module:3cec104d2102	R_ITSRC_FORSC	# line 428
+cdrafts-split/FORS_C.ec	module:384c4841df0b	O_CMA	# line 435
+cdrafts-split/FORS_C.ec	module:73243a1f870b	O_CMA_FORSC_I	# line 534
+cdrafts-split/FORS_C.ec	module:8231aa213a82	EUF_CMA_FORSC_I	# line 579
 cdrafts-split/FORS_C10.ec	axiom	dmkey_ll	# line 149
 cdrafts-split/FORS_C10.ec	axiom	size_g	# line 166
 cdrafts-split/FORS_C10.ec	axiom	eqiks_g	# line 168
@@ -975,6 +1037,64 @@ cdrafts-split/FORS_C10_Multi.ec	module:ef28fa75ce97	R_ITSRC10_MFORSC10	# line 23
 cdrafts-split/FORS_C10_Multi.ec	module:7f0392034deb	O_CMA	# line 237
 cdrafts-split/FORS_C10_Multi.ec	module:daa3e6a96775	O_CMA_MFORSC10_I	# line 290
 cdrafts-split/FORS_C10_Multi.ec	module:492371521514	EUF_CMA_MFORSC10_I	# line 324
+cdrafts-split/FORS_C_TreePort.ec	admit:3b102492d8ec	extract_op	# line 1511
+cdrafts-split/FORS_C_TreePort.ec	refined-const:244382273ddd	ge1_t_op	# line 142
+cdrafts-split/FORS_C_TreePort.ec	refined-const:a3102ca83068	ge1_t_tcr	# line 213
+cdrafts-split/FORS_C_TreePort.ec	refined-const:5c823f2b88d1	ge1_H_tree	# line 656
+cdrafts-split/FORS_C_TreePort.ec	clone-discharge:none	FC	# line 96
+cdrafts-split/FORS_C_TreePort.ec	op-annotation:lossless	dop_in	# line 141
+cdrafts-split/FORS_C_TreePort.ec	abstract-type:a623268c0016	dgst	# line 109
+cdrafts-split/FORS_C_TreePort.ec	abstract-type:bb853680249a	node	# line 110
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:d22413c3fff4	f_lf	# line 112
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:1a03de82d62d	trh	# line 113
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:28e755152d79	trco	# line 114
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:81c672f9f188	recompute	# line 120
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:2cde3cf7dadc	root_of	# line 125
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:2e78615aa0c1	dop_in	# line 141
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:7447180390fe	all_leaf_tweaks	# line 339
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:5af464ee3d06	opened_leaf_idxs	# line 340
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:3d2f7e17ee6c	sim_sig_op	# line 341
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:5ced3843c103	pk_of_leaves	# line 342
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:0fc3904b9618	trh_targets	# line 350
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:2494ad673e3a	trco_targets	# line 351
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:ce6d1ff4e51c	brk_op	# line 366
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:90ba9ba33fc3	brk_trh	# line 367
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:d92c0557aff7	froots_of	# line 383
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:545ad6110322	croots_of	# line 384
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:c52c34e16021	roots_dgst	# line 385
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:64a3f742c048	leaf_div	# line 386
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:945c6bd43c20	frun	# line 696
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:66cb5f74aa5f	crun	# line 697
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:07e1c2fac5da	inode_tw	# line 698
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:dde757923955	fin_at	# line 699
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:1b1f8b6ff877	cin_at	# line 700
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:c03d51499217	honest_nodes	# line 835
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:a68b09c91e34	leaf_tw	# line 1042
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:f04ac6a2957a	fleaf_in	# line 1043
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:0a699b50e07b	cleaf_out	# line 1044
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:870a9e0667ea	croot_from_leaf	# line 1045
+cdrafts-split/FORS_C_TreePort.ec	abstract-op:04efbf3393c0	leaf_targets	# line 1049
+cdrafts-split/FORS_C_TreePort.ec	module-type:6ab23f913e5a	OP_Oracle	# line 144
+cdrafts-split/FORS_C_TreePort.ec	module:fff86fda80dd	O_OP_Default	# line 154
+cdrafts-split/FORS_C_TreePort.ec	module-type:a3b7b756ca15	Adv_OP	# line 181
+cdrafts-split/FORS_C_TreePort.ec	module:3e0e14ee446e	SM_DT_OpenPRE	# line 186
+cdrafts-split/FORS_C_TreePort.ec	module-type:751cd7c20258	TCR_Oracle	# line 217
+cdrafts-split/FORS_C_TreePort.ec	module-type:9d32cb61d11d	THFC_Oracle	# line 226
+cdrafts-split/FORS_C_TreePort.ec	module:7b1ef2ecd217	O_TRH_Default	# line 233
+cdrafts-split/FORS_C_TreePort.ec	module:ebf5b4e40f17	O_TRH_THFC	# line 245
+cdrafts-split/FORS_C_TreePort.ec	module-type:5c93ef580a52	Adv_TRH	# line 253
+cdrafts-split/FORS_C_TreePort.ec	module:ffa3cf4810ad	SM_DT_TCR_C_TRH	# line 258
+cdrafts-split/FORS_C_TreePort.ec	module:bed58e5b7b8a	O_TRCO_Default	# line 279
+cdrafts-split/FORS_C_TreePort.ec	module:238b852b46de	O_TRCO_THFC	# line 291
+cdrafts-split/FORS_C_TreePort.ec	module-type:93b8cd84ce82	Adv_TRCO	# line 299
+cdrafts-split/FORS_C_TreePort.ec	module:a87175cfe92a	SM_DT_TCR_C_TRCO	# line 304
+cdrafts-split/FORS_C_TreePort.ec	module:4a842723b2aa	R_op	# line 1288
+cdrafts-split/FORS_C_TreePort.ec	module:7d67bb01a4f4	Osign	# line 1295
+cdrafts-split/FORS_C_TreePort.ec	module:834d412ac112	R_trh	# line 1330
+cdrafts-split/FORS_C_TreePort.ec	module:0a5c5f264b66	Osign	# line 1337
+cdrafts-split/FORS_C_TreePort.ec	module:fe72a895d8db	R_trco	# line 1377
+cdrafts-split/FORS_C_TreePort.ec	module:f36b8ee18417	Osign	# line 1384
+cdrafts-split/FORS_C_TreePort.ec	module:8608a79e3489	G_Tree	# line 1420
 cdrafts-split/FxChain.ec	operand:684aa8cf7068	DSSC.pk_t	# line 142
 cdrafts-split/FxChain.ec	operand:43f7ad571014	DSSC.sk_t	# line 142
 cdrafts-split/FxChain.ec	operand:522e163feb88	DSSC.msg_t	# line 142
@@ -987,35 +1107,35 @@ cdrafts-split/FxChain.ec	module:40e59b9d590c	O_CMA_SPHINCSPLUSTWC_FS	# line 439
 cdrafts-split/FxChain.ec	module:bfcce9d1385f	EUF_CMA_SPHINCSPLUSTWC_FS_PRFPRF	# line 506
 cdrafts-split/FxChain.ec	module:4e8de12d256e	EUF_CMA_SPHINCSPLUSTWC_FS_NPRFPRF	# line 527
 cdrafts-split/FxChain.ec	module:c8a927efcfc3	R_SKGPRF_EUFCMA_C	# line 2268
-cdrafts-split/GprocFORSC10.ec	operand:dd9d3ae1f775	M.F.mkey	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:522e163feb88	M.F.msg	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:d01ae9bb134a	M.F.out_t	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:96c550da57e7	M.F.k	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:c15cd04a2988	M.F.a	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:c31c3d0ec42d	M.F.dmkey	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:a83762d30dd5	M.F.mco	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:2d7d4786e261	M.F.g	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:61612567f25d	M.pseed	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:9ae7ae045a8e	M.adrs	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:afe753610572	M.pkFORS	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:bbef76a742a3	M.skFORS	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:5bb0ce44b679	M.sigFORSTW	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:a2ba6bb81603	M.dpseed	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:12884bfe931b	M.adz	# line 119
-cdrafts-split/GprocFORSC10.ec	operand:038e3d6360bb	M.d	# line 119
-cdrafts-split/GprocFORSC10.ec	clone-discharge:list:F.dmkey_ll,F.eqiks_g,F.ge1_a,F.ge1_k,F.neqisvs_g,F.rng_g,F.size_g,F.uniq_g,dpseed_ll,ge1_d|realize:F.dmkey_ll,F.eqiks_g,F.ge1_a,F.ge1_k,F.neqisvs_g,F.rng_g,F.size_g,F.uniq_g,dpseed_ll,ge1_d	M	# line 119
-cdrafts-split/GprocFORSC10.ec	module-type:7562f4b226b5	SOracle_CMA_Gproc	# line 168
-cdrafts-split/GprocFORSC10.ec	module-type:b38245ca92d0	Oracle_CMA_Gproc	# line 172
-cdrafts-split/GprocFORSC10.ec	module-type:b9988bdfe916	Adv_EUFCMA_Gproc	# line 178
-cdrafts-split/GprocFORSC10.ec	module:54b36b535edf	GprocKg	# line 186
-cdrafts-split/GprocFORSC10.ec	module:1984900ef5d6	O_CMA_Gproc	# line 239
-cdrafts-split/GprocFORSC10.ec	module:96a741ba7a2b	EUF_CMA_Gproc	# line 280
-cdrafts-split/GprocFORSC10.ec	module:d8846e9c5a88	O_CMA_Gproc_I	# line 363
-cdrafts-split/GprocFORSC10.ec	module:ad94c1c5eeab	EUF_CMA_Gproc_I	# line 403
-cdrafts-split/GprocFORSC10.ec	module:eda793113d32	R_ITSRC10_Gproc	# line 478
-cdrafts-split/GprocFORSC10.ec	module:4113dcb608e8	O_CMA	# line 484
-cdrafts-split/GprocFORSC10.ec	module:0544d6e8b89e	R_fors_p	# line 585
-cdrafts-split/GprocFORSC10.ec	module:87d729951bcb	O_CMA	# line 592
+cdrafts-split/GprocFORSC10.ec	operand:dd9d3ae1f775	M.F.mkey	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:522e163feb88	M.F.msg	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:d01ae9bb134a	M.F.out_t	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:96c550da57e7	M.F.k	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:c15cd04a2988	M.F.a	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:c31c3d0ec42d	M.F.dmkey	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:a83762d30dd5	M.F.mco	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:2d7d4786e261	M.F.g	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:61612567f25d	M.pseed	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:9ae7ae045a8e	M.adrs	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:afe753610572	M.pkFORS	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:bbef76a742a3	M.skFORS	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:5bb0ce44b679	M.sigFORSTW	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:a2ba6bb81603	M.dpseed	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:12884bfe931b	M.adz	# line 122
+cdrafts-split/GprocFORSC10.ec	operand:038e3d6360bb	M.d	# line 122
+cdrafts-split/GprocFORSC10.ec	clone-discharge:list:F.dmkey_ll,F.eqiks_g,F.ge1_a,F.ge1_k,F.neqisvs_g,F.rng_g,F.size_g,F.uniq_g,dpseed_ll,ge1_d|realize:F.dmkey_ll,F.eqiks_g,F.ge1_a,F.ge1_k,F.neqisvs_g,F.rng_g,F.size_g,F.uniq_g,dpseed_ll,ge1_d	M	# line 122
+cdrafts-split/GprocFORSC10.ec	module-type:7562f4b226b5	SOracle_CMA_Gproc	# line 171
+cdrafts-split/GprocFORSC10.ec	module-type:b38245ca92d0	Oracle_CMA_Gproc	# line 175
+cdrafts-split/GprocFORSC10.ec	module-type:b9988bdfe916	Adv_EUFCMA_Gproc	# line 181
+cdrafts-split/GprocFORSC10.ec	module:54b36b535edf	GprocKg	# line 189
+cdrafts-split/GprocFORSC10.ec	module:1984900ef5d6	O_CMA_Gproc	# line 242
+cdrafts-split/GprocFORSC10.ec	module:96a741ba7a2b	EUF_CMA_Gproc	# line 283
+cdrafts-split/GprocFORSC10.ec	module:d8846e9c5a88	O_CMA_Gproc_I	# line 366
+cdrafts-split/GprocFORSC10.ec	module:ad94c1c5eeab	EUF_CMA_Gproc_I	# line 406
+cdrafts-split/GprocFORSC10.ec	module:eda793113d32	R_ITSRC10_Gproc	# line 481
+cdrafts-split/GprocFORSC10.ec	module:4113dcb608e8	O_CMA	# line 487
+cdrafts-split/GprocFORSC10.ec	module:0544d6e8b89e	R_fors_p	# line 588
+cdrafts-split/GprocFORSC10.ec	module:87d729951bcb	O_CMA	# line 595
 cdrafts-split/Grind.ec	operand:716b338edd6c	CntrFT.t	# line 62
 cdrafts-split/Grind.ec	clone-obligation:FinType	CntrFT.enum_spec	# line 62
 cdrafts-split/Grind.ec	clone-discharge:none	CntrFT	# line 62

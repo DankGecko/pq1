@@ -64,3 +64,25 @@ cdrafts-split/GprocFORSC10.ec::MM45_keygen_pk_from_sk	d33e1cf76a5a60d89a41426060
 cdrafts-split/GprocFORSC10.ec::Gproc_keygen_pk_from_sk	92ba88affc78d87502d93028e5c9def1
 cdrafts-split/GprocFORSC10.ec::pk_pools_eq	d1b55c89a61d2c19ddb58775e8124656
 cdrafts-split/GprocFORSC10.ec::GprocKg_keygen_eq	be111bffff3a01e469c3e8f50064f9ab
+# --- FORS_C_TreePort, admitted to the closure 2026-08-04 (run 23) -------------
+# 1733 lines of tree-layer reduction that were in NEITHER closure until now, so
+# every "proved" claim in the file was checked by its own prose and nothing else.
+# Pinned here so the file's status -- especially WHICH parts are real and which
+# is admitted -- cannot drift.
+#
+# extract_op is THE admit (census row admit:3b102492d8ec).  Its four
+# un-discharged parts (R-KEY, R-SIM, actual-oracle R-INDEX, R-OPEN) need an
+# UPSTREAM interface change (exposed randomized leaf keygen), not more proof.
+# extract_trh / extract_trco are real byequivs; op_preimage_core and
+# op_extract_wins are the two genuinely proved halves of the OpenPRE branch.
+# fors_c_tree_port is the top-level bound they assemble into -- it is a bound on
+# EUF_CMA_FORSC_I, NOT on EUF_CMA_Gproc_I, so it does not bound Q.
+cdrafts-split/FORS_C_TreePort.ec::fors_c_tree_port	a06a38702aed06d54aa243c71061d470
+cdrafts-split/FORS_C_TreePort.ec::extract_op	07220b0a14b5f74aff8bf16edccff966
+cdrafts-split/FORS_C_TreePort.ec::extract_trh	a0d4f5c57fe570535502f56acd0a1733
+cdrafts-split/FORS_C_TreePort.ec::extract_trco	f27e4957dc71c598129eb393c4ea277f
+cdrafts-split/FORS_C_TreePort.ec::instr_eq	a7cb3d56fdb2053e03572ee13c1862fe
+cdrafts-split/FORS_C_TreePort.ec::op_preimage_core	0c318dbf51965a0c115d4f82aa18d34c
+cdrafts-split/FORS_C_TreePort.ec::op_extract_wins	ce5b5ae8e1ab95d9918efb9d0481b74c
+cdrafts-split/FORS_C_TreePort.ec::trh_collision_at_div	6baadd44c2f4c0a2a4a47ffdb99005e6
+cdrafts-split/FORS_C_TreePort.ec::op_win_satisfiable	97acef007c041e20ef5f4b87aeacd40d

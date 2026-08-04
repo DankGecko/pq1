@@ -251,11 +251,18 @@ echo "### PHASE 2 — CONE CENSUS vs cert-baseline.tsv"
 # a crashed cert_cone.py under `2>/dev/null` yields an EMPTY census, hence zero
 # "new items", hence GREEN with zero coverage.  The split gate fixed this at its
 # :62; the fork gate had the identical hole.
+# RE-SORT AFTER `uniq -c` (added 2026-08-04, run 23; same fix in the split gate).
+# `sort | uniq -c` sorts by KEY then prefixes a COUNT, so the output is not
+# sorted by WHOLE LINE: for keys a<b with counts 19 and 1 it emits "19<TAB>a"
+# before "1<TAB>b", while "1<TAB>b" < "19<TAB>a".  `comm` requires whole-line
+# sorted input and warns on the live baselines.  I could NOT construct a case
+# where it produced a wrong added/removed count -- latent fragility, not a
+# demonstrated defect -- but a spurious warning here would mask a real one.
 python3 tools/cert_cone.py 2>/dev/null | grep -v '^#' | grep -v '^$' \
-  | awk -F'\t' 'NF>=3{print $1"\t"$2"\t"$3}' | sort | uniq -c | sed 's/^ *//' > "$TMPD/cone_now.tsv"
+  | awk -F'\t' 'NF>=3{print $1"\t"$2"\t"$3}' | sort | uniq -c | sed 's/^ *//' | sort > "$TMPD/cone_now.tsv"
 if [ ! -s "$TMPD/cone_now.tsv" ]; then echo "FAIL cone census produced nothing"; fail=$((fail+1)); fi
 grep -v '^#' cert-baseline.tsv | grep -v '^[[:space:]]*$' \
-  | awk -F'\t' 'NF>=3{print $1"\t"$2"\t"$3}' | sort | uniq -c | sed 's/^ *//' > "$TMPD/cone_base.tsv"
+  | awk -F'\t' 'NF>=3{print $1"\t"$2"\t"$3}' | sort | uniq -c | sed 's/^ *//' | sort > "$TMPD/cone_base.tsv"
 
 echo "### CONE keys now=$(wc -l < "$TMPD/cone_now.tsv") baseline=$(wc -l < "$TMPD/cone_base.tsv") | ROWS now=$(awk '{s+=$1} END{print s+0}' "$TMPD/cone_now.tsv") baseline=$(awk '{s+=$1} END{print s+0}' "$TMPD/cone_base.tsv")"
 # TWO CLASSES, REPORTED SEPARATELY (run 10) -- see cert_gate_split.sh for the why.

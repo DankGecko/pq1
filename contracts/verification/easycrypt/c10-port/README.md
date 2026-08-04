@@ -1,7 +1,8 @@
 # C10 (SPHINCS+C) EUF-CMA — certified EasyCrypt artifact
 
 Snapshot of the `c10-eufcma-port` research workspace, taken at its commit
-`b095d19` (2026-08-04), at which **both certification gates are GREEN**.
+`d878b5e` (2026-08-04, "run 23"), at which **both certification gates are
+GREEN**.
 
 This directory supersedes the older `../drafts/*.ec` snapshot, which is an
 earlier stage of the same work and is retained only as history.
@@ -21,9 +22,21 @@ theorem, and it is **not a numerically meaningful bound**:
   cannot choose*, where a free real could be set to 1 at will.
 * `Pr[M.F.ITSRC10 ...]` is likewise carried unreduced — that is the FORS+C10
   assumption and the honest headline term.
-* The split cone contains exactly **one admit**, `nhchwcoll_hchwpre_msg`
-  (`base-c10-split/WOTS_TW_ES.ec`), inherited from MM45; the fork cone contains
-  two. Each is pinned by statement digest.
+* Each cone contains **two admits**, every one pinned by statement digest:
+  * split — `nhchwcoll_hchwpre_msg` (`base-c10-split/WOTS_TW_ES.ec`), inherited
+    from MM45; and `extract_op` (`cdrafts-split/FORS_C_TreePort.ec`), the
+    OpenPRE branch of the FORS bad-event cascade. `extract_op`'s own comment
+    names four un-discharged parts (R-KEY, R-SIM, R-INDEX, R-OPEN) and records
+    that closing it needs **exposed randomized leaf keygen** — an upstream
+    interface change, not more proof effort.
+  * fork — `nhchwcoll_hchwpre_msg` and `EUFNAGCMA_FLSLXMSSMTTWESNPRF`, both
+    inherited.
+* `FORS_C_TreePort.ec` (1733 lines) is the prior attempt at bounding `Q`. It was
+  admitted to the split closure in run 23 *specifically so its real status is
+  gate-enforced rather than asserted in its own prose*; certifying it raised the
+  split census by 100 rows. Note what it does and does not bound:
+  `fors_c_tree_port` bounds `EUF_CMA_FORSC_I`, **not** `EUF_CMA_Gproc_I`.
+  Different game. It does not bound `Q`.
 * Deployed-parameter and encoder claims are narrower than their names suggest;
   see `cdrafts-fork/C10DeployedGeometry.ec` sections 35-41.
 
@@ -38,7 +51,7 @@ closure files). A container recipe is in `../docker/`.
 
 ```sh
 export LC_ALL=C          # REQUIRED: identity hashing is collation-sensitive
-bash cert_gate_split.sh  # 22 targets, 66 pins, 1055 census rows
+bash cert_gate_split.sh  # 23 targets, 75 pins, 1155 census rows
 bash cert_gate_fork.sh   # 19 targets,  9 pins, 1089 census rows
 ```
 
