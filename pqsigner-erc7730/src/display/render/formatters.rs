@@ -31,8 +31,7 @@
 
 use super::super::primitives::{
     amount_is_exact_at_fraction_digits, chain_name, format_u64, formatted_collapses_to_zero,
-    write_addr_full, write_addr_full_or_name, write_amount_single_or_two_rows,
-    write_amount_two_rows, write_line, AmountFit,
+    write_addr_full, write_addr_full_or_name, write_amount_two_rows, write_line, AmountFit,
 };
 use super::amount_decision::{
     amount_decision, token_amount_decision, unit_decision, TokenAmountArm,
@@ -49,7 +48,7 @@ use pqsigner_tx_core::eip1559::U256;
 // `walk`'s Kani-proven readers) lives in the host crate so it is itself
 // Kani-verifiable; `render_array` is a thin renderer over its result, and the
 // tests reach it as `formatters::resolve_array`.
-use crate::display::{ascii_str, DISPLAY_COLS, MAX_PAGES};
+use crate::display::{DISPLAY_COLS, MAX_PAGES};
 pub use crate::render::array::resolve_array;
 use crate::render::array::MAX_ARRAY_RENDER;
 use crate::render::calldata_topology::{
@@ -65,21 +64,87 @@ use crate::render::RenderErr;
 
 use super::{Pages, RenderedFieldWitness};
 
-/// One formatting policy serves both the amount paint and any interpolated
-/// intent witness derived from it. A witness is stricter than the paint: it is
-/// minted only when this six-decimal representation is exact, never rounded.
-#[derive(Clone, Copy)]
-struct InterpolatedAmountPolicy {
-    fraction_digits: u32,
-    trim_trailing_zeros: bool,
-    reject_zero_collapse: bool,
+/// Friendly scaled amounts start at six fractional digits, then widen only as
+/// far as needed to preserve every authenticated base unit. The complete
+/// canonical text (including the full authenticated unit) must fit the two
+/// trusted value rows before any page is published.
+const AMOUNT_FRIENDLY_FRACTION_DIGITS: u32 = 6;
+const AMOUNT_TEXT_CAPACITY: usize = DISPLAY_COLS * 2;
+
+/// Allocation-free canonical text shared by the amount painter and the
+/// interpolated-intent witness. Keeping one object prevents a later formatter
+/// change from painting one precision while the title commits to another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExactAmountText {
+    bytes: [u8; AMOUNT_TEXT_CAPACITY],
+    len: u8,
 }
 
-const INTERPOLATED_AMOUNT_POLICY: InterpolatedAmountPolicy = InterpolatedAmountPolicy {
-    fraction_digits: 6,
-    trim_trailing_zeros: true,
-    reject_zero_collapse: true,
-};
+impl ExactAmountText {
+    /// Derive the shortest exact decimal from the signed word and authenticated
+    /// scale/unit. No provider/fixture string enters this decision.
+    fn new(signed_word: [u8; 32], decimals: u32, unit: &[u8]) -> Option<Self> {
+        if unit.iter().any(|&b| !(0x20..0x7f).contains(&b)) {
+            return None;
+        }
+
+        let value = U256(signed_word);
+        let mut fraction_digits = core::cmp::min(decimals, AMOUNT_FRIENDLY_FRACTION_DIGITS);
+        // More than 32 meaningful fractional digits cannot fit a 32-byte text.
+        // If additional digits are all zero, exactness is reached earlier and
+        // trailing-zero normalization produces the same canonical text.
+        let maximum = core::cmp::min(decimals, AMOUNT_TEXT_CAPACITY as u32);
+        while fraction_digits <= maximum {
+            if amount_is_exact_at_fraction_digits(&value, decimals, fraction_digits) {
+                let mut digits = [0u8; 96];
+                let digits_len =
+                    value.format_decimal(decimals, fraction_digits, true, &mut digits)?;
+                if formatted_collapses_to_zero(&value, &digits[..digits_len]) {
+                    return None;
+                }
+                let separator = usize::from(!unit.is_empty());
+                let text_len = digits_len.checked_add(separator)?.checked_add(unit.len())?;
+                if text_len == 0 || text_len > AMOUNT_TEXT_CAPACITY {
+                    return None;
+                }
+
+                let mut bytes = [0u8; AMOUNT_TEXT_CAPACITY];
+                bytes[..digits_len].copy_from_slice(&digits[..digits_len]);
+                let mut cursor = digits_len;
+                if !unit.is_empty() {
+                    bytes[cursor] = b' ';
+                    cursor += 1;
+                    bytes[cursor..cursor + unit.len()].copy_from_slice(unit);
+                }
+                return Some(Self {
+                    bytes,
+                    len: u8::try_from(text_len).ok()?,
+                });
+            }
+            fraction_digits = fraction_digits.checked_add(1)?;
+        }
+        None
+    }
+
+    fn text(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+
+    fn paint(&self, row1: &mut [u8; DISPLAY_COLS], row2: &mut [u8; DISPLAY_COLS]) {
+        *row1 = [b' '; DISPLAY_COLS];
+        *row2 = [b' '; DISPLAY_COLS];
+        let text = self.text();
+        let first = core::cmp::min(text.len(), DISPLAY_COLS);
+        row1[..first].copy_from_slice(&text[..first]);
+        if text.len() > first {
+            row2[..text.len() - first].copy_from_slice(&text[first..]);
+        }
+    }
+
+    fn witness(self) -> Option<RenderedFieldWitness> {
+        RenderedFieldWitness::new(self.bytes, usize::from(self.len))
+    }
+}
 
 /// Exact contract-container values available to field resolution.
 ///
@@ -172,23 +237,14 @@ mod container_context_tests {
     }
 }
 
-/// Pure pre-publication decision shared by every authenticated scaled-amount
-/// sink. Keeping this decision outside the painters lets bounded verification
-/// prove that the exactness gate is material without making decimal/page
-/// rendering reachable.
-#[must_use]
 #[inline]
-fn scaled_amount_prepublication_refuses(value: &U256, decimals: u32) -> bool {
-    !amount_is_exact_at_fraction_digits(value, decimals, INTERPOLATED_AMOUNT_POLICY.fraction_digits)
-}
-
-#[inline]
-fn require_scaled_amount_exact(value: &U256, decimals: u32) -> Result<(), RenderErr> {
-    if scaled_amount_prepublication_refuses(value, decimals) {
-        Err(RenderErr::Reject("7730 inexact scaled value"))
-    } else {
-        Ok(())
-    }
+fn require_exact_amount_text(
+    signed_word: [u8; 32],
+    decimals: u32,
+    unit: &[u8],
+) -> Result<ExactAmountText, RenderErr> {
+    ExactAmountText::new(signed_word, decimals, unit)
+        .ok_or(RenderErr::Reject("7730 inexact scaled value"))
 }
 
 /// Resolved form of a path program — either a slot inside the
@@ -389,10 +445,7 @@ pub(super) fn container_u256(
 /// Read a container field for the `raw` formatter. Address-valued `@.from`
 /// is ABI-word encoded (12 zero bytes followed by the 20-byte sender), while
 /// numeric formatters continue to reject it through [`container_u256`].
-fn container_raw_word(
-    container: &ContractContainerCtx,
-    idx: u16,
-) -> Result<[u8; 32], RenderErr> {
+fn container_raw_word(container: &ContractContainerCtx, idx: u16) -> Result<[u8; 32], RenderErr> {
     if idx == container_field::FROM {
         let sender = container
             .from
@@ -417,9 +470,7 @@ pub(super) fn container_addr(
         // secure UserOp handlers after mnemonic derivation and sender binding;
         // native transactions and EIP-712 synthetic envelopes have no
         // `userop_fields` and therefore still fail closed here.
-        container_field::FROM => container
-            .from
-            .ok_or(RenderErr::Reject("7730 from unbound")),
+        container_field::FROM => container.from.ok_or(RenderErr::Reject("7730 from unbound")),
         _ => Err(RenderErr::Reject("7730 cnt no addr")),
     }
 }
@@ -535,9 +586,7 @@ pub(super) fn dispatch(
     }
     require_integer_path_canonical(ir, field, body, params)?;
     match formatter_route(op) {
-        FormatterRoute::Raw => {
-            render_raw(field, pages, ir, body, container, params).map(|()| None)
-        }
+        FormatterRoute::Raw => render_raw(field, pages, ir, body, container, params).map(|()| None),
         FormatterRoute::Amount => render_amount(field, pages, ir, body, container, params),
         FormatterRoute::TokenAmount => {
             render_token_amount(field, pages, ir, body, container, erc20, resolver, params)
@@ -552,8 +601,7 @@ pub(super) fn dispatch(
             render_duration(field, pages, ir, body, container).map(|()| None)
         }
         FormatterRoute::AddressName => {
-            render_address_name(field, pages, ir, body, container, resolver, params)
-                .map(|()| None)
+            render_address_name(field, pages, ir, body, container, resolver, params).map(|()| None)
         }
         FormatterRoute::Enum => {
             render_enum(field, pages, ir, body, container, params).map(|()| None)
@@ -573,20 +621,12 @@ pub(super) fn dispatch(
         FormatterRoute::ChainId => {
             render_chain_id(field, pages, ir, body, container).map(|()| None)
         }
-        FormatterRoute::TokenTicker => render_token_ticker(
-            field,
-            pages,
-            ir,
-            body,
-            container,
-            erc20,
-            resolver,
-            params,
-        )
-        .map(|()| None),
-        FormatterRoute::InteroperableAddressName => {
-            render_interop_address_name(field, pages, ir, body, container, resolver)
+        FormatterRoute::TokenTicker => {
+            render_token_ticker(field, pages, ir, body, container, erc20, resolver, params)
                 .map(|()| None)
+        }
+        FormatterRoute::InteroperableAddressName => {
+            render_interop_address_name(field, pages, ir, body, container, resolver).map(|()| None)
         }
         FormatterRoute::HardRefuseEncrypted => {
             render_encrypted(field, pages, params).map(|()| None)
@@ -1034,35 +1074,18 @@ fn render_amount(
             write_raw_word_two_pages(pages, p, field.label, &raw).map(|()| None)
         };
     };
-    // `amount` is the descriptor's native-currency formatter. Its trusted
-    // decimal scale is either descriptor-pinned or firmware-pinned by the
-    // known-chain table, so publishing a rounded six-decimal page would make
-    // distinct signed base-unit values paint identically. Refuse before the
-    // first page append (and therefore before transcript/CFI publication).
-    require_scaled_amount_exact(&value, d.decimals)?;
+    // Derive the complete exact text before the first page append (and
+    // therefore before transcript/CFI publication). The same bytes paint the
+    // field and, when enrolled, become the interpolated-title witness.
+    let amount_text = require_exact_amount_text(raw, d.decimals, d.unit)?;
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
-    let fit = {
+    {
         let [_, r1, r2, foot] = pages.page_mut(p);
-        let fit = write_amount_single_or_two_rows(
-            r1,
-            r2,
-            &value,
-            d.decimals,
-            INTERPOLATED_AMOUNT_POLICY.fraction_digits,
-            INTERPOLATED_AMOUNT_POLICY.trim_trailing_zeros,
-            INTERPOLATED_AMOUNT_POLICY.reject_zero_collapse,
-            ascii_str(d.unit),
-        );
-        if fit == AmountFit::Full {
-            write_line(foot, "> next");
-        }
-        fit
-    };
-    if fit == AmountFit::Overflow {
-        return write_raw_word_two_pages(pages, p, field.label, &raw).map(|()| None);
+        amount_text.paint(r1, r2);
+        write_line(foot, "> next");
     }
-    Ok(make_amount_witness(raw, d.decimals, d.unit))
+    Ok(amount_text.witness())
 }
 
 fn render_token_amount(
@@ -1102,14 +1125,15 @@ fn render_token_amount(
     // the MEDIUM-1 identity-page rule.
     let decision = token_amount_decision(&raw, token_addr, erc20, container.chain_id, params);
 
-    // Every `Bound` arm has an authenticated scale: either a descriptor-pinned
-    // native sentinel or exact-chain/address ERC-20 metadata. Enforce the same
-    // pre-publication exactness contract as `render_amount` for both. The
-    // threshold / unlimited arms are semantic and paint no rounded number;
-    // `UnverifiedRaw` has no trusted scale and stays an exact raw-integer path.
-    if let TokenAmountArm::Bound { decimals, .. } = &decision.arm {
-        require_scaled_amount_exact(&value, *decimals)?;
-    }
+    // Every `Bound` arm has an authenticated scale. Build its complete exact
+    // text before any page or identity publication; semantic threshold arms
+    // paint no amount, and unknown-scale arms retain exact raw rendering.
+    let bound_text = match &decision.arm {
+        TokenAmountArm::Bound { decimals, ticker } => {
+            Some(require_exact_amount_text(raw, *decimals, ticker)?)
+        }
+        _ => None,
+    };
 
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
@@ -1147,37 +1171,23 @@ fn render_token_amount(
                 write_line(r2, "(unverified)");
                 write_line(foot, "> next");
             }
-            TokenAmountArm::Bound { decimals, ticker } => {
-                let fit = write_amount_single_or_two_rows(
-                    r1,
-                    r2,
-                    &value,
-                    decimals,
-                    INTERPOLATED_AMOUNT_POLICY.fraction_digits,
-                    INTERPOLATED_AMOUNT_POLICY.trim_trailing_zeros,
-                    INTERPOLATED_AMOUNT_POLICY.reject_zero_collapse,
-                    ascii_str(ticker),
-                );
-                if fit == AmountFit::Full {
-                    write_line(foot, "> next");
-                    // The witness is minted from the same signed word and the
-                    // exact decimals/ticker decision that just painted this
-                    // page. For a non-native token, independently re-check the
-                    // metadata's chain as well as its contract before allowing
-                    // the banner to summarize it.
-                    let metadata_chain_bound = !bound_non_native
-                        || matches!(
-                                (token_addr, erc20),
-                                (Some(addr), Some(meta))
-                                    if meta.chain_id == container.chain_id && meta.contract == addr
-                        );
-                    if metadata_chain_bound {
-                        witness = make_amount_witness(raw, decimals, ticker);
-                    }
-                } else {
-                    raw_fallback = true;
+            TokenAmountArm::Bound { ticker, .. } => {
+                let amount_text = bound_text.expect("bound arm precomputes exact amount text");
+                amount_text.paint(r1, r2);
+                write_line(foot, "> next");
+                // For a non-native token, independently re-check the metadata's
+                // chain as well as its contract before allowing the banner to
+                // summarize it. The witness reuses the painted bytes.
+                let metadata_chain_bound = !bound_non_native
+                    || matches!(
+                            (token_addr, erc20),
+                            (Some(addr), Some(meta))
+                                if meta.chain_id == container.chain_id && meta.contract == addr
+                    );
+                if metadata_chain_bound {
+                    witness = amount_text.witness();
                 }
-                if bound_non_native || fit != AmountFit::Full {
+                if bound_non_native {
                     bound_identity_ticker = Some(ticker);
                 }
             }
@@ -1219,67 +1229,9 @@ fn render_token_amount(
     Ok(witness)
 }
 
-/// Build the canonical, unpadded substitution text for the exact formatting
-/// inputs used by the amount page. Returning `None` is fail-closed: the field
-/// page may still truthfully render, but an enrolled interpolated title cannot
-/// summarize a raw fallback, zero-collapse, or value wider than two title rows.
-fn make_amount_witness(
-    signed_word: [u8; 32],
-    decimals: u32,
-    unit: &[u8],
-) -> Option<RenderedFieldWitness> {
-    if unit.iter().any(|&b| !(0x20..0x7f).contains(&b)) {
-        return None;
-    }
-    // Derive every decision from the exact signed word. Accepting a second
-    // caller-supplied U256 would let the witness summarize different bytes.
-    let value = U256(signed_word);
-    if !amount_is_exact_at_fraction_digits(
-        &value,
-        decimals,
-        INTERPOLATED_AMOUNT_POLICY.fraction_digits,
-    ) {
-        return None;
-    }
-    let mut digits = [0u8; 96];
-    let digits_len = value.format_decimal(
-        decimals,
-        INTERPOLATED_AMOUNT_POLICY.fraction_digits,
-        INTERPOLATED_AMOUNT_POLICY.trim_trailing_zeros,
-        &mut digits,
-    )?;
-    if INTERPOLATED_AMOUNT_POLICY.reject_zero_collapse
-        && formatted_collapses_to_zero(&value, &digits[..digits_len])
-    {
-        return None;
-    }
-    let separator = usize::from(!unit.is_empty());
-    let text_len = digits_len.checked_add(separator)?.checked_add(unit.len())?;
-    if text_len == 0 || text_len > 32 {
-        return None;
-    }
-    let mut text = [0u8; 32];
-    text[..digits_len].copy_from_slice(&digits[..digits_len]);
-    let mut cursor = digits_len;
-    if !unit.is_empty() {
-        text[cursor] = b' ';
-        cursor += 1;
-        text[cursor..cursor + unit.len()].copy_from_slice(unit);
-    }
-    RenderedFieldWitness::new(text, text_len)
-}
-
 #[cfg(test)]
-mod amount_witness_tests {
+mod exact_amount_text_tests {
     use super::*;
-
-    #[test]
-    fn witness_is_the_complete_scaled_text_and_unit() {
-        let mut raw = [0u8; 32];
-        raw[29..].copy_from_slice(&1_000_000u32.to_be_bytes()[1..]);
-        let witness = make_amount_witness(raw, 6, b"USDT").unwrap();
-        assert_eq!(witness.text(), b"1 USDT");
-    }
 
     fn word_from_u128(value: u128) -> [u8; 32] {
         let mut word = [0u8; 32];
@@ -1288,31 +1240,69 @@ mod amount_witness_tests {
     }
 
     #[test]
-    fn witness_requires_exact_six_decimal_representation() {
-        let exact = word_from_u128(1_500_000_000_000_000_000);
-        assert_eq!(
-            make_amount_witness(exact, 18, b"ETH").unwrap().text(),
-            b"1.5 ETH"
-        );
-
-        let one_wei_more = word_from_u128(1_500_000_000_000_000_001);
-        assert!(make_amount_witness(one_wei_more, 18, b"ETH").is_none());
-
-        // This would round 0.9999995 ETH across the integer boundary under the
-        // painter's half-up policy. The page remains truthful, but it may not
-        // mint an interpolated summary witness.
-        let rounding_carry = word_from_u128(999_999_500_000_000_000);
-        assert!(make_amount_witness(rounding_carry, 18, b"ETH").is_none());
+    fn exact_text_selects_zero_six_seven_and_eighteen_fractional_digits() {
+        let cases = [
+            (2_000_000_000_000_000_000u128, b"2 ETH".as_slice()),
+            (1_234_567_000_000_000_000, b"1.234567 ETH".as_slice()),
+            (1_234_567_800_000_000_000, b"1.2345678 ETH".as_slice()),
+            (
+                1_078_608_424_000_534_547,
+                b"1.078608424000534547 ETH".as_slice(),
+            ),
+        ];
+        for (raw, expected) in cases {
+            let text = ExactAmountText::new(word_from_u128(raw), 18, b"ETH").unwrap();
+            assert_eq!(text.text(), expected);
+            assert_eq!(text.witness().unwrap().text(), expected);
+        }
     }
 
     #[test]
-    fn witness_refuses_zero_collapse_and_overwide_exact_values() {
-        let mut tiny_raw = [0u8; 32];
-        tiny_raw[31] = 1;
-        assert!(make_amount_witness(tiny_raw, 36, b"ETH").is_none());
+    fn exact_text_normalizes_zeros_keeps_dust_and_distinguishes_neighbors() {
+        let normalized =
+            ExactAmountText::new(word_from_u128(1_230_000_000_000_000_000), 18, b"ETH").unwrap();
+        assert_eq!(normalized.text(), b"1.23 ETH");
 
-        let huge_raw = [0xFF; 32];
-        assert!(make_amount_witness(huge_raw, 0, b"USDT").is_none());
+        let dust = ExactAmountText::new(word_from_u128(1), 18, b"ETH").unwrap();
+        assert_eq!(dust.text(), b"0.000000000000000001 ETH");
+
+        let a =
+            ExactAmountText::new(word_from_u128(1_078_608_424_000_534_547), 18, b"ETH").unwrap();
+        let b =
+            ExactAmountText::new(word_from_u128(1_078_608_424_000_534_548), 18, b"ETH").unwrap();
+        assert_ne!(a.text(), b.text());
+    }
+
+    #[test]
+    fn exact_text_paints_the_same_complete_bytes_and_refuses_over_capacity() {
+        let text =
+            ExactAmountText::new(word_from_u128(1_078_608_424_000_534_547), 18, b"ETH").unwrap();
+        let mut row1 = [b' '; DISPLAY_COLS];
+        let mut row2 = [b' '; DISPLAY_COLS];
+        text.paint(&mut row1, &mut row2);
+        let mut painted = [0u8; AMOUNT_TEXT_CAPACITY];
+        painted[..DISPLAY_COLS].copy_from_slice(&row1);
+        painted[DISPLAY_COLS..].copy_from_slice(&row2);
+        let painted_len = painted
+            .iter()
+            .rposition(|&b| b != b' ')
+            .map_or(0, |i| i + 1);
+        assert_eq!(&painted[..painted_len], text.text());
+
+        assert!(ExactAmountText::new([0xff; 32], 0, b"ETH").is_none());
+        assert!(ExactAmountText::new(word_from_u128(1), 36, b"ETH").is_none());
+        assert!(ExactAmountText::new(word_from_u128(1), 18, b"E\nTH").is_none());
+    }
+
+    #[test]
+    fn exact_text_accepts_32_cells_and_refuses_33() {
+        // 10^27 has 28 decimal digits; the separator plus `ETH` fills the
+        // two 16-cell value rows exactly. One more integer digit must refuse
+        // rather than clip the value or its authenticated unit.
+        let exact_32 = ExactAmountText::new(word_from_u128(10u128.pow(27)), 0, b"ETH")
+            .expect("32-cell exact amount must fit");
+        assert_eq!(exact_32.text().len(), AMOUNT_TEXT_CAPACITY);
+        assert!(ExactAmountText::new(word_from_u128(10u128.pow(28)), 0, b"ETH").is_none());
     }
 }
 
@@ -2507,21 +2497,12 @@ pub(super) fn render_eip712_string_preimage(
                 write_line_bytes(pages.row_mut(page, 2), &chunk[DISPLAY_COLS..]);
             }
         }
-        write_eip712_string_footer(
-            pages.row_mut(page, 3),
-            part + 1,
-            page_count,
-            preimage.len(),
-        );
+        write_eip712_string_footer(pages.row_mut(page, 3), part + 1, page_count, preimage.len());
     }
     Ok(())
 }
 
-fn append_small_decimal(
-    row: &mut [u8; DISPLAY_COLS],
-    mut position: usize,
-    value: usize,
-) -> usize {
+fn append_small_decimal(row: &mut [u8; DISPLAY_COLS], mut position: usize, value: usize) -> usize {
     let mut digits = [0u8; 3];
     let mut remaining = value;
     let mut count = 0usize;
@@ -2810,16 +2791,21 @@ pub(super) fn render_array_with_mode(
     // Inspect every authenticated scaled word before the array header, token
     // identity, or any earlier element can mutate `Pages`. Unknown-scale
     // amount/token paths deliberately remain exact raw-integer renderings.
-    let scaled_decimals = match fmt {
-        FormatOp::Amount => amount_decision(container.chain_id, params).map(|d| d.decimals),
-        FormatOp::Unit => Some(unit_decision(params).decimals),
-        FormatOp::TokenAmount => bound_token.map(|(decimals, _, _)| decimals),
+    let scaled_format: Option<(u32, &[u8])> = match fmt {
+        FormatOp::Amount => amount_decision(container.chain_id, params)
+            .map(|d| (d.decimals, params.base.unwrap_or(b""))),
+        FormatOp::Unit => {
+            let d = unit_decision(params);
+            Some((d.decimals, d.unit))
+        }
+        FormatOp::TokenAmount => bound_token.map(|(decimals, ticker, _)| (decimals, ticker)),
         _ => None,
     };
-    if let Some(decimals) = scaled_decimals {
+    let mut exact_amount_texts = [None; MAX_ARRAY_RENDER];
+    if let Some((decimals, unit)) = scaled_format {
         for i in 0..count {
             let word = array_element_word(full_body, elems_start, i)?;
-            require_scaled_amount_exact(&U256(*word), decimals)?;
+            exact_amount_texts[i] = Some(require_exact_amount_text(*word, decimals, unit)?);
         }
     }
 
@@ -2854,6 +2840,7 @@ pub(super) fn render_array_with_mode(
             pages,
             container,
             bound_token,
+            exact_amount_texts[i],
             resolver,
             params,
         )?;
@@ -2931,6 +2918,7 @@ fn render_array_element(
     pages: &mut Pages,
     container: &ContractContainerCtx,
     bound_token: Option<(u32, &[u8], [u8; 20])>,
+    exact_amount_text: Option<ExactAmountText>,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
@@ -2939,7 +2927,7 @@ fn render_array_element(
     match fmt {
         FormatOp::Amount => {
             let value = U256(*word);
-            let Some(amount) = amount_decision(container.chain_id, params) else {
+            let Some(_amount) = amount_decision(container.chain_id, params) else {
                 let [_, r1, r2, foot] = pages.page_mut(p);
                 let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
                 if fit == AmountFit::Full {
@@ -2948,29 +2936,15 @@ fn render_array_element(
                 }
                 return write_raw_word_two_pages(pages, p, field.label, word);
             };
-            let decimals = amount.decimals;
             // Preserve the existing array display contract: unlike scalar
             // native `amount`, an array carries a unit only when the descriptor
             // explicitly supplies `base`. The known-chain lookup above is used
             // solely to authenticate the otherwise-default 18-decimal scale.
-            let unit = params.base.unwrap_or(b"");
             let [_, r1, r2, foot] = pages.page_mut(p);
-            let fit = write_amount_two_rows(
-                r1,
-                r2,
-                &value,
-                decimals,
-                INTERPOLATED_AMOUNT_POLICY.fraction_digits,
-                INTERPOLATED_AMOUNT_POLICY.trim_trailing_zeros,
-                INTERPOLATED_AMOUNT_POLICY.reject_zero_collapse,
-                ascii_str(unit),
-            );
-            if fit == AmountFit::Full {
-                write_line(foot, "> next");
-                Ok(())
-            } else {
-                write_raw_word_two_pages(pages, p, field.label, word)
-            }
+            let amount_text = exact_amount_text.expect("scaled amount array was precomputed");
+            amount_text.paint(r1, r2);
+            write_line(foot, "> next");
+            Ok(())
         }
         FormatOp::Unit => {
             // A value with a unit suffix (e.g. a percentage list) — same shape
@@ -2978,26 +2952,11 @@ fn render_array_element(
             if params.prefix.is_some_and(|v| v != 0) || params.suffix.is_some() {
                 return Err(RenderErr::Reject("7730 unit affix unsupported"));
             }
-            let value = U256(*word);
-            let decimals = u32::from(params.decimals.unwrap_or(0));
-            let unit = params.base.unwrap_or(b"");
             let [_, r1, r2, foot] = pages.page_mut(p);
-            let fit = write_amount_two_rows(
-                r1,
-                r2,
-                &value,
-                decimals,
-                INTERPOLATED_AMOUNT_POLICY.fraction_digits,
-                INTERPOLATED_AMOUNT_POLICY.trim_trailing_zeros,
-                INTERPOLATED_AMOUNT_POLICY.reject_zero_collapse,
-                ascii_str(unit),
-            );
-            if fit == AmountFit::Full {
-                write_line(foot, "> next");
-                Ok(())
-            } else {
-                write_raw_word_two_pages(pages, p, field.label, word)
-            }
+            let amount_text = exact_amount_text.expect("scaled unit array was precomputed");
+            amount_text.paint(r1, r2);
+            write_line(foot, "> next");
+            Ok(())
         }
         FormatOp::TokenAmount => {
             // Amount of the array's shared token. `bound_token` was resolved +
@@ -3008,22 +2967,11 @@ fn render_array_element(
             let value = U256(*word);
             let [_, r1, r2, foot] = pages.page_mut(p);
             match bound_token {
-                Some((decimals, ticker, _token_contract)) => {
-                    let fit = write_amount_two_rows(
-                        r1,
-                        r2,
-                        &value,
-                        decimals,
-                        INTERPOLATED_AMOUNT_POLICY.fraction_digits,
-                        INTERPOLATED_AMOUNT_POLICY.trim_trailing_zeros,
-                        INTERPOLATED_AMOUNT_POLICY.reject_zero_collapse,
-                        ascii_str(ticker),
-                    );
-                    if fit == AmountFit::Full {
-                        write_line(foot, "> next");
-                    } else {
-                        write_raw_word_two_pages(pages, p, field.label, word)?;
-                    }
+                Some((_decimals, _ticker, _token_contract)) => {
+                    let amount_text =
+                        exact_amount_text.expect("bound token amount array was precomputed");
+                    amount_text.paint(r1, r2);
+                    write_line(foot, "> next");
                 }
                 None => {
                     let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
@@ -3155,33 +3103,17 @@ fn render_unit(
         Resolved::Slot32(b) => *b,
         Resolved::Container(idx) => container_u256(container, idx)?,
     };
-    let value = U256(bytes);
     // Decision half factored to `amount_decision::unit_decision` (M4):
     // decimals default 0 (a bare count), unit defaults empty — the 18-vs-0
     // asymmetry with `render_amount` is ∀-pinned there.
     let d = unit_decision(params);
-    require_scaled_amount_exact(&value, d.decimals)?;
+    let amount_text = require_exact_amount_text(bytes, d.decimals, d.unit)?;
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
-    let fit = {
+    {
         let [_, r1, r2, foot] = pages.page_mut(p);
-        let fit = write_amount_single_or_two_rows(
-            r1,
-            r2,
-            &value,
-            d.decimals,
-            INTERPOLATED_AMOUNT_POLICY.fraction_digits,
-            INTERPOLATED_AMOUNT_POLICY.trim_trailing_zeros,
-            INTERPOLATED_AMOUNT_POLICY.reject_zero_collapse,
-            ascii_str(d.unit),
-        );
-        if fit == AmountFit::Full {
-            write_line(foot, "> next");
-        }
-        fit
-    };
-    if fit == AmountFit::Overflow {
-        return write_raw_word_two_pages(pages, p, field.label, &bytes);
+        amount_text.paint(r1, r2);
+        write_line(foot, "> next");
     }
     Ok(())
 }
@@ -4666,7 +4598,9 @@ mod encrypted_formatter_declines {
             param_off: 0,
         };
         let mut pages = Pages::with_len(0);
-        let r = dispatch(&field, &mut pages, &ir, &body, &tx, None, &resolver, &params);
+        let r = dispatch(
+            &field, &mut pages, &ir, &body, &tx, None, &resolver, &params,
+        );
         assert!(
             r.is_err(),
             "encrypted field must abort the descriptor render"
@@ -4936,10 +4870,9 @@ mod kani_harness {
     /// unlimited row-shape is painted).
     const NATIVE_SENTINEL: [u8; 20] = [0xEE; 20];
 
-    /// Concrete materiality proof for the shared scaled-amount exactness
-    /// decision. It intentionally calls only the pure helper: disabling that
-    /// helper must fail here without making any decimal or page painter
-    /// reachable.
+    /// Concrete materiality proof for the precision search: a value that is
+    /// not exact at the friendly six-digit baseline becomes exact at the full
+    /// authenticated scale.
     #[kani::proof]
     #[kani::unwind(34)]
     fn fmt_p0_native_amount_prepublication_decision_concrete() {
@@ -4951,19 +4884,15 @@ mod kani_harness {
         exact_word[16..].copy_from_slice(&1_000_000_000_000_000_000u128.to_be_bytes());
         let exact = U256(exact_word);
 
-        assert!(scaled_amount_prepublication_refuses(&inexact, 18));
-        assert!(!scaled_amount_prepublication_refuses(&exact, 18));
-        assert!(!scaled_amount_prepublication_refuses(&U256::zero(), 18));
-
-        let mut decimals = 0u32;
-        while decimals <= INTERPOLATED_AMOUNT_POLICY.fraction_digits {
-            assert!(!scaled_amount_prepublication_refuses(&inexact, decimals));
-            decimals += 1;
-        }
+        assert!(!amount_is_exact_at_fraction_digits(&inexact, 18, 6));
+        assert!(amount_is_exact_at_fraction_digits(&inexact, 18, 18));
+        assert!(amount_is_exact_at_fraction_digits(&exact, 18, 6));
+        assert!(amount_is_exact_at_fraction_digits(&U256::zero(), 18, 6));
     }
 
     /// Caller-level integration pin for the ordinary native `amount` sink:
-    /// one discarded wei must refuse before mutating the page transcript.
+    /// one additional wei must now render exactly rather than collide with the
+    /// neighboring six-decimal value.
     #[kani::proof]
     #[kani::unwind(34)]
     fn fmt_p0_native_amount_inexact_refuses_before_publication() {
@@ -4979,15 +4908,12 @@ mod kani_harness {
             &envelope(),
             &ParamSet::default(),
         );
-        assert!(matches!(
-            result,
-            Err(RenderErr::Reject("7730 inexact scaled value"))
-        ));
-        assert!(pages.len == 0);
+        assert!(result.is_ok());
+        assert!(pages.len == 1);
     }
 
     /// Caller-level twin for a descriptor-pinned native sentinel routed
-    /// through `tokenAmount`; the same signed value must not paint first.
+    /// through `tokenAmount`; the same signed value must render exactly.
     #[kani::proof]
     #[kani::unwind(34)]
     fn fmt_p0_native_token_amount_inexact_refuses_before_publication() {
@@ -5008,11 +4934,8 @@ mod kani_harness {
             &NameResolver::new(),
             &params,
         );
-        assert!(matches!(
-            result,
-            Err(RenderErr::Reject("7730 inexact scaled value"))
-        ));
-        assert!(pages.len == 0);
+        assert!(result.is_ok());
+        assert!(pages.len == 1);
     }
 
     fn unlimited_params(threshold: &[u8; 32]) -> ParamSet<'_> {
@@ -5276,16 +5199,7 @@ mod kani_harness {
         params.const_value = Some(&backing[..clen]);
         let f = mk_field(FormatOp::Raw as u8, 0);
         let mut pages = Pages::with_len(0);
-        let r = dispatch(
-            &f,
-            &mut pages,
-            &ir,
-            &[],
-            &tx,
-            None,
-            &resolver,
-            &params,
-        );
+        let r = dispatch(&f, &mut pages, &ir, &[], &tx, None, &resolver, &params);
         assert!(r.is_ok());
         assert!(pages.len == 1);
         let k: usize = kani::any();
@@ -5305,16 +5219,7 @@ mod kani_harness {
         params.const_value = Some(b"Vault share (ERC4626");
         let f = mk_field(FormatOp::Raw as u8, 0);
         let mut pages = Pages::with_len(0);
-        let r = dispatch(
-            &f,
-            &mut pages,
-            &ir,
-            &[],
-            &tx,
-            None,
-            &resolver,
-            &params,
-        );
+        let r = dispatch(&f, &mut pages, &ir, &[], &tx, None, &resolver, &params);
         assert!(r.is_ok());
         assert!(pages.buf[0][1] == *b"Vault share (ERC");
         assert!(pages.buf[0][2] == *b"4626            ");
@@ -6067,16 +5972,16 @@ mod adversarial_renderer_regressions {
         pages
     }
 
-    fn assert_array_exact_then_second_inexact(
+    fn assert_array_high_precision_then_overwide_refuses(
         fmt: FormatOp,
         params: &ParamSet<'_>,
         erc20: Option<&Erc20Metadata<'_>>,
         expected_exact_pages: usize,
     ) {
         let exact = word_from_u128(1_000_000_000_000_000_000);
-        let inexact = word_from_u128(1_000_000_000_000_000_001);
+        let high_precision = word_from_u128(1_000_000_000_000_000_001);
 
-        let exact_body = two_element_array_body(exact, exact);
+        let exact_body = two_element_array_body(exact, high_precision);
         let mut exact_pages = Pages::with_len(0);
         render_array(
             &field(fmt as u8, 1),
@@ -6089,10 +5994,10 @@ mod adversarial_renderer_regressions {
             &NameResolver::new(),
             params,
         )
-        .expect("exact scaled array must render");
+        .expect("high-precision scaled array must render exactly");
         assert_eq!(exact_pages.len, expected_exact_pages);
 
-        let inexact_body = two_element_array_body(exact, inexact);
+        let overwide_body = two_element_array_body(exact, exact_eighteen_decimal_overflow_word());
         let mut pages = sentinel_pages();
         let before_len = pages.len;
         let before_buf = pages.buf;
@@ -6101,7 +6006,7 @@ mod adversarial_renderer_regressions {
                 &field(fmt as u8, 1),
                 &mut pages,
                 &ir(&SOLE_ARRAY_POOL),
-                &inexact_body,
+                &overwide_body,
                 1,
                 &tx(),
                 erc20,
@@ -6115,7 +6020,7 @@ mod adversarial_renderer_regressions {
     }
 
     #[test]
-    fn scaled_exactness_scalar_unit_accepts_exact_and_rejects_atomically() {
+    fn scalar_unit_widens_exactly_and_rejects_over_capacity_atomically() {
         let mut params = ParamSet::default();
         params.decimals = Some(18);
         params.base = Some(b"shares");
@@ -6133,7 +6038,20 @@ mod adversarial_renderer_regressions {
         .expect("exact unit must render");
         assert_eq!(&exact_pages.buf[0][1][..8], b"1 shares");
 
-        let inexact = word_from_u128(1_000_000_000_000_000_001);
+        let high_precision = word_from_u128(1_000_000_000_000_000_001);
+        let mut high_precision_pages = Pages::with_len(0);
+        render_unit(
+            &field(FormatOp::Unit as u8, 1),
+            &mut high_precision_pages,
+            &ir(&SLOT_POOL),
+            &high_precision,
+            &tx(),
+            &params,
+        )
+        .expect("high-precision unit must render exactly");
+        assert_eq!(high_precision_pages.buf[0][1], *b"1.00000000000000");
+        assert_eq!(&high_precision_pages.buf[0][2][..11], b"0001 shares");
+
         let mut pages = sentinel_pages();
         let before_len = pages.len;
         let before_buf = pages.buf;
@@ -6142,7 +6060,7 @@ mod adversarial_renderer_regressions {
                 &field(FormatOp::Unit as u8, 1),
                 &mut pages,
                 &ir(&SLOT_POOL),
-                &inexact,
+                &exact_eighteen_decimal_overflow_word(),
                 &tx(),
                 &params,
             ),
@@ -6153,7 +6071,7 @@ mod adversarial_renderer_regressions {
     }
 
     #[test]
-    fn scaled_exactness_non_native_bound_token_accepts_exact_and_rejects_atomically() {
+    fn bound_token_widens_exactly_and_rejects_over_capacity_atomically() {
         let contract = [0x91; 20];
         let meta = metadata(contract, b"TOK");
         let mut params = ParamSet::default();
@@ -6174,7 +6092,24 @@ mod adversarial_renderer_regressions {
         .expect("exact bound token amount must render");
         assert_eq!(&exact_pages.buf[0][1][..5], b"1 TOK");
 
-        let inexact = word_from_u128(1_000_000_000_000_000_001);
+        let high_precision = word_from_u128(1_000_000_000_000_000_001);
+        let mut high_precision_pages = Pages::with_len(0);
+        let witness = render_token_amount(
+            &field(FormatOp::TokenAmount as u8, 1),
+            &mut high_precision_pages,
+            &ir(&SLOT_POOL),
+            &high_precision,
+            &tx(),
+            Some(&meta),
+            &NameResolver::new(),
+            &params,
+        )
+        .expect("high-precision token amount must render exactly")
+        .expect("bound exact amount mints witness");
+        assert_eq!(witness.text(), b"1.000000000000000001 TOK");
+        assert_eq!(high_precision_pages.buf[0][1], *b"1.00000000000000");
+        assert_eq!(&high_precision_pages.buf[0][2][..8], b"0001 TOK");
+
         let mut pages = sentinel_pages();
         let before_len = pages.len;
         let before_buf = pages.buf;
@@ -6183,7 +6118,7 @@ mod adversarial_renderer_regressions {
                 &field(FormatOp::TokenAmount as u8, 1),
                 &mut pages,
                 &ir(&SLOT_POOL),
-                &inexact,
+                &exact_eighteen_decimal_overflow_word(),
                 &tx(),
                 Some(&meta),
                 &NameResolver::new(),
@@ -6197,7 +6132,12 @@ mod adversarial_renderer_regressions {
 
     #[test]
     fn scaled_exactness_amount_array_is_atomic_and_exact_array_accepts() {
-        assert_array_exact_then_second_inexact(FormatOp::Amount, &ParamSet::default(), None, 3);
+        assert_array_high_precision_then_overwide_refuses(
+            FormatOp::Amount,
+            &ParamSet::default(),
+            None,
+            3,
+        );
     }
 
     #[test]
@@ -6254,7 +6194,7 @@ mod adversarial_renderer_regressions {
         let mut params = ParamSet::default();
         params.decimals = Some(18);
         params.base = Some(b"shares");
-        assert_array_exact_then_second_inexact(FormatOp::Unit, &params, None, 3);
+        assert_array_high_precision_then_overwide_refuses(FormatOp::Unit, &params, None, 3);
     }
 
     #[test]
@@ -6263,7 +6203,12 @@ mod adversarial_renderer_regressions {
         let meta = metadata(contract, b"TOK");
         let mut params = ParamSet::default();
         params.token = Some(&contract);
-        assert_array_exact_then_second_inexact(FormatOp::TokenAmount, &params, Some(&meta), 4);
+        assert_array_high_precision_then_overwide_refuses(
+            FormatOp::TokenAmount,
+            &params,
+            Some(&meta),
+            4,
+        );
     }
 
     #[test]
@@ -6341,58 +6286,34 @@ mod adversarial_renderer_regressions {
     }
 
     #[test]
-    fn bound_token_amount_raw_fallback_keeps_exact_contract_identity() {
-        let contract_a = [0x11; 20];
-        let contract_b = [0x22; 20];
-        let meta_a = metadata(contract_a, b"TOK");
-        let meta_b = metadata(contract_b, b"TOK");
+    fn bound_token_amount_over_capacity_refuses_before_identity_publication() {
+        let contract = [0x11; 20];
+        let meta = metadata(contract, b"TOK");
         let envelope = tx();
         let resolver = NameResolver::new();
-        let mut body_a = [0u8; 64];
-        body_a[..32].copy_from_slice(&exact_eighteen_decimal_overflow_word());
-        body_a[44..].copy_from_slice(&contract_a); // token at signed head word 1
-        let mut body_b = body_a;
-        body_b[44..].copy_from_slice(&contract_b);
-
-        let mut params_a = ParamSet::default();
-        params_a.token_path = Some(&SIGNED_TOKEN_PATH);
-        let mut pages_a = Pages::with_len(0);
-        render_token_amount(
-            &field(FormatOp::TokenAmount as u8, 1),
-            &mut pages_a,
-            &ir(&SLOT_POOL),
-            &body_a,
-            &envelope,
-            Some(&meta_a),
-            &resolver,
-            &params_a,
-        )
-        .unwrap();
-
-        let mut params_b = ParamSet::default();
-        params_b.token_path = Some(&SIGNED_TOKEN_PATH);
-        let mut pages_b = Pages::with_len(0);
-        render_token_amount(
-            &field(FormatOp::TokenAmount as u8, 1),
-            &mut pages_b,
-            &ir(&SLOT_POOL),
-            &body_b,
-            &envelope,
-            Some(&meta_b),
-            &resolver,
-            &params_b,
-        )
-        .unwrap();
-
-        // The signed amount word is identical while the signed token word
-        // flips. The exact raw amount pages intentionally match; the appended
-        // full contract page is what makes those two payloads distinct.
-        assert_eq!(pages_a.len, 3);
-        assert_eq!(pages_b.len, 3);
-        assert_eq!(&pages_a.as_slice()[..2], &pages_b.as_slice()[..2]);
-        assert_ne!(pages_a.as_slice()[2], pages_b.as_slice()[2]);
-        assert_full_contract_page(&pages_a.as_slice()[2], &contract_a);
-        assert_full_contract_page(&pages_b.as_slice()[2], &contract_b);
+        let mut body = [0u8; 64];
+        body[..32].copy_from_slice(&exact_eighteen_decimal_overflow_word());
+        body[44..].copy_from_slice(&contract); // token at signed head word 1
+        let mut params = ParamSet::default();
+        params.token_path = Some(&SIGNED_TOKEN_PATH);
+        let mut pages = sentinel_pages();
+        let before_len = pages.len;
+        let before_buf = pages.buf;
+        assert_eq!(
+            render_token_amount(
+                &field(FormatOp::TokenAmount as u8, 1),
+                &mut pages,
+                &ir(&SLOT_POOL),
+                &body,
+                &envelope,
+                Some(&meta),
+                &resolver,
+                &params,
+            ),
+            Err(RenderErr::Reject("7730 inexact scaled value"))
+        );
+        assert_eq!(pages.len, before_len);
+        assert_eq!(pages.buf, before_buf);
     }
 
     #[test]
@@ -6556,11 +6477,9 @@ mod adversarial_renderer_regressions {
     }
 
     #[test]
-    fn bound_token_amount_array_raw_fallback_keeps_exact_contract_identity() {
-        let contract_a = [0x51; 20];
-        let contract_b = [0x52; 20];
-        let meta_a = metadata(contract_a, b"TOK");
-        let meta_b = metadata(contract_b, b"TOK");
+    fn bound_token_amount_array_over_capacity_refuses_before_header_or_identity() {
+        let contract = [0x51; 20];
+        let meta = metadata(contract, b"TOK");
         let envelope = tx();
         let resolver = NameResolver::new();
         let mut body = [0u8; 96];
@@ -6568,10 +6487,12 @@ mod adversarial_renderer_regressions {
         body[63] = 1; // one element
         body[64..].copy_from_slice(&exact_eighteen_decimal_overflow_word());
 
-        let render = |contract, meta: &Erc20Metadata<'_>| {
-            let mut params = ParamSet::default();
-            params.token = Some(contract);
-            let mut pages = Pages::with_len(0);
+        let mut params = ParamSet::default();
+        params.token = Some(&contract);
+        let mut pages = sentinel_pages();
+        let before_len = pages.len;
+        let before_buf = pages.buf;
+        assert_eq!(
             render_array(
                 &field(FormatOp::TokenAmount as u8, 1),
                 &mut pages,
@@ -6579,23 +6500,14 @@ mod adversarial_renderer_regressions {
                 &body,
                 1,
                 &envelope,
-                Some(meta),
+                Some(&meta),
                 &resolver,
                 &params,
-            )
-            .unwrap();
-            pages
-        };
-
-        let pages_a = render(&contract_a, &meta_a);
-        let pages_b = render(&contract_b, &meta_b);
-        assert_eq!(pages_a.len, 4);
-        assert_eq!(pages_b.len, 4);
-        assert_eq!(pages_a.as_slice()[0], pages_b.as_slice()[0]);
-        assert_ne!(pages_a.as_slice()[1], pages_b.as_slice()[1]);
-        assert_eq!(&pages_a.as_slice()[2..], &pages_b.as_slice()[2..]);
-        assert_full_contract_page(&pages_a.as_slice()[1], &contract_a);
-        assert_full_contract_page(&pages_b.as_slice()[1], &contract_b);
+            ),
+            Err(RenderErr::Reject("7730 inexact scaled value"))
+        );
+        assert_eq!(pages.len, before_len);
+        assert_eq!(pages.buf, before_buf);
     }
 
     #[test]
@@ -6965,6 +6877,7 @@ mod adversarial_renderer_regressions {
             &mut pages,
             &envelope,
             None,
+            None,
             &NameResolver::new(),
             &ParamSet::default(),
         )
@@ -6995,30 +6908,31 @@ mod adversarial_renderer_regressions {
     }
 
     #[test]
-    fn ordinary_native_amount_refuses_rounding_before_page_publication() {
+    fn ordinary_native_amount_widens_to_exact_adjacent_value() {
         let mut one_eth_one_wei = [0u8; 32];
         one_eth_one_wei[16..].copy_from_slice(&1_000_000_000_000_000_001u128.to_be_bytes());
         let mut pages = Pages::with_len(1);
         pages.buf[0][0][0] = b'X';
-        let before_len = pages.len;
         let before_buf = pages.buf;
-        assert_eq!(
-            render_amount(
-                &field(FormatOp::Amount as u8, 1),
-                &mut pages,
-                &ir(&SLOT_POOL),
-                &one_eth_one_wei,
-                &tx(),
-                &ParamSet::default(),
-            ),
-            Err(RenderErr::Reject("7730 inexact scaled value"))
-        );
-        assert_eq!(pages.len, before_len);
-        assert_eq!(pages.buf, before_buf);
+        let witness = render_amount(
+            &field(FormatOp::Amount as u8, 1),
+            &mut pages,
+            &ir(&SLOT_POOL),
+            &one_eth_one_wei,
+            &tx(),
+            &ParamSet::default(),
+        )
+        .expect("one extra wei renders exactly")
+        .expect("exact amount mints interpolation witness");
+        assert_eq!(witness.text(), b"1.000000000000000001 ETH");
+        assert_eq!(pages.len, 2);
+        assert_eq!(pages.buf[0], before_buf[0]);
+        assert_eq!(pages.buf[1][1], *b"1.00000000000000");
+        assert_eq!(&pages.buf[1][2][..8], b"0001 ETH");
     }
 
     #[test]
-    fn native_sentinel_token_amount_refuses_rounding_before_page_publication() {
+    fn native_sentinel_token_amount_widens_to_exact_adjacent_value() {
         const SENTINEL: [u8; 20] = [0xEE; 20];
         let mut one_eth_one_wei = [0u8; 32];
         one_eth_one_wei[16..].copy_from_slice(&1_000_000_000_000_000_001u128.to_be_bytes());
@@ -7027,23 +6941,24 @@ mod adversarial_renderer_regressions {
         params.native_currency_addresses = Some(&SENTINEL);
         let mut pages = Pages::with_len(1);
         pages.buf[0][0][0] = b'Y';
-        let before_len = pages.len;
         let before_buf = pages.buf;
-        assert_eq!(
-            render_token_amount(
-                &field(FormatOp::TokenAmount as u8, 1),
-                &mut pages,
-                &ir(&SLOT_POOL),
-                &one_eth_one_wei,
-                &tx(),
-                None,
-                &NameResolver::new(),
-                &params,
-            ),
-            Err(RenderErr::Reject("7730 inexact scaled value"))
-        );
-        assert_eq!(pages.len, before_len);
-        assert_eq!(pages.buf, before_buf);
+        let witness = render_token_amount(
+            &field(FormatOp::TokenAmount as u8, 1),
+            &mut pages,
+            &ir(&SLOT_POOL),
+            &one_eth_one_wei,
+            &tx(),
+            None,
+            &NameResolver::new(),
+            &params,
+        )
+        .expect("native-sentinel one extra wei renders exactly")
+        .expect("exact native-sentinel amount mints witness");
+        assert_eq!(witness.text(), b"1.000000000000000001 ETH");
+        assert_eq!(pages.len, 2);
+        assert_eq!(pages.buf[0], before_buf[0]);
+        assert_eq!(pages.buf[1][1], *b"1.00000000000000");
+        assert_eq!(&pages.buf[1][2][..8], b"0001 ETH");
     }
 
     #[test]
@@ -7152,10 +7067,7 @@ mod adversarial_renderer_regressions {
             let data = std::vec![b'x'; len];
             let pages = render_eip712_string(&data).unwrap();
             assert_eq!(pages.len, expected_pages);
-            assert_eq!(
-                &pages.buf[expected_pages - 1][3][..footer.len()],
-                footer
-            );
+            assert_eq!(&pages.buf[expected_pages - 1][3][..footer.len()], footer);
             let mut painted = std::vec::Vec::new();
             for page in &pages.buf[..pages.len] {
                 painted.extend_from_slice(&page[1]);
@@ -7189,11 +7101,7 @@ mod adversarial_renderer_regressions {
             let before_len = pages.len;
             let before_buf = pages.buf;
             assert_eq!(
-                render_eip712_string_preimage(
-                    &field(FormatOp::Raw as u8, 1),
-                    &mut pages,
-                    &invalid,
-                ),
+                render_eip712_string_preimage(&field(FormatOp::Raw as u8, 1), &mut pages, &invalid,),
                 Err(RenderErr::Reject("7730 string not displayable"))
             );
             assert_eq!(pages.len, before_len);
@@ -7516,32 +7424,26 @@ mod adversarial_renderer_regressions {
     }
 
     #[test]
-    fn amount_overflow_renders_all_32_raw_bytes() {
-        // 10^72 is exactly representable at the six-fractional-digit native
-        // policy (it is divisible by 10^12) but too wide for two decimal
-        // rows, so the exact 32-byte raw fallback remains available.
+    fn authenticated_amount_over_capacity_refuses_atomically() {
+        // 10^72 is mathematically exact at 18 decimals but its canonical
+        // scaled text cannot fit the two trusted value rows. An authenticated
+        // scale may not silently downgrade to raw after page publication.
         let word = exact_eighteen_decimal_overflow_word();
-        let mut pages = Pages::with_len(0);
-        render_amount(
-            &field(FormatOp::Amount as u8, 1),
-            &mut pages,
-            &ir(&SLOT_POOL),
-            &word,
-            &tx(),
-            &ParamSet::default(),
-        )
-        .unwrap();
-        assert_eq!(pages.as_slice().len(), 2);
-        for row in [
-            &pages.buf[0][1],
-            &pages.buf[0][2],
-            &pages.buf[1][1],
-            &pages.buf[1][2],
-        ] {
-            // Four rows concatenate to the original word's lower-case hex.
-            assert!(row.iter().all(u8::is_ascii_hexdigit));
-        }
-        assert_eq!(&pages.buf[0][1], b"000090e40fbeea1d");
-        assert_eq!(&pages.buf[1][2], b"0000000000000000");
+        let mut pages = sentinel_pages();
+        let before_len = pages.len;
+        let before_buf = pages.buf;
+        assert_eq!(
+            render_amount(
+                &field(FormatOp::Amount as u8, 1),
+                &mut pages,
+                &ir(&SLOT_POOL),
+                &word,
+                &tx(),
+                &ParamSet::default(),
+            ),
+            Err(RenderErr::Reject("7730 inexact scaled value"))
+        );
+        assert_eq!(pages.len, before_len);
+        assert_eq!(pages.buf, before_buf);
     }
 }

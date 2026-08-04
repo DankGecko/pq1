@@ -323,10 +323,7 @@ fn legacy_values_are_exactly_renderable(
 
     let inner_value = U256(input.value);
     if !inner_value.is_zero()
-        && !super::primitives::native_amount_is_exactly_renderable(
-            &inner_value,
-            input.chain_id,
-        )
+        && !super::primitives::native_amount_is_exactly_renderable(&inner_value, input.chain_id)
     {
         return false;
     }
@@ -376,10 +373,7 @@ fn legacy_values_are_exactly_renderable(
             };
             let value = U256(record.value);
             if !value.is_zero()
-                && !super::primitives::native_amount_is_exactly_renderable(
-                    &value,
-                    input.chain_id,
-                )
+                && !super::primitives::native_amount_is_exactly_renderable(&value, input.chain_id)
             {
                 return false;
             }
@@ -1307,6 +1301,13 @@ mod inner_kind_hint_tests {
         out
     }
 
+    fn pages_contain(pages: &Pages, needle: &[u8]) -> bool {
+        pages.buf[..pages.len]
+            .iter()
+            .flatten()
+            .any(|row| row.windows(needle.len()).any(|window| window == needle))
+    }
+
     #[test]
     fn plain_native_hint_uses_signed_chain_ticker() {
         let mut bsc = [b' '; DISPLAY_COLS];
@@ -1355,7 +1356,7 @@ mod inner_kind_hint_tests {
     }
 
     #[test]
-    fn direct_safe_native_value_is_exact_or_refused_before_pages_escape() {
+    fn direct_safe_native_value_uses_exact_wei_fallback_or_refuses_overwide() {
         let resolver = NameResolver::new();
         let unknown_data = [0xde, 0xad, 0xbe, 0xef];
 
@@ -1366,13 +1367,22 @@ mod inner_kind_hint_tests {
             let exact_pages =
                 render_safe_pages_inner(&exact, None, None, &resolver).expect("1 ETH is exact");
 
+            let mut one_wei = render_input([0x44; 20], 0, raw_data);
+            one_wei.value = be_u128(1);
+            assert!(legacy_values_are_exactly_renderable(&one_wei, None));
+            let one_wei_pages = render_safe_pages_inner(&one_wei, None, None, &resolver)
+                .expect("1 wei uses the exact base-unit fallback");
+            assert!(pages_contain(&one_wei_pages, b"wei"));
+
             let mut adjacent = render_input([0x44; 20], 0, raw_data);
             adjacent.value = be_u128(1_000_000_000_000_000_001);
-            assert!(!legacy_values_are_exactly_renderable(&adjacent, None));
-            assert!(
-                render_safe_pages_inner(&adjacent, None, None, &resolver).is_err(),
-                "1 ETH + 1 wei must not reuse the 1.000000 ETH page"
-            );
+            assert!(legacy_values_are_exactly_renderable(&adjacent, None));
+            let adjacent_pages = render_safe_pages_inner(&adjacent, None, None, &resolver)
+                .expect("1 ETH + 1 wei uses the exact base-unit fallback");
+            assert!(pages_contain(&adjacent_pages, b"wei"));
+            assert_ne!(exact_pages.buf, one_wei_pages.buf);
+            assert_ne!(exact_pages.buf, adjacent_pages.buf);
+            assert_ne!(one_wei_pages.buf, adjacent_pages.buf);
 
             let mut next_exact = render_input([0x44; 20], 0, raw_data);
             next_exact.value = be_u128(1_000_001_000_000_000_000);
@@ -1380,6 +1390,14 @@ mod inner_kind_hint_tests {
             let next_pages = render_safe_pages_inner(&next_exact, None, None, &resolver)
                 .expect("the next exact six-decimal step remains available");
             assert_ne!(exact_pages.buf, next_pages.buf);
+
+            let mut overwide = render_input([0x44; 20], 0, raw_data);
+            overwide.value = [0xff; 32];
+            assert!(!legacy_values_are_exactly_renderable(&overwide, None));
+            assert!(
+                render_safe_pages_inner(&overwide, None, None, &resolver).is_err(),
+                "an overwide native value must refuse before any Safe pages escape"
+            );
         }
     }
 
@@ -1460,20 +1478,28 @@ mod inner_kind_hint_tests {
             let exact_calldata = encode_multisend(&exact_packed);
             let exact = render_input(multisend, 1, &exact_calldata);
             assert!(legacy_values_are_exactly_renderable(&exact, None));
-            assert!(
-                render_safe_pages_inner(&exact, None, None, &resolver).is_ok(),
-                "exact record values remain available"
-            );
+            let exact_pages = render_safe_pages_inner(&exact, None, None, &resolver)
+                .expect("exact record values remain available");
 
             let adjacent_packed = pack_record(0, &[0x44; 20], &adjacent_value, record_data);
             let adjacent_calldata = encode_multisend(&adjacent_packed);
             let adjacent = render_input(multisend, 1, &adjacent_calldata);
-            assert!(!legacy_values_are_exactly_renderable(&adjacent, None));
-            assert!(
-                render_safe_pages_inner(&adjacent, None, None, &resolver).is_err(),
-                "inline and dedicated record-value painters need the same exactness gate"
-            );
+            assert!(legacy_values_are_exactly_renderable(&adjacent, None));
+            let adjacent_pages = render_safe_pages_inner(&adjacent, None, None, &resolver)
+                .expect("record values share the exact base-unit fallback");
+            assert!(pages_contain(&adjacent_pages, b"wei"));
+            assert_ne!(exact_pages.buf, adjacent_pages.buf);
         }
+
+        let overwide_value = [0xff; 32];
+        let overwide_packed = pack_record(0, &[0x44; 20], &overwide_value, &[]);
+        let overwide_calldata = encode_multisend(&overwide_packed);
+        let overwide = render_input(multisend, 1, &overwide_calldata);
+        assert!(!legacy_values_are_exactly_renderable(&overwide, None));
+        assert!(
+            render_safe_pages_inner(&overwide, None, None, &resolver).is_err(),
+            "an overwide record value must refuse the entire Safe batch"
+        );
     }
 
     #[test]

@@ -46,7 +46,7 @@ fn screens() -> [Eip1559Tx; 5] {
     [
         // 1 ETH on Ethereum mainnet.
         tx(1, Some([0xAB; 20]), wei(1_000_000_000_000_000_000), 0, 0),
-        // 1 wei — exercises the fractional/overflow-safe formatter at its edge.
+        // 1 wei — exercises the exact known-chain base-unit fallback.
         tx(1, Some([0x11; 20]), wei(1), 5, 0),
         // 123.456789 ETH on Base (8453) — multi-digit value + chain name.
         tx(8453, Some([0xCD; 20]), wei(123_456_789_000_000_000_000), 42, 0),

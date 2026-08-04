@@ -263,10 +263,10 @@ pub(super) fn enforce_native_value_page(
         return Ok(());
     }
     // value is non-zero (or the zero-check was faulted): an exact native-value
-    // page is MANDATORY. Reconstruct it before reserving a slot so a rounded
-    // or overwide value fails closed without mutating the page set or CFI
-    // receipt. The later `push_blank` likewise fails atomically on a full
-    // buffer.
+    // page is MANDATORY. Reconstruct it before reserving a slot so a value with
+    // no exact bounded representation fails closed without mutating the page
+    // set or CFI receipt. The later `push_blank` likewise fails atomically on a
+    // full buffer.
     let page = build_native_value_page(value, chain_id).ok_or(())?;
     let idx = pages.push_blank()?;
     pages.buf[idx] = page;
@@ -1025,13 +1025,15 @@ mod tests {
     }
 
     #[test]
-    fn known_native_exactness_gate_accepts_only_six_decimal_base_units() {
-        let exact_values = [
+    fn known_native_value_page_accepts_scaled_and_exact_wei_forms() {
+        let values = [
             one_native(),
             u256_from_u128(1_000_001_000_000_000_000), // 1.000001 native
+            one_wei(),
+            u256_from_u128(1_000_000_000_000_000_001), // exact wei fallback
         ];
         for chain_id in [1, 56] {
-            for value in exact_values {
+            for value in values {
                 let mut pages = marker_pages(2);
                 let prior_len = pages.len;
                 append_native(&mut pages, &value, chain_id);
@@ -1048,63 +1050,37 @@ mod tests {
     }
 
     #[test]
-    fn nonexact_known_native_values_refuse_atomically_before_cfi_progress() {
-        let nonexact_values = [
-            u256_from_u128(1),                         // 1 wei: painter would collapse to zero
-            u256_from_u128(1_000_000_000_000_000_001), // 1 native + 1 base unit
-            u256_from_u128(999_999_500_000_000_000),   // half-up carry boundary
+    fn one_wei_and_one_native_plus_one_wei_have_distinct_confirmed_pages() {
+        let cases = [
+            one_wei(),
+            one_native(),
+            u256_from_u128(1_000_000_000_000_000_001),
         ];
-        for chain_id in [1, 56] {
-            for value in nonexact_values {
-                let mut pages = marker_pages(2);
-                let before_len = pages.len;
-                let before_buf = pages.buf;
-                let mut cfi = crate::fi::CfiCounter::new();
-                assert!(
-                    enforce_native_value_page(&mut pages, &value, chain_id, &mut cfi).is_err(),
-                    "chain {chain_id} must refuse a rounded native value"
-                );
-                assert_eq!(pages.len, before_len);
-                assert_eq!(pages.buf, before_buf);
-                assert_ne!(
-                    cfi.check_into_sentinel(NATIVE_VALUE_CFI_EXPECTED),
-                    crate::fi::OK_SENTINEL
-                );
-                assert_ne!(
-                    native_value_page_proof(&pages, before_len, &value, chain_id),
-                    crate::fi::OK_SENTINEL
-                );
-                assert_ne!(
-                    native_value_final_set_proof(&pages, before_len, &value, chain_id),
-                    crate::fi::OK_SENTINEL
-                );
-            }
+        let mut confirmed = [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; 3];
+
+        for (index, value) in cases.iter().enumerate() {
+            let mut pages = marker_pages(2);
+            let prior_len = pages.len;
+            append_native(&mut pages, value, 1);
+            assert_eq!(
+                native_value_page_proof(&pages, prior_len, value, 1),
+                crate::fi::OK_SENTINEL
+            );
+            assert_eq!(
+                native_value_final_set_proof(&pages, prior_len, value, 1),
+                crate::fi::OK_SENTINEL
+            );
+            confirmed[index] = pages.buf[prior_len];
         }
-    }
 
-    #[test]
-    fn rounded_collision_and_next_exact_step_cannot_reuse_confirmed_page() {
-        let exact = one_native();
-        let aliased_before_fix = u256_from_u128(1_000_000_000_000_000_001);
-        let next_exact = u256_from_u128(1_000_001_000_000_000_000);
-        let mut pages = marker_pages(2);
-        let prior_len = pages.len;
-        append_native(&mut pages, &exact, 1);
-
-        assert_ne!(
-            native_value_page_proof(&pages, prior_len, &aliased_before_fix, 1),
-            crate::fi::OK_SENTINEL,
-            "1 ETH's page must not prove 1 ETH + 1 wei"
-        );
-        assert_ne!(
-            native_value_final_set_proof(&pages, prior_len, &aliased_before_fix, 1),
-            crate::fi::OK_SENTINEL
-        );
-        assert_ne!(
-            native_value_page_proof(&pages, prior_len, &next_exact, 1),
-            crate::fi::OK_SENTINEL,
-            "the next accepted six-decimal amount must paint differently"
-        );
+        assert_eq!(&confirmed[0][1][..1], b"1");
+        assert_eq!(&confirmed[0][2][..3], b"wei");
+        assert_eq!(&confirmed[1][1][..12], b"1.000000 ETH");
+        assert_eq!(&confirmed[2][1], b"1000000000000000");
+        assert_eq!(&confirmed[2][2][..7], b"001 wei");
+        assert_ne!(confirmed[0], confirmed[1]);
+        assert_ne!(confirmed[1], confirmed[2]);
+        assert_ne!(confirmed[0], confirmed[2]);
     }
 
     #[test]

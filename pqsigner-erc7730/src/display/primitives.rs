@@ -650,11 +650,9 @@ pub fn write_chain(row1: &mut [u8; DISPLAY_COLS], row2: &mut [u8; DISPLAY_COLS],
 
 /// Number of fractional digits shown for compact known-chain native amounts.
 /// Unlike legacy known-token rows, which may widen to preserve exactness,
-/// native rendering remains fixed and relies on its pre-publication gate.
-/// Fractional precision shared by every compact known-chain native-currency
-/// painter and by the secure exactness gate that authorizes its output.
-/// Keeping one constant prevents the gate and painter from drifting into
-/// different equivalence classes.
+/// signed native values keep this stable width when exact and otherwise switch
+/// to an explicit unscaled-wei representation. This constant is therefore the
+/// compact painter's preferred width, never permission to discard base units.
 pub const NATIVE_DISPLAY_FRACTION_DIGITS: u32 = 6;
 
 /// Paint an ETH value across (up to) two rows.
@@ -703,51 +701,99 @@ pub fn write_eth_two_rows(
     )
 }
 
-/// Paint a chain's native-currency amount across up to two rows.
+/// Paint a chain's native-currency amount exactly across up to two rows.
 ///
-/// A chain in [`known_native_ticker`] has firmware-pinned 18-decimal metadata
-/// and uses its audited ticker. An unknown chain is rendered as the exact,
+/// A chain in [`known_native_ticker`] has firmware-pinned 18-decimal metadata,
+/// so values that are exact at the stable six-decimal width keep the audited
+/// ticker form. Values that would lose base units in that form fall back to the
+/// exact unscaled integer followed by `wei`. An unknown chain keeps the exact,
 /// unscaled integer followed by `raw`; the neutral `NATIVE` label alone is not
 /// evidence that an 18-decimal interpretation is valid.
+///
+/// Output is committed only after one complete representation fits. On
+/// [`AmountFit::Overflow`] both caller-provided rows are left unchanged.
 pub fn write_native_amount_two_rows(
     row1: &mut [u8; DISPLAY_COLS],
     row2: &mut [u8; DISPLAY_COLS],
     value: &U256,
     chain_id: u64,
 ) -> AmountFit {
-    let Some(unit) = known_native_ticker(chain_id) else {
-        return write_amount_two_rows(row1, row2, value, 0, 0, false, true, "raw");
+    let mut painted_row1 = [b' '; DISPLAY_COLS];
+    let mut painted_row2 = [b' '; DISPLAY_COLS];
+
+    let fit = match known_native_ticker(chain_id) {
+        None => write_amount_two_rows(
+            &mut painted_row1,
+            &mut painted_row2,
+            value,
+            0,
+            0,
+            false,
+            true,
+            "raw",
+        ),
+        Some(unit) => {
+            let scaled_fit =
+                if amount_is_exact_at_fraction_digits(value, 18, NATIVE_DISPLAY_FRACTION_DIGITS) {
+                    if single_row_amount_fixed(
+                        &mut painted_row1,
+                        value,
+                        18,
+                        NATIVE_DISPLAY_FRACTION_DIGITS,
+                        unit,
+                    ) {
+                        painted_row2 = [b' '; DISPLAY_COLS];
+                        AmountFit::Full
+                    } else {
+                        write_amount_two_rows_bytes(
+                            &mut painted_row1,
+                            &mut painted_row2,
+                            value,
+                            18,
+                            NATIVE_DISPLAY_FRACTION_DIGITS,
+                            false,
+                            unit,
+                        )
+                    }
+                } else {
+                    AmountFit::Overflow
+                };
+
+            if scaled_fit == AmountFit::Full {
+                AmountFit::Full
+            } else {
+                // Never round a signed native amount. The explicit base-unit
+                // suffix distinguishes this exact fallback from the ticker-
+                // scaled representation and from unknown-chain `raw`.
+                write_amount_two_rows(
+                    &mut painted_row1,
+                    &mut painted_row2,
+                    value,
+                    0,
+                    0,
+                    false,
+                    true,
+                    "wei",
+                )
+            }
+        }
     };
-    if single_row_amount_fixed(row1, value, 18, NATIVE_DISPLAY_FRACTION_DIGITS, unit) {
-        *row2 = [b' '; DISPLAY_COLS];
-        return AmountFit::Full;
+
+    if fit == AmountFit::Full {
+        *row1 = painted_row1;
+        *row2 = painted_row2;
     }
-    write_amount_two_rows_bytes(
-        row1,
-        row2,
-        value,
-        18,
-        NATIVE_DISPLAY_FRACTION_DIGITS,
-        false,
-        unit,
-    )
+    fit
 }
 
-/// Return `true` iff the real compact native-currency painter represents the
-/// signed value exactly.
+/// Return `true` iff the real native-currency painter represents the signed
+/// value exactly.
 ///
-/// Known chains have firmware-pinned 18-decimal native metadata, so the fixed
-/// six-decimal display is authorized only when every discarded base unit is
-/// zero. Unknown chains use the painter's exact raw-integer path and therefore
-/// need only pass its two-row width check.
+/// This deliberately has no parallel precision predicate: it executes
+/// [`write_native_amount_two_rows`] into scratch rows, so pre-publication
+/// authorization and the bytes eventually painted cannot drift.
 #[must_use]
 pub fn native_amount_is_exactly_renderable(value: &U256, chain_id: u64) -> bool {
-    if known_native_ticker(chain_id).is_some()
-        && !amount_is_exact_at_fraction_digits(value, 18, NATIVE_DISPLAY_FRACTION_DIGITS)
-    {
-        return false;
-    }
-
     let mut row1 = [b' '; DISPLAY_COLS];
     let mut row2 = [b' '; DISPLAY_COLS];
     write_native_amount_two_rows(&mut row1, &mut row2, value, chain_id) == AmountFit::Full
@@ -755,15 +801,13 @@ pub fn native_amount_is_exactly_renderable(value: &U256, chain_id: u64) -> bool 
 
 /// Paint an exact derived native-currency bound across up to two rows.
 ///
-/// Signed transfer values deliberately stay on the stable six-decimal
-/// [`write_native_amount_two_rows`] policy and must pass
-/// [`native_amount_is_exactly_renderable`]. A derived upper bound, such as a
-/// Safe gas refund estimate, is not itself a signed amount and commonly has
-/// finer-than-six-decimal dust after multiplication. Refusing every such bound
-/// would make ordinary refunds unavailable, so this sink widens only as far as
-/// required to preserve every base unit, then falls back to an exact raw-wei
-/// integer when the scaled form does not fit. Unknown-chain amounts retain the
-/// exact unscaled `raw` policy because their decimal scale is not pinned.
+/// Signed transfer values use [`write_native_amount_two_rows`]'s stable
+/// six-decimal form or explicit exact-wei fallback. A derived upper bound, such
+/// as a Safe gas refund estimate, is not itself a signed amount and commonly
+/// has finer-than-six-decimal dust after multiplication, so this sink may widen
+/// the ticker-scaled form before using the same exact raw-wei fallback.
+/// Unknown-chain amounts retain the exact unscaled `raw` policy because their
+/// decimal scale is not pinned.
 ///
 /// Every successful path is injective over `value`: scaled paths are admitted
 /// only when no base unit is discarded, and the fallback is the full integer.
@@ -1552,19 +1596,72 @@ mod native_amount_tests {
     }
 
     #[test]
-    fn known_native_exactness_requires_both_policy_and_width_fit() {
-        let value = u256_from_u128(1_000_000_000_000_000_001);
+    fn known_native_uses_exact_wei_when_six_decimals_would_round() {
+        let one_wei = u256_from_u128(1);
+        let rounding_carry = u256_from_u128(999_999_500_000_000_000);
+        let one_native = u256_from_u128(1_000_000_000_000_000_000);
+        let one_native_plus_one_wei = u256_from_u128(1_000_000_000_000_000_001);
         for chain_id in [1, 56] {
             assert!(known_native_ticker(chain_id).is_some());
-            assert!(!amount_is_exact_at_fraction_digits(&value, 18, 6));
-            assert!(!native_amount_is_exactly_renderable(&value, chain_id));
-            let mut row1 = [b' '; DISPLAY_COLS];
-            let mut row2 = [b' '; DISPLAY_COLS];
+
+            let mut one_wei_rows = [[b' '; DISPLAY_COLS]; 2];
+            let [one_wei_row1, one_wei_row2] = &mut one_wei_rows;
             assert_eq!(
-                write_native_amount_two_rows(&mut row1, &mut row2, &value, chain_id),
-                AmountFit::Full,
-                "width fit alone must remain visibly distinct from exactness"
+                write_native_amount_two_rows(one_wei_row1, one_wei_row2, &one_wei, chain_id),
+                AmountFit::Full
             );
+            assert!(native_amount_is_exactly_renderable(&one_wei, chain_id));
+            assert_eq!(trimmed(&one_wei_rows[0]), b"1");
+            assert_eq!(trimmed(&one_wei_rows[1]), b"wei");
+
+            let mut rounding_carry_rows = [[b' '; DISPLAY_COLS]; 2];
+            let [rounding_carry_row1, rounding_carry_row2] = &mut rounding_carry_rows;
+            assert_eq!(
+                write_native_amount_two_rows(
+                    rounding_carry_row1,
+                    rounding_carry_row2,
+                    &rounding_carry,
+                    chain_id,
+                ),
+                AmountFit::Full
+            );
+            assert_eq!(trimmed(&rounding_carry_rows[0]), b"9999995000000000");
+            assert_eq!(trimmed(&rounding_carry_rows[1]), b"00 wei");
+
+            let mut one_native_rows = [[b' '; DISPLAY_COLS]; 2];
+            let [one_native_row1, one_native_row2] = &mut one_native_rows;
+            assert_eq!(
+                write_native_amount_two_rows(
+                    one_native_row1,
+                    one_native_row2,
+                    &one_native,
+                    chain_id,
+                ),
+                AmountFit::Full
+            );
+
+            let mut adjacent_rows = [[b' '; DISPLAY_COLS]; 2];
+            let [adjacent_row1, adjacent_row2] = &mut adjacent_rows;
+            assert_eq!(
+                write_native_amount_two_rows(
+                    adjacent_row1,
+                    adjacent_row2,
+                    &one_native_plus_one_wei,
+                    chain_id,
+                ),
+                AmountFit::Full
+            );
+            assert!(native_amount_is_exactly_renderable(
+                &one_native_plus_one_wei,
+                chain_id
+            ));
+            assert_eq!(trimmed(&adjacent_rows[0]), b"1000000000000000");
+            assert_eq!(trimmed(&adjacent_rows[1]), b"001 wei");
+
+            assert_ne!(one_wei_rows, one_native_rows);
+            assert_ne!(rounding_carry_rows, one_native_rows);
+            assert_ne!(one_native_rows, adjacent_rows);
+            assert_ne!(one_wei_rows, adjacent_rows);
         }
     }
 
@@ -1613,6 +1710,21 @@ mod native_amount_tests {
             &U256([0xff; 32]),
             4_242_424_242
         ));
+    }
+
+    #[test]
+    fn overwide_known_native_value_refuses_without_mutating_rows() {
+        let mut row1 = *b"row one sentinel";
+        let mut row2 = *b"row two sentinel";
+        let before = [row1, row2];
+        let value = U256([0xff; 32]);
+
+        assert_eq!(
+            write_native_amount_two_rows(&mut row1, &mut row2, &value, 1),
+            AmountFit::Overflow
+        );
+        assert_eq!([row1, row2], before);
+        assert!(!native_amount_is_exactly_renderable(&value, 1));
     }
 
     #[test]

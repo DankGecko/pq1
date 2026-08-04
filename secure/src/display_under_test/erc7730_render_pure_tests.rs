@@ -1025,18 +1025,18 @@ fn production_celo_lockedgold_proxy_renders_and_binds_all_six_routes() {
     .expect("changed revoke share renders");
     assert_ne!(revoke.as_slice(), changed_revoke.as_slice());
 
-    let inexact = u256_from_u128(250_000_000_000_000_000_000_001);
-    assert!(matches!(
-        render(
-            "delegateGovernanceVotes(address,uint256)",
-            &[abi_address_word(delegatee), inexact.0],
-            U256::default(),
-            &signer,
-        ),
-        Err(crate::tx::erc7730_render::RenderErr::Reject(
-            "7730 inexact scaled value"
-        ))
-    ));
+    let adjacent_share = u256_from_u128(250_000_000_000_000_000_000_001);
+    let adjacent = render(
+        "delegateGovernanceVotes(address,uint256)",
+        &[abi_address_word(delegatee), adjacent_share.0],
+        U256::default(),
+        &signer,
+    )
+    .expect("the adjacent target-share base unit renders exactly");
+    let adjacent_rows = page_strs(&adjacent, find_page_by_label(&adjacent, "Target Share %"));
+    assert_eq!(adjacent_rows[1], "25.0000000000000");
+    assert_eq!(adjacent_rows[2], "000000001 %");
+    assert_ne!(delegate.as_slice(), adjacent.as_slice());
 
     let mut dirty_delegatee = abi_address_word(delegatee);
     dirty_delegatee[0] = 1;
@@ -1773,12 +1773,22 @@ fn production_midas_mtbill_deposit_routes_are_operand_complete_and_exactly_scope
         );
     }
     for word_index in [1usize, 2] {
-        let mut inexact = words;
-        inexact[word_index][31] ^= 1;
-        assert!(
-            render_with(&inexact, &signer).is_err(),
-            "a value that cannot be shown injectively must refuse"
-        );
+        let mut adjacent_words = words;
+        adjacent_words[word_index][31] ^= 1;
+        let adjacent = render_with(&adjacent_words, &signer)
+            .expect("the adjacent signed base unit renders exactly");
+        let (label, expected_row1, expected_row2) = if word_index == 1 {
+            ("Payment Amount", "2.00000000000000", "0001 token")
+        } else {
+            ("Minimum mTBILL", "1.90000000000000", "0001 mTBILL")
+        };
+        let adjacent_rows = page_strs(&adjacent.pages, find_page_by_label(&adjacent.pages, label));
+        assert_eq!(adjacent_rows[1], expected_row1);
+        assert_eq!(adjacent_rows[2], expected_row2);
+        assert_ne!(baseline.pages.as_slice(), adjacent.pages.as_slice());
+        assert!(!baseline
+            .transcript_receipt
+            .exact_match(&adjacent.transcript_receipt));
     }
     let changed_beneficiary =
         render_with(&words, &changed_signer).expect("changed authenticated signer renders");
@@ -3941,10 +3951,10 @@ fn usdt_shared_descriptor_never_claims_unlimited_on_either_deployment() {
             let calldata = calldata_approve(spender, U256(amount));
             assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
             render_erc7730_pages(&tx, &calldata, &verified, Some(&metadata), &resolver)
-                .expect("render exact USDT approval")
         };
 
-        let ordinary = render(u256_from_u64(1_000_000).0);
+        let ordinary = render(u256_from_u64(1_000_000).0)
+            .expect("ordinary exact USDT approval renders");
         assert_eq!(
             page_strs(&ordinary, intent_page_index(&ordinary))[0],
             "Approve"
@@ -3963,15 +3973,15 @@ fn usdt_shared_descriptor_never_claims_unlimited_on_either_deployment() {
             ("max minus one", max_minus_one),
             ("max", [0xff; 32]),
         ] {
-            let pages = render(value);
-            let dump = dump_pages(&pages);
             assert!(
-                !dump.to_ascii_lowercase().contains("unlimited"),
-                "{name} must not inherit a shared infinity claim on chain {chain_id}:\n{dump}"
+                matches!(
+                    render(value),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(
+                        "7730 inexact scaled value"
+                    ))
+                ),
+                "overwide {name} must refuse rather than inherit a shared infinity claim on chain {chain_id}"
             );
-            assert_raw_word_pages(&pages, "Amount", &value);
-            assert_full_address_field_page(&pages, "Spender", &spender);
-            assert_full_contract_identity_page(&pages, &entry.contract);
         }
     }
 }
@@ -4092,14 +4102,14 @@ fn flyingtulip_borrow_is_finite_while_engine_max_is_unlimited() {
                 &[abi_address_word(actor), abi_address_word(asset), amount],
             );
             render_erc7730_pages(&tx, &calldata, &verified, Some(&metadata), &resolver)
-                .expect("render exact PositionsManager allowance")
         };
 
         let ordinary_borrow = render(
             "approveBorrow(address,address,uint256)",
             delegate,
             u256_from_u64(1_000_000).0,
-        );
+        )
+        .expect("ordinary exact borrow allowance renders");
         assert_full_address_field_page(&ordinary_borrow, "Delegate", &delegate);
         assert!(page_strs(
             &ordinary_borrow,
@@ -4115,18 +4125,19 @@ fn flyingtulip_borrow_is_finite_while_engine_max_is_unlimited() {
             ("max minus one", max_minus_one),
             ("max", [0xff; 32]),
         ] {
-            let borrow = render("approveBorrow(address,address,uint256)", delegate, value);
-            let dump = dump_pages(&borrow);
             assert!(
-                !dump.to_ascii_lowercase().contains("unlimited"),
-                "finite borrow-delegation storage at {name} must not be called unlimited:\n{dump}"
+                matches!(
+                    render("approveBorrow(address,address,uint256)", delegate, value),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(
+                        "7730 inexact scaled value"
+                    ))
+                ),
+                "overwide borrow-delegation storage at {name} must refuse rather than be called unlimited"
             );
-            assert_raw_word_pages(&borrow, "Allowance", &value);
-            assert_full_address_field_page(&borrow, "Delegate", &delegate);
-            assert_full_contract_identity_page(&borrow, &asset);
         }
 
-        let max_engine = render("approveEngine(address,address,uint256)", engine, [0xff; 32]);
+        let max_engine = render("approveEngine(address,address,uint256)", engine, [0xff; 32])
+            .expect("authenticated engine max renders as unlimited");
         assert_eq!(
             page_strs(&max_engine, find_page_by_label(&max_engine, "Allowance")),
             [
@@ -4144,13 +4155,15 @@ fn flyingtulip_borrow_is_finite_while_engine_max_is_unlimited() {
             ("old threshold", old_threshold),
             ("max minus one", max_minus_one),
         ] {
-            let engine_pages = render("approveEngine(address,address,uint256)", engine, finite);
-            let dump = dump_pages(&engine_pages);
             assert!(
-                !dump.to_ascii_lowercase().contains("unlimited"),
-                "finite engine allowance at {name} must not inherit the max-only label:\n{dump}"
+                matches!(
+                    render("approveEngine(address,address,uint256)", engine, finite),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(
+                        "7730 inexact scaled value"
+                    ))
+                ),
+                "overwide finite engine allowance at {name} must refuse rather than inherit the max-only label"
             );
-            assert_raw_word_pages(&engine_pages, "Allowance", &finite);
         }
     }
 }
@@ -4272,20 +4285,31 @@ fn usdt_exact_zero_approve_derives_revoke_from_authenticated_signed_facts() {
         .any(|page| row_str(&page[0]) == "Network:" && row_str(&page[1]) == "Chain: 1"));
 
     // Exact means all 32 signed amount bytes must be zero. Flipping any one
-    // byte leaves every other authenticated fact unchanged and must restore
-    // the descriptor's ordinary approval intent.
+    // byte leaves every other authenticated fact unchanged: displayable values
+    // restore the ordinary approval intent, while overwide values refuse.
+    let mut rendered_nonzero = 0usize;
+    let mut refused_overwide = 0usize;
     for byte in 0..32 {
         let mut nonzero = [0u8; 32];
         nonzero[byte] = 1;
         let calldata = calldata_approve(spender, U256(nonzero));
-        let changed = render_erc7730_pages(&tx, &calldata, &verified, Some(&meta), &resolver)
-            .expect("render nonzero approval");
-        assert_eq!(
-            page_strs(&changed, intent_page_index(&changed))[0],
-            "Approve",
-            "nonzero amount byte {byte} must not be called a revocation"
-        );
+        match render_erc7730_pages(&tx, &calldata, &verified, Some(&meta), &resolver) {
+            Ok(changed) => {
+                rendered_nonzero += 1;
+                assert_eq!(
+                    page_strs(&changed, intent_page_index(&changed))[0],
+                    "Approve",
+                    "nonzero amount byte {byte} must not be called a revocation"
+                );
+            }
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 inexact scaled value",
+            )) => refused_overwide += 1,
+            Err(error) => panic!("unexpected nonzero approval refusal at byte {byte}: {error:?}"),
+        }
     }
+    assert!(rendered_nonzero > 0, "low nonzero words must render");
+    assert!(refused_overwide > 0, "overwide nonzero words must refuse");
 }
 
 #[test]
@@ -8412,19 +8436,31 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
     let transcript = checked.transcript_receipt;
     assert_all_pages_printable(&pages);
 
-    let mut colliding_calldata = keccak256(b"wrap(uint256)")[..4].to_vec();
-    colliding_calldata.extend_from_slice(&u256_from_u64(1_500_000_000_000_000_001).0);
+    let mut adjacent_calldata = keccak256(b"wrap(uint256)")[..4].to_vec();
+    adjacent_calldata.extend_from_slice(&u256_from_u64(1_500_000_000_000_000_001).0);
+    let adjacent = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &adjacent_calldata,
+        &verified,
+        Some(&steth_meta),
+        &resolver,
+        &[0u8; 20],
+    )
+    .expect("the adjacent base unit has an exact trusted display");
+    assert_ne!(
+        pages.as_slice(),
+        adjacent.pages.as_slice(),
+        "adjacent signed values must never share the same trusted pages"
+    );
     assert!(
-        render_erc7730_pages_with_signer_checked(
-            &tx,
-            &colliding_calldata,
-            &verified,
-            Some(&steth_meta),
-            &resolver,
-            &[0u8; 20],
-        )
-        .is_err(),
-        "1.5 stETH and 1.5 stETH + 1 wei collide under six-decimal paint; the enrolled checked render must hard-refuse the latter"
+        adjacent
+            .transcript_receipt
+            .range_matches(&adjacent.pages, 0)
+    );
+    assert!(!transcript.exact_match(&adjacent.transcript_receipt));
+    assert_eq!(
+        page_strs(&adjacent.pages, intent_page_index(&adjacent.pages))[..2],
+        ["Wrap 1.500000000", "000000001 stETH"]
     );
 
     assert_eq!(transcript.state_code(), INTENT_PUBLICATION_INTERPOLATED);
@@ -8600,9 +8636,8 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
 
     // Exact outer native value: the dispatcher-owned page is additive to the
     // ERC-7730 transcript, and both proofs must survive the one-page batch
-    // prefix shift. Exactly 1 ETH is the positive member of the formatter's
-    // real collision pair; 1 ETH + 1 wei and a literal 1 wei cannot be
-    // represented by the fixed six-decimal native sink and therefore refuse.
+    // prefix shift. The friendly six-decimal form remains unchanged where it
+    // is exact; adjacent dust values use an explicit exact-wei fallback.
     let mut exact_outer = envelope(1, entry.contract);
     exact_outer.value = u256_from_u64(1_000_000_000_000_000_000); // 1 ETH
     let (exact_inner, mut exact_outer_proofs) = dispatch_once(&exact_outer);
@@ -8618,47 +8653,41 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
 
     let mut one_wei_outer = envelope(1, entry.contract);
     one_wei_outer.value = u256_from_u64(1);
-    let mut one_wei_proofs = DispatchPageProofs::new();
-    one_wei_proofs.fail_initialize();
-    assert!(
-        pick_sign_pages(
-            &one_wei_outer,
-            &calldata,
-            &[0u8; 20],
-            None,
-            None,
-            None,
-            Some(&verified),
-            Some(&steth_meta),
-            None,
-            &resolver,
-            &mut one_wei_proofs,
-        )
-        .is_err(),
-        "one wei must refuse rather than alias to an exact-zero native page"
+    let (one_wei_pages, one_wei_proofs) = dispatch_once(&one_wei_outer);
+    let one_wei_value = page_strs(
+        &one_wei_pages,
+        find_page_by_label(&one_wei_pages, "! NATIVE ETH"),
     );
+    assert_eq!(one_wei_value[1], "1");
+    assert_eq!(one_wei_value[2], "wei");
+    let mut one_wei_verdict = crate::fi::FAIL_SENTINEL;
+    one_wei_proofs.final_set_proof(
+        &one_wei_pages,
+        &one_wei_outer,
+        false,
+        &mut one_wei_verdict,
+    );
+    assert_eq!(one_wei_verdict, crate::fi::OK_SENTINEL);
 
     let mut one_eth_plus_one_wei_outer = envelope(1, entry.contract);
     one_eth_plus_one_wei_outer.value = u256_from_u64(1_000_000_000_000_000_001);
-    let mut one_eth_plus_one_wei_proofs = DispatchPageProofs::new();
-    one_eth_plus_one_wei_proofs.fail_initialize();
-    assert!(
-        pick_sign_pages(
-            &one_eth_plus_one_wei_outer,
-            &calldata,
-            &[0u8; 20],
-            None,
-            None,
-            None,
-            Some(&verified),
-            Some(&steth_meta),
-            None,
-            &resolver,
-            &mut one_eth_plus_one_wei_proofs,
-        )
-        .is_err(),
-        "1 ETH + 1 wei must refuse rather than alias to the exact 1 ETH page"
+    let (adjacent_outer_pages, adjacent_outer_proofs) = dispatch_once(&one_eth_plus_one_wei_outer);
+    let adjacent_value = page_strs(
+        &adjacent_outer_pages,
+        find_page_by_label(&adjacent_outer_pages, "! NATIVE ETH"),
     );
+    assert_eq!(adjacent_value[1], "1000000000000000");
+    assert_eq!(adjacent_value[2], "001 wei");
+    assert_ne!(exact_inner.as_slice(), adjacent_outer_pages.as_slice());
+    assert_ne!(one_wei_pages.as_slice(), adjacent_outer_pages.as_slice());
+    let mut adjacent_outer_verdict = crate::fi::FAIL_SENTINEL;
+    adjacent_outer_proofs.final_set_proof(
+        &adjacent_outer_pages,
+        &one_eth_plus_one_wei_outer,
+        false,
+        &mut adjacent_outer_verdict,
+    );
+    assert_eq!(adjacent_outer_verdict, crate::fi::OK_SENTINEL);
 }
 
 /// Constant-annotation field (path-less `{value, label}`): the registry
@@ -13497,7 +13526,7 @@ fn production_quickswap_add_liquidity_native_renders_refundable_maximum_exactly(
 }
 
 #[test]
-fn production_quickswap_add_liquidity_mutations_change_transcript_or_refuse_inexact_native() {
+fn production_quickswap_add_liquidity_mutations_change_transcript_exactly() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
     let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
@@ -13528,14 +13557,13 @@ fn production_quickswap_add_liquidity_mutations_change_transcript_or_refuse_inex
     let mut add_native_tx = envelope(137, QUICKSWAP_ROUTER);
     add_native_tx.value = u256_from_u64(2_000_000_000_000_000_000);
 
-    for (signature, calldata, tx, word_count, inexact_native_word) in [
-        (QUICKSWAP_ADD, add_calldata, &add_tx, 8usize, None),
+    for (signature, calldata, tx, word_count) in [
+        (QUICKSWAP_ADD, add_calldata, &add_tx, 8usize),
         (
             QUICKSWAP_ADD_NATIVE,
             add_native_calldata.clone(),
             &add_native_tx,
             6usize,
-            Some(3usize),
         ),
     ] {
         let baseline = render_erc7730_pages_with_signer_checked(
@@ -13549,38 +13577,28 @@ fn production_quickswap_add_liquidity_mutations_change_transcript_or_refuse_inex
         for word_index in 0..word_count {
             let mut mutated_calldata = calldata.clone();
             mutated_calldata[4 + word_index * 32 + 31] ^= 1;
-            match render_erc7730_pages_with_signer_checked(
+            let mutated = render_erc7730_pages_with_signer_checked(
                 tx,
                 &mutated_calldata,
                 &verified,
                 None,
                 &resolver,
                 &signer,
-            ) {
-                Ok(mutated) => {
-                    assert_ne!(
-                        baseline.pages.as_slice(),
-                        mutated.pages.as_slice(),
-                        "calldata word {word_index} must change trusted pages for {signature}"
-                    );
-                    assert!(
-                        !baseline
-                            .transcript_receipt
-                            .exact_match(&mutated.transcript_receipt),
-                        "calldata word {word_index} must change the receipt for {signature}"
-                    );
-                }
-                Err(crate::tx::erc7730_render::RenderErr::Reject("7730 inexact scaled value")) => {
-                    assert_eq!(
-                        Some(word_index),
-                        inexact_native_word,
-                        "only the one-wei native-minimum mutation may refuse exactly"
-                    )
-                }
-                Err(error) => panic!(
-                    "unexpected mutation refusal for {signature} word {word_index}: {error:?}"
-                ),
-            }
+            )
+            .unwrap_or_else(|error| {
+                panic!("exact mutation refused for {signature} word {word_index}: {error:?}")
+            });
+            assert_ne!(
+                baseline.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "calldata word {word_index} must change trusted pages for {signature}"
+            );
+            assert!(
+                !baseline
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "calldata word {word_index} must change the receipt for {signature}"
+            );
         }
     }
 
@@ -13609,21 +13627,24 @@ fn production_quickswap_add_liquidity_mutations_change_transcript_or_refuse_inex
         .transcript_receipt
         .exact_match(&changed_value.transcript_receipt));
 
-    let mut inexact_value_tx = envelope(137, QUICKSWAP_ROUTER);
-    inexact_value_tx.value = u256_from_u64(2_000_000_000_000_000_001);
-    assert!(matches!(
-        render_erc7730_pages_with_signer_checked(
-            &inexact_value_tx,
-            &add_native_calldata,
-            &verified,
-            None,
-            &resolver,
-            &signer,
-        ),
-        Err(crate::tx::erc7730_render::RenderErr::Reject(
-            "7730 inexact scaled value"
-        ))
-    ));
+    let mut adjacent_value_tx = envelope(137, QUICKSWAP_ROUTER);
+    adjacent_value_tx.value = u256_from_u64(2_000_000_000_000_000_001);
+    let adjacent_value = render_erc7730_pages_with_signer_checked(
+        &adjacent_value_tx,
+        &add_native_calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("2 POL plus one wei renders exactly");
+    let maximum_rows = quickswap_rows_with_label(&adjacent_value.pages, "Maximum to Add");
+    assert_eq!(maximum_rows[0][1], "2.00000000000000");
+    assert_eq!(maximum_rows[0][2], "0001 POL");
+    assert_ne!(baseline.pages.as_slice(), adjacent_value.pages.as_slice());
+    assert!(!baseline
+        .transcript_receipt
+        .exact_match(&adjacent_value.transcript_receipt));
 }
 
 #[test]
@@ -14080,7 +14101,7 @@ fn production_quickswap_native_swaps_render_full_routes_and_exact_operands() {
 }
 
 #[test]
-fn production_quickswap_native_swap_mutations_change_transcript_or_refuse() {
+fn production_quickswap_native_swap_mutations_change_transcript_exactly() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
     let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
@@ -14134,14 +14155,6 @@ fn production_quickswap_native_swap_mutations_change_transcript_or_refuse() {
             &tx, &calldata, &verified, None, &resolver, &signer,
         )
         .expect("render canonical QuickSwap native swap");
-        let native_amount_operand = match signature {
-            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => {
-                Some("second amount")
-            }
-            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => Some("first amount"),
-            _ => None,
-        };
-
         let mut offsets = vec![
             (4 + 31, "first amount"),
             (4 + beneficiary_word * 32 + 31, "beneficiary"),
@@ -14157,24 +14170,17 @@ fn production_quickswap_native_swap_mutations_change_transcript_or_refuse() {
         for (offset, operand) in offsets {
             let mut mutated_calldata = calldata.clone();
             mutated_calldata[offset] ^= 1;
-            let mutated = match render_erc7730_pages_with_signer_checked(
+            let mutated = render_erc7730_pages_with_signer_checked(
                 &tx,
                 &mutated_calldata,
                 &verified,
                 None,
                 &resolver,
                 &signer,
-            ) {
-                Ok(mutated) => mutated,
-                Err(error) => {
-                    assert_eq!(
-                        native_amount_operand,
-                        Some(operand),
-                        "only an inexact native-amount mutation may refuse for {signature}: {error:?}"
-                    );
-                    continue;
-                }
-            };
+            )
+            .unwrap_or_else(|error| {
+                panic!("exact {operand} mutation refused for {signature}: {error:?}")
+            });
             assert_ne!(
                 rendered.pages.as_slice(),
                 mutated.pages.as_slice(),
@@ -16268,4 +16274,3 @@ fn production_layerswap_routes_render_only_the_signed_funding_action() {
     *tampered_bundle.last_mut().expect("proof byte") ^= 1;
     assert!(verify_erc7730_bundle(&tampered_bundle, &registry.root).is_err());
 }
-

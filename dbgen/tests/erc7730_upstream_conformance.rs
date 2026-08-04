@@ -2388,7 +2388,7 @@ fn lido_v2_wsteth_legacy_vector_uses_production_leaf_and_metadata() {
 }
 
 #[test]
-fn lido_v2_steth_high_precision_stake_reaches_leaf_then_refuses_exactly() {
+fn lido_v2_steth_high_precision_stake_reaches_leaf_and_renders_exactly() {
     let raw = v2_calldata_fixture_case(
         "registry-v2/lido/testsv2/calldata-stETH.tests.json",
         "../calldata-stETH.json",
@@ -2405,8 +2405,9 @@ fn lido_v2_steth_high_precision_stake_reaches_leaf_then_refuses_exactly() {
     );
     assert!(
         !amount_is_exact_at_fraction_digits(&parsed.tx.value, 18, 6),
-        "high-precision fixture unexpectedly became exactly displayable"
+        "high-precision fixture unexpectedly fits the six-digit baseline"
     );
+    assert!(amount_is_exact_at_fraction_digits(&parsed.tx.value, 18, 18));
 
     let registry = build_registry();
     let entry = registry
@@ -2425,16 +2426,44 @@ fn lido_v2_steth_high_precision_stake_reaches_leaf_then_refuses_exactly() {
     cross_check_contract(&verified.ir, parsed.tx.chain_id, &contract)
         .expect("bind stETH v2 vector to production leaf");
 
-    match render_erc7730_pages(
+    let pages = render_erc7730_pages(
         &parsed.tx,
         parsed.data,
         &verified,
         None,
         &NameResolver::new(),
-    ) {
-        Err(error) => assert_eq!(error, RenderErr::Reject("7730 inexact scaled value")),
-        Ok(_) => panic!("high-precision stETH fixture unexpectedly rendered"),
-    }
+    )
+    .expect("high-precision stETH fixture renders its exact signed value");
+    let intent_page = pages
+        .as_slice()
+        .first()
+        .expect("stETH render includes its intent page");
+    // This upstream template appends its own ` ETH` literal. PQ1's amount
+    // witness already carries the authenticated unit, so interpolation v1
+    // deliberately retains the independently safe static intent here.
+    assert_eq!(
+        std::str::from_utf8(&intent_page[0])
+            .expect("static intent is ASCII")
+            .trim_end(),
+        "Stake ETH"
+    );
+    assert_eq!(
+        std::str::from_utf8(&intent_page[1])
+            .expect("static owner is ASCII")
+            .trim_end(),
+        "Lido DAO"
+    );
+    assert_eq!(
+        std::str::from_utf8(&intent_page[2])
+            .expect("static contract is ASCII")
+            .trim_end(),
+        "stETH"
+    );
+    let rendered = normalized_rows(&pages);
+    let mut cursor = 0usize;
+    consume_normalized_token(&rendered, &mut cursor, "Amount");
+    consume_normalized_token(&rendered, &mut cursor, "1.07860842400053");
+    consume_normalized_token(&rendered, &mut cursor, "4547 ETH");
 }
 
 #[test]
@@ -3338,14 +3367,44 @@ fn legacy_lido_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waiv
 }
 
 #[test]
-fn lido_wsteth_inexact_upstream_calls_fail_closed() {
+fn lido_wsteth_high_precision_calls_render_or_refuse_only_on_title_budget() {
     let relative_fixture = "registry/lido/tests/calldata-wstETH.tests.json";
     let cases = [
-        (0usize, "approve(address,uint256)", 1usize),
-        (2, "unwrap(uint256)", 0),
-        (4, "decreaseAllowance(address,uint256)", 1),
-        (5, "increaseAllowance(address,uint256)", 1),
-        (7, "transferFrom(address,address,uint256)", 2),
+        (
+            0usize,
+            "approve(address,uint256)",
+            1usize,
+            "313.168649898893395438 wstETH",
+            true,
+        ),
+        (
+            2,
+            "unwrap(uint256)",
+            0,
+            "0.000337191572414852 wstETH",
+            false,
+        ),
+        (
+            4,
+            "decreaseAllowance(address,uint256)",
+            1,
+            "0.0999998 wstETH",
+            true,
+        ),
+        (
+            5,
+            "increaseAllowance(address,uint256)",
+            1,
+            "0.0000000000000001 wstETH",
+            true,
+        ),
+        (
+            7,
+            "transferFrom(address,address,uint256)",
+            2,
+            "0.113492582574591644 wstETH",
+            true,
+        ),
     ];
 
     let registry = build_registry();
@@ -3381,7 +3440,7 @@ fn lido_wsteth_inexact_upstream_calls_fail_closed() {
     };
     assert_eq!(metadata.decimals, 18);
 
-    for (case_index, signature, amount_word_index) in cases {
+    for (case_index, signature, amount_word_index, expected_amount, should_render) in cases {
         let (_, raw) = fixture_case(relative_fixture, case_index);
         assert_eq!(supported_fixture_shell(&raw), FixtureShellKind::Type2);
         let (tx, data) = match rlp_field_count(&raw, true) {
@@ -3410,15 +3469,35 @@ fn lido_wsteth_inexact_upstream_calls_fail_closed() {
         );
         assert!(
             !amount_is_exact_at_fraction_digits(&amount, 18, 6),
-            "fixture case {case_index} unexpectedly became exactly renderable"
+            "fixture case {case_index} unexpectedly fits the six-digit baseline"
         );
-        assert!(
-            matches!(
-                render_erc7730_pages(&tx, &data, &verified, Some(&metadata), &NameResolver::new(),),
-                Err(RenderErr::Reject("7730 inexact scaled value"))
-            ),
-            "case {case_index} must retain the existing exactness refusal"
-        );
+        assert!(amount_is_exact_at_fraction_digits(&amount, 18, 18));
+        let result =
+            render_erc7730_pages(&tx, &data, &verified, Some(&metadata), &NameResolver::new());
+        if should_render {
+            let pages = result.unwrap_or_else(|error| {
+                panic!("case {case_index} exact field unexpectedly refused: {error:?}")
+            });
+            let rendered = normalized_rows(&pages);
+            let mut cursor = 0usize;
+            for chunk in expected_amount.as_bytes().chunks(DISPLAY_COLS) {
+                consume_normalized_token(
+                    &rendered,
+                    &mut cursor,
+                    std::str::from_utf8(chunk).expect("expected amount is ASCII"),
+                );
+            }
+        } else {
+            let error = match result {
+                Err(error) => error,
+                Ok(_) => panic!("case {case_index} over-budget interpolated title rendered"),
+            };
+            assert_eq!(
+                error,
+                RenderErr::Reject("7730 interpolated intent too long"),
+                "case {case_index} must refuse only because the exact interpolated title exceeds its two-row budget"
+            );
+        }
     }
 }
 
