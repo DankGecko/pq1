@@ -1,0 +1,40 @@
+# COMMITTED ARTIFACT IDENTITY.  Added 2026-08-02 (adversarial review, run 10).
+#
+# INPUTS_SHA256 was PRINTED by both gates and COMPARED TO NOTHING, so no run
+# could ever fail on identity drift: the line was a receipt for a human who was
+# never asked to check it.  These are the expected values; the gates now fail if
+# the computed hash differs.
+#
+# THIS FILE IS DELIBERATELY OUTSIDE THE HASHED SET.  The hash covers the 32 cone
+# files plus cert-baseline*.tsv and cert-statements-*.tsv.  Section 35 of the
+# claims log records the trap: the log is itself a cone input of both gates, so
+# writing a receipt into it changes the value the receipt reports.  A pin stored
+# inside the hashed set would have the same defect.
+#
+# Changing a cone file or a manifest REQUIRES updating this file in the same
+# commit.  That is the point: re-baselining becomes a deliberate, reviewable act
+# rather than a silent one.  Recompute with LC_ALL=C (the collation pin -- see
+# section 35); host and container then agree by construction.
+#
+# RE-BASELINE LOG.  Every change to these values is deliberate and must say why.
+#
+# 2026-08-04 (run 22).  split d3aa0fa11aab42b1d8baeab44c2922a8 -> c976d979...,
+#   fork 211d6194fd972716eaeee792bcd74531 -> 3949c473....  THREE COMMENT AND
+#   RECEIPT CHANGES, NO PROOF CHANGE.  Both censuses were verified identical
+#   across the re-baseline (split 975 keys / 1055 rows, added=0 removed=0;
+#   fork 1009 / 1089, no delta), so the assumption set is untouched.
+#     (a) cert_gate_split.sh now prints ECO_PURGED alongside ECO_REMAINING.
+#         ECO_REMAINING=0 could not distinguish "nothing was stale" from "180
+#         stale objects were removed", and run 22 began as the second case.
+#     (b) scratch/tier0_degenerate_encoder_excluded.ec header corrected: it
+#         asserted a discriminating power the run-14 review disproved.  The
+#         control is retained and still MUST-FAIL for its declared reason;
+#         only the header changed.
+#     (c) C10DeployedGeometry.ec section 41 records (a), (b), and the fact that
+#         a zero census delta says nothing about a DEFINED op such as pkfors_of.
+#   Recomputed with LC_ALL=C on BOTH host and container; the split value agreed
+#   in both, which is the section-35 collation pin still holding.
+#
+# tree	hash
+split	c976d9792285cc3b615e7b89a3056dd1
+fork	3949c47358377bc71c007e1a57a676ee

@@ -1,0 +1,435 @@
+#!/usr/bin/env python3
+"""Transitive `require` cone census for the C10 fork.
+
+WHY THIS EXISTS.  Per-file admit/axiom counts are STRUCTURALLY BLIND to what a
+theorem inherits.  Two independent adversarial reviews (2026-07-30) produced the
+same concrete instance: `cdrafts-fork/XmssmtCC_All.ec` reports 0 admits, yet at
+:8907 it applies `MEUFGCMA_WOTSTWESNPRF`, whose proof consumes the ADMITTED
+`nhchwcoll_hchwpre_msg` (base-c10-fork/WOTS_TW_ES.ec:1444).  EasyCrypt has no
+`#print axioms`, and `require` does not re-verify, so nothing in the ordinary
+build surfaces this.
+
+WHAT IT DOES.  From the closure roots, follow `require` transitively over files
+that live on the fork include path, and census every `admit.` / `axiom` /
+`declare axiom` in that cone, attributed to its enclosing declaration.
+
+SCOPE, STATED SO IT IS NOT MISREAD.  The cone stops at the EasyCrypt standard
+library (AllCore, List, Distr, ...).  Stdlib axioms are the accepted foundation
+and are NOT censused.  This tool reports what THIS DEVELOPMENT adds, not the
+total assumption set of the ambient logic.
+
+`declare axiom` is included deliberately: it is a section-level hypothesis that a
+`^axiom` grep misses.  My own earlier census missed 7 of them.
+"""
+import hashlib, os, re, sys
+
+# Overridable so the SAME cone mechanism can be pointed at the split tree.
+# Added 2026-08-01: cert_gate_split.sh had reimplemented PHASE 2 as a flat regex
+# over one directory, which structurally could not see the live admit in
+# base-c10-split/WOTS_TW_ES.ec.  The correct mechanism already existed here; it
+# was simply hardcoded to the fork.
+INCLUDE_DIRS = os.environ.get(
+    'CERT_CONE_DIRS',
+    'base-c10-fork,cdrafts-fork,experiments/tcollres-leg').split(',')
+
+
+def strip_comments(s):
+    """Blank out (* ... *) but PRESERVE newlines, so line numbers stay true.
+
+    A version of this that turned newlines inside comments into spaces once
+    reported admits at line numbers from the collapsed text -- silently wrong.
+    """
+    out, depth, i = [], 0, 0
+    while i < len(s):
+        if s[i:i + 2] == '(*':
+            depth += 1; i += 2; out.append('  '); continue
+        if s[i:i + 2] == '*)' and depth:
+            depth -= 1; i += 2; out.append('  '); continue
+        c = s[i]
+        out.append(c if (depth == 0 or c == '\n') else ' ')
+        i += 1
+    return ''.join(out)
+
+
+def resolve(theory):
+    # .eca FIRST-CLASS.  Until 2026-08-01 this tried only '.ec', so every local
+    # abstract theory (TweakableHashFunctions.eca, OpenPRE_From_TCR_DSPR_THF.eca,
+    # HashAddresses.eca, KeyedHashFunctions.eca) silently TERMINATED the cone and
+    # its axioms were invisible -- hiding `in_collection` and two `declare axiom`s.
+    # Found by adversarial review, run 4.
+    # LAST-WINS, matching EasyCrypt's -I semantics.  resolve() was FIRST-wins,
+    # so a shadow file later on the include path could be COMPILED by PHASE 1
+    # while PHASE 2 censused the pristine earlier one -- green with an arbitrary
+    # payload.  Found by adversarial review, run 7.
+    hit = None
+    for d in INCLUDE_DIRS:
+        for ext in ('.ec', '.eca'):
+            p = os.path.join(d, theory + ext)
+            if os.path.exists(p):
+                hit = p
+    if hit:
+        return hit
+    return None                      # stdlib or absent -> cone stops here
+
+
+# MULTI-LINE requires: EasyCrypt allows `require import A\n   B C.` -- the old
+# pattern demanded the terminating '.' on the SAME line, so such a require was
+# skipped entirely and its theories silently left the cone.  DOTALL + non-greedy
+# so the match ends at the first '.' that terminates the directive.
+REQ = re.compile(r'^[ \t]*(?:from\s+\S+\s+)?require\s+(.*?)\.[ \t]*$',
+                 re.M | re.S)
+# `theorem` was MISSING from this list, and so were const/abbrev/type.  An
+# `admit.` inside a `theorem` resolved its enclosing declaration to `?`, and
+# the run-10 statement digest then degraded to the CONSTANT `nostmt` -- an
+# unpinned assumption wearing a digest.  Found 2026-08-02 by testing the new
+# code against a synthetic file instead of re-reading it.  No live instance in
+# either cone today (0 `theorem`s), which is why nothing surfaced it.
+DECL = re.compile(r"^\s*(?:local\s+)?(lemma|theorem|equiv|hoare|phoare|axiom|declare\s+axiom|module|op|pred|const|abbrev|type|realize)\s+"
+                  r"([A-Za-z0-9_']+)")
+
+
+def requires_of(path, text):
+    names = []
+    for m in REQ.finditer(text):
+        body = m.group(1)
+        body = re.sub(r'\(\*.*?\*\)', ' ', body)
+        body = body.replace('import', ' ').replace('export', ' ')
+        for tok in body.split():
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9_']*", tok):
+                names.append(tok)
+    return names
+
+
+def cone(roots):
+    """Transitive closure of `require` over on-path files. Returns {path: text}."""
+    seen, stack = {}, list(roots)
+    while stack:
+        p = stack.pop()
+        if p in seen or not os.path.exists(p):
+            continue
+        text = strip_comments(open(p).read())
+        seen[p] = text
+        for n in requires_of(p, text):
+            q = resolve(n)
+            if q and q not in seen:
+                stack.append(q)
+    return seen
+
+
+def enclosing(lines, idx):
+    """Nearest declaration at or above line idx (0-based) -- stable under edits."""
+    for j in range(idx, max(-1, idx - 400), -1):
+        m = DECL.match(lines[j])
+        if m:
+            return m.group(2)
+    return '?'
+
+
+def census(files):
+    """[(path, kind, name, line)] for every assumption-bearing construct.
+
+    WHITESPACE-NORMALISED, NOT LINE-ORIENTED.  Until 2026-08-02 every pattern was
+    matched per LINE.  EasyCrypt's grammar is newline-insensitive, so
+
+        proof. admit
+        .
+
+    COMPILES and was reported by NOTHING: one inserted newline defeated the
+    entire census, six rounds of hardening included.  Found by adversarial review,
+    run 7.  Patterns now run over the comment-stripped whole text with
+    re.S/whitespace-tolerant separators; line numbers come from match offsets.
+    """
+    out = []
+    for p, text in sorted(files.items()):
+        body = strip_comments(text)
+        def line_of(off):
+            return body.count('\n', 0, off) + 1
+        # admit / admitted terminator, any amount of whitespace before the dot
+        for m in re.finditer(r"(?<![A-Za-z0-9_'])(admit(?:ted)?)\s*\.", body):
+            nm = enclosing(body.split('\n'), line_of(m.start()) - 1)
+            # THE STATEMENT OF AN ADMITTED LEMMA IS THE ASSUMPTION.  Until
+            # 2026-08-02 this row was (file, 'admit', NAME): the whole receipt
+            # narrates "ONE real admit, exactly MM45's encode-injectivity gap",
+            # and NOTHING pinned its content.  Replacing the premise
+            #   !has_chwcoll ps ad (encode_msgWOTS m) (encode_msgWOTS m') sig sig'
+            # with `True` keeps the name, the arity, the conclusion, the census
+            # row and all 49 statement pins -- while turning the assumption into
+            # something almost certainly FALSE for the real scheme.  PHASE 1c
+            # pins 3 capstone lemmas + 46 op/axiom declarations and no lemma in
+            # WOTS_TW_ES.ec at all.  Found by adversarial review, run 10.
+            out.append((p, 'admit:' + _stmt_digest(body, nm), nm, line_of(m.start())))
+        # declare axiom / axiom, at a statement start (line start or after a dot)
+        for m in re.finditer(r"(?:^|\.)\s*(declare\s+axiom|axiom)\s+([A-Za-z_][A-Za-z0-9_']*)",
+                             body, re.M | re.S):
+            kind = 'declare-axiom' if m.group(1).startswith('declare') else 'axiom'
+            out.append((p, kind, m.group(2), line_of(m.start(2))))
+        # refined constant `const x : { .. } as name` -- declares an axiom.
+        # THE PREDICATE IS NOW IN THE KEY (added 2026-08-02, run 10).  The row
+        # used to be (file, 'refined-const', NAME), so the PREDICATE TEXT was
+        # unpinned for all 41 of them, and none is covered by PHASE 1c either.
+        # The dangerous direction is STRENGTHENING: `{ int | 1 <= n }` ->
+        # `{ int | 1 <= n /\ n <= 0 }` installs a CONTRADICTORY axiom (EasyCrypt
+        # demands no inhabitation proof for `as`), after which every theorem in
+        # the closure is vacuously true -- and the old census reported added=0
+        # removed=0.  Verified as a principle in scratch/refine_contra_probe.ec.
+        for m in re.finditer(r"(?:^|\.)\s*(?:const|op)\s+[A-Za-z_][A-Za-z0-9_']*\s*:\s*"
+                             r"(\{.*?\})\s*as\s+([A-Za-z_][A-Za-z0-9_']*)", body, re.M | re.S):
+            pred = hashlib.sha256(re.sub(r'\s+', ' ', m.group(1)).strip().encode()).hexdigest()[:12]
+            out.append((p, 'refined-const:' + pred, m.group(2), line_of(m.start(2))))
+        # CLONE SITES AND THEIR DISCHARGE MODE.  A clone's `proof` clause decides
+        # which inherited obligations are PROVED and which are INSTALLED AS
+        # AXIOMS.  Deleting a name from that list -- or deleting `proof *.` and
+        # its `realize` block -- silently turns a lemma into an axiom, with no
+        # other textual trace.  Verified in-tree at SPHINCS_PLUS.ec:398:
+        # HA.Adrs.inhabited flipped from `lemma` to `axiom [prove]`, the file
+        # still compiled, and the census reported added=0 removed=0.
+        # Recording the DISCHARGE MODE makes that edit a census delta.
+        # Found by adversarial review, run 7.
+        for m in re.finditer(
+                # `local clone` matched NOTHING (run 12): three in-cone sites --
+                # OpenPRE_From_TCR_DSPR_THF.eca:720, FORS_ES.ec:2826,
+                # WOTS_TW_ES.ec:3176 -- carried no row at all, so deleting a
+                # `proof *.` there installs stdlib obligations as axioms with
+                # zero census delta.
+                r"(?:^|\.)\s*(?:local\s+)?clone\s+(?:import\s+|export\s+|include\s+)?([A-Za-z_][A-Za-z0-9_.']*)"
+                # Tail runs to the next COLUMN-0 top-level keyword.  A previous
+                # version delimited on `(^|\.)\s*op` etc., which fired on the
+                # `op x <- y` lines INSIDE the with-clause and truncated the tail
+                # before `proof`, so every clone misreported as discharge:none.
+                r"(?:\s+as\s+([A-Za-z_][A-Za-z0-9_']*))?(.*?)"
+                # `clone` at ANY indentation also ends the tail: an INDENTED clone was
+                # being swallowed by the preceding clone's tail and never matched at
+                # all (finditer resumes after the previous match), losing 9 sites.
+                # `local clone` in the TERMINATOR too (run 13): run 12 added (?:local\s+)? to the
+                # MATCH pattern and not here, so a column-0 `local clone` following another
+                # clone is swallowed by its predecessor's tail and never censused -- the
+                # very hole run 12's commit message claimed to close.  Dormant only because
+                # all three live sites happen to follow a non-clone declaration.
+                r"(?=^[ \t]*(?:local\s+)?clone\b|"
+                r"^(?:local\s+)?(?:lemma|theorem|module|type|op|const|abbrev|pred|axiom|section|end|require|import|export|equiv|hoare|phoare)\b|\Z)",
+                body, re.M | re.S):
+            src, alias, tail = m.group(1), m.group(2) or m.group(1), m.group(3) or ''
+            alias = alias.rstrip('.')          # `clone include X.` captured the terminator
+            # THE PROOF CLAUSE BELONGS TO THE CLONE STATEMENT, NOT TO THE TAIL
+            # (fixed 2026-08-02, run 11, found independently by both reviewers).
+            # The tail ran to the next COLUMN-0 keyword, so inside an INDENTED
+            # `abstract theory` it overran into a LATER declaration's `proof.`
+            # and the recorded mode became a function of unrelated following
+            # text.  Two live instances: Grind.ec:62 (`clone import FinType as
+            # CntrFT with type t <- cntr.` -- NO proof clause at all) and
+            # STCR_C.ec:65 were recorded as `empty` when they are semantically
+            # `none`, i.e. EVERY inherited obligation installed as an axiom --
+            # the most assumption-heavy mode, mislabelled as the emptiest.
+            # The clone STATEMENT ends at its own depth-0 terminating dot; the
+            # proof clause is inside it or does not exist.
+            stmt = _decl_span(body, m.start(1))
+            # ...and stop at `rename`, which follows `proof` in the clone grammar:
+            # taking everything to the statement end pulled the rename clause into
+            # the discharged-obligation list (`rename "word" as "emsgWOTS"` ->
+            # tokens rename/word/as/emsgWOTS).  Measured, not assumed.
+            pm = re.search(r"\bproof\b(.*?)(?:\brename\b|$)", stmt, re.S)
+            if pm is None:
+                mode = 'none'                      # NOTHING discharged: all inherited obligations are axioms
+            elif '*' in pm.group(1):
+                mode = 'star'                      # all discharged (possibly via realize blocks)
+            else:
+                # Qualified names survive now: the old `\bproof\b(.*?)\.` stopped at
+                # the first dot, so `proof Alphabet.enum_spec, ge0_n` recorded
+                # `list:Alphabet` and retargeting the discharge to any other
+                # `Alphabet.*` left the row byte-identical (WOTS_TW_ES.ec:276).
+                names = sorted(n for n in re.findall(r"[A-Za-z_][A-Za-z0-9_.']*", pm.group(1).rstrip('. \t\n')))
+                mode = 'list:' + ','.join(names) if names else 'empty'
+            # (1) OPERAND BINDINGS AND (2) RENAME CLAUSES, DIGESTED (run 13c).
+            # 349 `with`-clause operands (321 `<-`, 28 `<=`) and 6 rename pairs
+            # carried NO row of any kind: a rebinding changes what every theorem
+            # in the clone MEANS, and the census saw nothing.  The identity hash
+            # catches an edit to an existing file, but the census -- which is
+            # what a reviewer reads to judge a deliberate re-baseline -- reported
+            # `added=0 removed=0` for all 355 of them.
+            stmt_for_ops = _decl_span(body, m.start(1))
+            # split at `proof`/`rename` as WORDS: `stmt.split(' proof ')` never
+            # matched, because the clause is newline-formatted, so the 'head' was
+            # the whole statement.  (It happened not to over-count, since operand
+            # syntax does not appear after `proof`, but the intent was wrong.)
+            head = re.split(r'\bproof\b|\brename\b', stmt_for_ops, maxsplit=1)[0]
+            for om in re.finditer(r"\b(op|type|pred|theory|module)\s+([A-Za-z_][A-Za-z0-9_.']*)\s*(<-|<=)\s*",
+                                  head, re.S):
+                rest = head[om.end():]
+                # an operand ends at the next `, <kw> name <-` or at the clause end
+                nxt = re.search(r",\s*(?:op|type|pred|theory|module)\s+[A-Za-z_][A-Za-z0-9_.']*\s*(?:<-|<=)", rest, re.S)
+                val = rest[:nxt.start()] if nxt else rest
+                dg = hashlib.sha256(re.sub(r'\s+', ' ', om.group(1) + ' ' + om.group(3) + ' ' + val).strip().encode()).hexdigest()[:12]
+                out.append((p, 'operand:' + dg, alias + '.' + om.group(2), line_of(m.start(1))))
+            for rm in re.finditer(r'"([^"]*)"\s*as\s*"([^"]*)"', stmt_for_ops, re.S):
+                dg = hashlib.sha256((rm.group(1) + '->' + rm.group(2)).encode()).hexdigest()[:12]
+                out.append((p, 'rename:' + dg, alias + '.' + rm.group(1), line_of(m.start(1))))
+            # (3) NESTED-CLONE OBLIGATIONS, per obligation rather than per site.
+            # A `clone-discharge` row is ONE marker standing for 0-or-more
+            # installed axioms, so 24 Subtype/FinType sites hid 76 obligations.
+            # This table is a DOCUMENTED HEURISTIC over the r2026.02 stdlib, not
+            # a reading of EasyCrypt's environment: Subtype (structure/Subtype.eca)
+            # declares insubN/insubT/valP/valK plus `inhabited`; FinType declares
+            # enum_spec.  Any obligation NOT named in the clone's proof/realize
+            # lists is installed as an axiom and gets its own row.
+            STDLIB_OBLS = {'Subtype': ['insubN', 'insubT', 'valP', 'valK', 'inhabited'],
+                           'FinType': ['enum_spec']}
+            _realized = set(n.split('.')[-1] for n in
+                            re.findall(r"(?:^|\.)\s*realize\s+([A-Za-z_][A-Za-z0-9_.']*)", tail, re.M))
+            _proof_names = set()
+            _star = False
+            if pm is not None:
+                if '*' in pm.group(1):
+                    _star = True
+                else:
+                    _proof_names = set(n.split('.')[-1] for n in
+                                       re.findall(r"[A-Za-z_][A-Za-z0-9_.']*", pm.group(1)))
+            for src_name, obls in STDLIB_OBLS.items():
+                if re.search(r'\b' + src_name + r'\b', src):
+                    discharged = _realized | _proof_names
+                    star = _star
+                    for o in obls:
+                        if star or o in discharged:
+                            continue
+                        out.append((p, 'clone-obligation:' + src_name, alias + '.' + o, line_of(m.start(1))))
+            realized = sorted(set(re.findall(r"(?:^|\.)\s*realize\s+([A-Za-z_][A-Za-z0-9_.']*)", tail, re.M)))
+            out.append((p, 'clone-discharge:' + mode + ('|realize:' + ','.join(realized) if realized else ''),
+                        alias, line_of(m.start(1))))
+        # op [lossless|full|uniform] -- each annotation generates an axiom
+        for m in re.finditer(r"(?:^|\.)\s*op\s*\[([^\]]+)\]\s*([A-Za-z_][A-Za-z0-9_']*)",
+                             body, re.M | re.S):
+            for tag in m.group(1).split():
+                out.append((p, 'op-annotation:' + tag, m.group(2), line_of(m.start(2))))
+        # ABSTRACT DECLARATIONS -- THE SUBJECTS OF THE PINNED AXIOMS.
+        # Added 2026-08-02 (run 11, Kimi K3).  The census pinned the axiom
+        #     axiom dist_adrstypes : uniq [chtype; pkcotype; trhxtype; ...]
+        # and pinned NOTHING about the constants it talks about.  Giving one of
+        # them a body --
+        #     const pkcotype : int.   ->   const pkcotype : int = chtype.
+        # -- makes that pinned axiom FALSE, so `false` is derivable in every file
+        # requiring SPHINCS_PLUS and all three capstones become theorems of an
+        # inconsistent theory.  `chtype`/`pkcotype` appeared in ZERO pins and
+        # ZERO census rows: an abstract `const` is neither a refined constant
+        # (`{..} as`) nor an op-annotation nor a module, so it fell between every
+        # category ten rounds had built.
+        # An abstract declaration is a PARAMETER the theory assumes exists;
+        # acquiring a body is a semantic change and now moves a row.
+        # ANNOTATED OPS WERE EXCLUDED (run 13, GPT-5.6): the name had to follow
+        # `op` immediately, so every `op [lossless] name : t.` -- 61 of them --
+        # carried only its op-annotation row (name + tag) and NO declaration
+        # digest, i.e. its TYPE was unpinned by the census.
+        for m in re.finditer(r"(?:^|\.)\s*(?:local\s+)?(const|op|type)\s*(?:\[[^\]]*\]\s*)?"
+                             r"([A-Za-z_][A-Za-z0-9_']*)", body, re.M | re.S):
+            decl = _decl_span(body, m.start(2))
+            head = decl.split('=')[0]
+            if '=' in decl and '<-' not in head:
+                continue                      # has a body: a definition, not a parameter
+            if '<-' in head:
+                continue                      # clone with-clause operand binding
+            dg = hashlib.sha256(re.sub(r'\s+', ' ', decl).strip().encode()).hexdigest()[:12]
+            out.append((p, 'abstract-' + m.group(1) + ':' + dg, m.group(2), line_of(m.start(2))))
+        # MODULE TYPES AND MODULES, BODY-DIGESTED.  Added 2026-08-02 (run 10).
+        # These are not axioms, but they SHAPE THE MEANING of the top theorems,
+        # and until now NOTHING covered them: not PHASE 1c (a statement naming a
+        # module type digests the NAME only), not this census (no row of any
+        # kind), not PHASE 1b/2b/3.  Demonstrated in-tree, not hypothesised:
+        # narrowing the capstone forger's restriction at XmssmtCC_All.ec:9563
+        #     proc forge(..) : .. { O.sign }   ->   { }
+        # shrinks EUF-CMA to forgers that never query the signing oracle -- and
+        # left ALL 49 pinned digests and ALL 213 census rows byte-identical.
+        # Population in the split cone: 67 module types, 252 modules.
+        # The digest goes in the KIND field, so any body edit is simultaneously
+        # a removed row and an added row, and PHASE 2 is fatal on both.
+        for m in re.finditer(r"(?:^|\.)\s*(?:local\s+|declare\s+)?module\s+(type\s+)?"
+                             r"(?:\(\s*)?([A-Za-z_][A-Za-z0-9_']*)", body, re.M | re.S):
+            is_type = bool(m.group(1))
+            decl = _decl_span(body, m.start(2))
+            dg = hashlib.sha256(re.sub(r'\s+', ' ', decl).strip().encode()).hexdigest()[:12]
+            out.append((p, ('module-type:' if is_type else 'module:') + dg,
+                        m.group(2), line_of(m.start(2))))
+    return out
+
+
+def _stmt_digest(body, name):
+    """Digest of `name`'s STATEMENT (declaration up to `proof`), not its proof.
+
+    Proof text is deliberately excluded: a gate that churns on every tactic edit
+    gets re-baselined reflexively, which is how a gate dies.
+    """
+    # AMBIGUITY IS NOT RESOLVED BY POSITION (run 12).  Taking the first match
+    # means two theories each declaring `lemma dup` let an edit to the SECOND
+    # leave this digest byte-identical -- the same defect run 11 fixed in
+    # tools/stmt_digest.py, still live here.  Latent today (zero duplicate names
+    # in either cone, scanned) and fatal the moment that stops being true.
+    _all = re.findall(r"(?:^|\.)\s*(?:local\s+)?(?:lemma|theorem|equiv|hoare|phoare)\s+"
+                      + re.escape(name) + r"(?![A-Za-z0-9_'])", body, re.M | re.S)
+    if len(_all) > 1:
+        return 'ambig%d' % len(_all)
+    # CAPTURE THE KEYWORD POSITION, NOT THE PREFIX POSITION (fixed run 13).
+    # `(?:^|\.)` matches the PRECEDING declaration's terminating dot, so
+    # m.start() pointed AT that dot and _decl_span, whose terminator rule is
+    # "a dot followed by whitespace at depth 0", returned "." immediately.
+    # Every declaration resolving through the fallback therefore digested to
+    # sha256(".")[:12] = cdb4ee2aea69 -- a CONSTANT wearing a hex dress, which
+    # the gate's only degraded-digest check (a grep for `nostmt`) sails past.
+    # The main path escaped it only because `cut` is normally found; a lemma
+    # closed by `by smt()` with no `proof` keyword hits the same constant.
+    m = re.search(r"(?:^|\.)\s*((?:local\s+)?(?:lemma|theorem|equiv|hoare|phoare)\s+"
+                  + re.escape(name) + r"(?![A-Za-z0-9_']))", body, re.M | re.S)
+    if not m:
+        # FALL BACK TO THE ENCLOSING DECLARATION rather than returning a constant.
+        # An `admit.` inside a `realize <axiom-name>` block resolves its enclosing
+        # name to the AXIOM, which is not lemma-shaped, so the first version of
+        # this function returned the fixed string 'nostmt' -- i.e. that admitted
+        # obligation was pinned by nothing while LOOKING pinned.  Digesting the
+        # declaration span keeps a real content key; 'nostmt' now means "no
+        # declaration of any kind found", and the gate treats it as a failure.
+        m2 = re.search(r"(?:^|\.)\s*((?:local\s+)?(?:realize|axiom|op|const|abbrev|type|module)\s+"
+                       + re.escape(name) + r"(?![A-Za-z0-9_']))", body, re.M | re.S)
+        if not m2:
+            return 'nostmt'
+        return hashlib.sha256(
+            re.sub(r'\s+', ' ', _decl_span(body, m2.start(1))).strip().encode()).hexdigest()[:12]
+    tail = body[m.start(1):]
+    cut = re.search(r"(?:^|\.)\s*proof\b", tail, re.M | re.S)
+    stmt = tail[:cut.start()] if cut else _decl_span(body, m.start(1))
+    return hashlib.sha256(re.sub(r'\s+', ' ', stmt).strip().encode()).hexdigest()[:12]
+
+
+def _decl_span(body, start):
+    """Text of the declaration beginning at `start`, to its terminating dot.
+
+    Terminator rule is the one stmt_digest.py already had to learn: a dot
+    FOLLOWED BY WHITESPACE at brace depth 0.  A bare `rest.find('.')` stops
+    inside qualified names (`FSSLXMTWES.TRHC.Oracle_THFC`), and ignoring depth
+    stops at the first dot inside the body.
+    """
+    depth, i, n = 0, start, len(body)
+    while i < n:
+        c = body[i]
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+        elif c == '.' and depth <= 0 and (i + 1 >= n or body[i + 1].isspace()):
+            return body[start:i + 1]
+        i += 1
+    return body[start:]
+
+def main():
+    roots = sys.argv[1:]
+    if not roots:
+        cl = [l.strip() for l in open('closure-c10-fork.txt') if l.strip()]
+        roots = [f'cdrafts-fork/{n}.ec' for n in cl]
+        roots += [f'base-c10-fork/{n}.ec' for n in
+                  ['WOTS_TW_ES', 'FL_SL_XMSS_MT_ES', 'FORS_ES', 'SPHINCS_PLUS']]
+    files = cone(roots)
+    print(f'### CONE_FILES={len(files)}')
+    for p in sorted(files):
+        print(f'#   {p}')
+    # key on (file, kind, name): stable when line numbers shift
+    for p, kind, name, ln in census(files):
+        print(f'{p}\t{kind}\t{name}\t# line {ln}')
+
+
+if __name__ == '__main__':
+    main()

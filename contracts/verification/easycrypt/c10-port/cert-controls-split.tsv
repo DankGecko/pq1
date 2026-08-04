@@ -1,0 +1,13 @@
+# CONTROLS FOR THE SPLIT GATE ONLY (cert_gate_split.sh).
+# Separated from cert-controls.tsv on 2026-08-01: cert_gate_fork.sh reads that
+# file WHOLESALE with FORK includes, so split-only controls failed there with
+# "cannot locate theory C10DeployedInstance" -- a reason mismatch that turned
+# the sibling gate RED.  My run-2 remediation broke the fork gate; found by
+# adversarial review, run 3.
+#
+# path	polarity	declared-reason
+scratch/vac_probe_full.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/probe_len46.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/c10_spec_vacuity_canary.ec	MUST-FAIL	cannot prove goal (strict)
+cdrafts-split/C10SpecControls.ec	MUST-PASS	-
+scratch/tier0_degenerate_encoder_excluded.ec	MUST-FAIL	cannot prove goal (strict)

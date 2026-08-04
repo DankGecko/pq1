@@ -1,0 +1,32 @@
+# CONTROLS for cert_gate_fork.sh
+# Format: path <TAB> MUST-PASS|MUST-FAIL <TAB> required substring of the failure message
+#
+# POLARITY IS TAKEN FROM EACH FILE'S OWN HEADER, not from anyone's summary.
+# That matters: SphincsC10CapstoneWired.ec:747 cites synth_repaired_canary3.ec as
+# an APPLICABILITY receipt, but that file's header says
+# "MUST BE **REJECTED** ... A GREEN COMPILE HERE IS A REGRESSION".
+# The citation inverts the artifact (found in adversarial review 2026-07-30).
+#
+# WHY MUST-FAIL CONTROLS CARRY AN EXPECTED REASON.  A must-fail control that
+# fails for an unrelated reason (arity slip, stale argument list, renamed lemma)
+# still "fails", so a naive rc<>0 check passes while the control tests NOTHING.
+# This is not hypothetical: adding the N2 premise silently broke canary3's
+# argument list, so it would now fail on arity rather than on vacuity.
+#
+# The third column is matched literally (grep -F) against the first [critical] line.
+
+# --- must-pass: these establish facts the fork's honesty claims rest on -------
+scratch/LWVacuity.ec	MUST-PASS	-
+scratch/synth_exact_prefix_vacuity.ec	MUST-PASS	-
+scratch/synth_repaired_nonvacuity.ec	MUST-PASS	-
+
+# --- must-fail: a green compile here is a REGRESSION -------------------------
+scratch/synth_repaired_canary1.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/synth_repaired_canary2.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/synth_repaired_canary3.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/synth_negctl.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/synth_grounded_canary4.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/synth_charged_canary5.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/synth_charged_canary6.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/synth_charged_canary7.ec	MUST-FAIL	cannot prove goal (strict)
+scratch/synth_charged_canary8.ec	MUST-FAIL	cannot prove goal (strict)

@@ -1,0 +1,9 @@
+cdrafts-fork/SphincsC10CapstoneWired.ec::EUFCMA_SPHINCS_PLUS_C10_GROUNDED	f2d60cd0e9fdc9b645d7a09de80c770f
+cdrafts-fork/SphincsC10CapstoneCharged.ec::EUFCMA_SPHINCS_PLUS_C10_CHARGED	5bc58adbb71567ec697ce32b08e31692
+op:cdrafts-fork/WOTS_C_Real.ec::emb_in	e92ac8ddbd60b2cf2bbd58b5a67cb855
+op:cdrafts-fork/WOTS_C_Real.ec::ThC	0a080f24a8b22587adcde71eec2ccee3
+op:cdrafts-fork/WOTS_C_Real.ec::predC	6adfd6433d59c193e7d17852f1aa884f
+op:base-c10-fork/WOTS_TW_ES.ec::n	4fb3d5efe16c361d0c614f94c17a2336
+op:base-c10-fork/WOTS_TW_ES.ec::len	61ebdbfc4e6c1790c2cacbbe00cb7572
+base-c10-fork/WOTS_TW_ES.ec::nhchwcoll_hchwpre_msg	03628641e003721058af3e8110b2db24
+base-c10-fork/FL_SL_XMSS_MT_ES.ec::EUFNAGCMA_FLSLXMSSMTTWESNPRF	b0eeda086b65086821e5d754b98cc7a4
