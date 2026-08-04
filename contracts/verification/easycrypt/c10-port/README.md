@@ -1,7 +1,7 @@
 # C10 (SPHINCS+C) EUF-CMA — certified EasyCrypt artifact
 
 Snapshot of the `c10-eufcma-port` research workspace, taken at its commit
-`cceb814` (2026-08-04, "run 24"), at which **both certification gates are
+`60a6eb0` (2026-08-05, "run 25"), at which **both certification gates are
 GREEN**.
 
 This directory supersedes the older `../drafts/*.ec` snapshot, which is an

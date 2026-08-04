@@ -7,7 +7,7 @@ actually spot-checkable, per STATUS.md's rule #1.
 
 > **UPDATE 2026-08-04 — the current artifact is [`c10-port/`](c10-port/), not
 > `drafts/`.** `drafts/*.ec` is the 2026-07-10 snapshot and is retained as
-> history only. `c10-port/` is the workspace at its commit `cceb814`, at which
+> history only. `c10-port/` is the workspace at its commit `60a6eb0`, at which
 > **both certification gates are GREEN** (split: 23 targets / 78 statement pins
 > / 1156 census rows; fork: 19 / 9 / 1089), with committed input identities that
 > each gate recomputes and compares at start *and* end of every run. Read
@@ -80,6 +80,15 @@ Include order matters: **XMSS before SPHINCSPLUS**, else `unknown type diff_t`.
 > Current truth: the split cone carries exactly **two** admits —
 > `nhchwcoll_hchwpre_msg` (`base-c10-split/WOTS_TW_ES.ec`, inherited from MM45)
 > and `extract_op` — and the fork cone two, both inherited. Every one is pinned.
+>
+> **The next sentence ("the capstone's dependency chain is admit-free") is NOT
+> re-verified and is in tension with the above — treat it as unchecked.**
+> `nhchwcoll_hchwpre_msg` is admitted *and used*, at `WOTS_TW_ES.ec:6542`, inside
+> a file the capstone requires transitively. Whether the particular result that
+> consumes it is itself on the capstone's path is a trace I did not complete, so
+> this is flagged rather than corrected. Resolve it before quoting either
+> sentence.
+
 The capstone's dependency chain is admit-free. **8 axioms** (refreshed 2026-07-16,
 FV review F5 — was "7"; `uniq_g` was added 2026-07-10 and omitted here): `dpp_ll`,
 `dmkey_ll` (losslessness), `good_pos` (= the paper's p_ν), and five structural

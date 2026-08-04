@@ -66,6 +66,15 @@
 #   terms a target for a known reduction.  Q = T1+T2+T3 with all three unreduced
 #   is still compatible with Q = 1.
 #
+# 2026-08-04 (run 25).  split e3625fdd... -> b09d8a8d....  Fork UNCHANGED.
+#   COMMENT-ONLY, retracting a false claim I put in the run-24 header: that the
+#   keygen bricks are "INERT ... not a step the template ever takes".  The grep
+#   fact (no consumers) and the CASCADE claim are true; the INFERENCE is false --
+#   every branch REDUCTION opens with a keygen correspondence in its simulation
+#   invariant (FORS_ES.ec:5951-5952 for TRCO, :4840-4841 for TRH), and the pk
+#   pool it characterises is `pkfors_of` verbatim.  Census UNCHANGED at 1156 rows
+#   (added=0 removed=0); only the identity moves, because the file is hashed.
+#
 # tree	hash
-split	e3625fddfe44741b515822749ab3ee2d
+split	b09d8a8df902725b9aac51cc57c7cdf4
 fork	7ab20d2ab0ba2c1f3942408a193b4836

@@ -1312,11 +1312,34 @@ qed.
 
    WHY THIS SHAPE.  The three keygen bricks above (Gproc_uncovered_gives_witness,
    GprocKg_sk_eq, GprocKg_keygen_eq) are true, admit-free, gate-certified -- and
-   INERT: grep shows zero consumers anywhere outside this file, and MM45's
+   have no consumer anywhere outside this file.  The lesson taken here is to ship
+   the CONSUMER in the same commit as the artifact, which is why gproc_V_split
+   sits directly below the game it splits.
+
+   CORRECTION, 2026-08-04 (run 25) -- THE SENTENCE THAT USED TO BE HERE WAS
+   HALF WRONG, AND IT IS WORTH SAYING WHICH HALF.  It read: the bricks are
+   "INERT: grep shows zero consumers anywhere outside this file, and MM45's
    bounding cascade contains no keygen~keygen step at all, so the correspondence
-   they establish is not a step the template ever takes.  The lesson taken here
-   is to ship the CONSUMER in the same commit as the artifact, which is why
-   gproc_V_split sits directly below the game it splits.
+   they establish is not a step the template ever takes."
+   The grep fact is true and the first clause about the CASCADE is true -- the
+   mu_split algebra in EUFCMA_MFORSTWESNPRF_OPRE really does not relate keygens.
+   THE INFERENCE IS FALSE.  Every individual BRANCH REDUCTION opens with exactly
+   such a correspondence in its simulation invariant.  MM45's TRCO branch, at
+   base-c10-split/FORS_ES.ec:5951-5952, carries
+
+       /\ skFORSs{1} = R_TRCOSMDTTCRC_EUFCMA.skFORSs{2}
+       /\ pkFORSs{1} = R_TRCOSMDTTCRC_EUFCMA.pkFORSs{2}
+
+   and the TRH branch (:4840-4841) carries the same two lines, because each
+   reduction's pick() REBUILDS the key pool through the collection oracle and the
+   proof must tie the rebuilt pool to the honest one.  That invariant then
+   characterises the pk pool as
+       trco pp (set_kpidx (set_typeidx adt trcotype) (get_kpidx adt))
+                (flatten (map DigestBlock.val rsk))
+   with rsk = mkseq (fun u => val_bt_trh pp adt (list2tree lfst) u) k -- which is
+   `pkfors_of` above, structurally identical.
+   So the bricks are UNCONSUMED, not off the critical path; "no consumer yet" and
+   "not needed" are different claims and I asserted the second from the first.
 
    WHAT THIS BUYS, STATED FLATLY: NOTHING NUMERIC.  gproc_Q_decomposition is an
    EXACT EQUALITY, and the decomposition step is pure probability algebra that
