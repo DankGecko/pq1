@@ -1,4 +1,4 @@
-# ERC-8176 attestation — status, mechanism, and flip-readiness (2026-07)
+# ERC-8176 attestation — status, mechanism, and flip-readiness (2026-08-05)
 
 **Question this answers:** can we flip the ERC-7730 descriptor corpus from
 "trusted content" (dev mode) to "trusted **and attested**" — `allow_unattested_dev_descriptors = false`?
@@ -115,47 +115,36 @@ release gates remain unchanged.
   comments are curation-manifest-bound bytes; update that file only atomically
   with an approved production policy, manifest, artifacts, and root ceremony.
 
-## Current coverage (400-leaf catalogue snapshot, measured 2026-07)
-
-### UPDATE 2026-07-31 — first real candidate batch, still below threshold
+## Current coverage (365-leaf catalogue snapshot, measured 2026-08-05)
 
 The current PQ1 catalogue has 365 leaves and 214 unique resolved ERC-8176
-descriptor hashes. A fresh `make erc8176-coverage` query still returned only
-the three old schema records (two eligible) and zero PQ1 matches.
+descriptor hashes. A fresh `python3 tools/erc8176_eas_coverage.py --json` query
+returned three schema records: two eligible, one expired, none revoked or
+malformed, and **zero PQ1 descriptor matches**. No descriptor has any trusted
+attestation, and zero meet the required two-distinct-attester threshold.
 
-Upstream now has two unmerged, blocked, and unreviewed candidate PRs:
+Upstream's
 [`#2764`](https://github.com/ethereum/clear-signing-erc7730-registry/pull/2764)
-registers Patrick Collins / Cyfrin with signer
-`0x3846c3A30E62075Fa916216b35EF04B8F53931f6`, and
+merged on 2026-07-31, so registry master now contains one auditor profile for
+Patrick Collins / Cyfrin, signer
+`0x3846c3A30E62075Fa916216b35EF04B8F53931f6`. Registration proves control of an
+identity; it is not by itself a PQ1 trust decision or an attestation over a
+descriptor.
+
+The companion
 [`#2765`](https://github.com/ethereum/clear-signing-erc7730-registry/pull/2765)
-adds 181 offchain EAS-v2 signature files. A read-only validation recovered the
-same signer from all 181 canonical signatures, but only three of their resolved
-descriptor hashes match the exact descriptor bytes currently shipped by PQ1.
-The remaining signatures bind newer or otherwise different upstream descriptor
-bytes. One candidate signer cannot satisfy PQ1's two-distinct-attester policy,
-so **zero PQ1 descriptors are production-admissible** from this batch.
+with 181 offchain EAS-v2 signature files remains open, review-required, and
+failing the registry's descriptor/schema validation. A prior read-only
+rehearsal recovered the same Cyfrin signer from all 181 signatures, but only
+three resolved hashes matched the exact descriptor bytes shipped by PQ1. One
+candidate signer cannot satisfy PQ1's two-distinct-attester policy, so even
+that unmerged batch would make **zero PQ1 descriptors production-admissible**.
 
-This is useful rehearsal evidence, not auditor approval. The merged upstream
-default branch still contains only `auditors/README.md` and no signature files;
-PQ1 has not endorsed the candidate identity, selected a second auditor, pinned
-a checkpoint/snapshot, or authorized a production root. The canonical policy
-and release status therefore remain `dev-unattested`.
-
-`make erc8176-coverage` (the live result distinguishes all returned records
-from the eligible, unrevoked, unexpired subset used for threshold arithmetic):
-
-```
-our descriptors (unique descriptorHashes): 240   (→ 400 firmware leaves)
-total attestations returned by EAS:        3
-eligible (unrevoked and unexpired):        2
-OUR descriptors with ANY attestation:      0
-```
-
-The 3 EAS attestations are all from one address (`0xBf01daF4…77253`, not a known
-auditor); two carry ASCII test junk as the "hash", one a real-looking hash that
-matches **none** of our descriptors. The upstream registry `auditors/` directory
-holds only a README — **zero** registered auditors, **zero** `sigs/` files. The
-ecosystem has not populated (~2 months post-launch).
+Registry master therefore has one registered auditor profile but zero merged
+signature files. PQ1 has not approved that candidate, selected a second
+independent auditor, pinned a production checkpoint/snapshot, or authorized a
+production root. The canonical policy and release status remain
+`dev-unattested`.
 
 ## Flip-readiness: the precise unblock condition
 
@@ -179,7 +168,7 @@ Concretely, the remaining half requires:
 
 **Until then:** run `make erc8176-coverage` periodically (it's the tripwire); stay
 in dev mode. Flipping now would remove clear-sign coverage for the entire
-400-leaf corpus, while filter-positive calls would hard-refuse, for zero
+365-leaf corpus, while filter-positive calls would hard-refuse, for zero
 security gain because there is nothing to verify against.
 
 ## Why this is the honest posture

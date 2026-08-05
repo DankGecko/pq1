@@ -140,6 +140,14 @@ class ThresholdCoverageTests(unittest.TestCase):
         report = checker.json_report(summary, {ATTESTER_X, ATTESTER_Y})
         self.assertFalse(report["production_flip_authorized"])
         self.assertEqual(report["trust_input"], "command-line advisory set")
+        self.assertEqual(
+            report["remaining_production_blockers"],
+            [
+                "no owner-approved production auditor trust set and authenticated EAS "
+                "snapshot configured",
+                "production provenance gate has not accepted an erc8176-verified artifact",
+            ],
+        )
 
     def test_no_trusted_attesters_reports_full_shortfall(self) -> None:
         summary = checker.coverage_summary(

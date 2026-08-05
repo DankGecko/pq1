@@ -323,7 +323,8 @@ def json_report(summary, trusted, as_of_unix=None):
         "production_flip_authorized": False,
         "trust_input": "command-line advisory set",
         "remaining_production_blockers": [
-            "authenticated offline EAS snapshot verifier not implemented",
+            "no owner-approved production auditor trust set and authenticated EAS "
+            "snapshot configured",
             "production provenance gate has not accepted an erc8176-verified artifact",
         ],
     }
