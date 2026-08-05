@@ -1,7 +1,7 @@
 # C10 (SPHINCS+C) EUF-CMA — certified EasyCrypt artifact
 
 Snapshot of the `c10-eufcma-port` research workspace, taken at its commit
-`60a6eb0` (2026-08-05, "run 25"), at which **both certification gates are
+`16fe480` (2026-08-05, "run 26"), at which **both certification gates are
 GREEN**.
 
 This directory supersedes the older `../drafts/*.ec` snapshot, which is an
@@ -31,6 +31,11 @@ theorem, and it is **not a numerically meaningful bound**:
     interface change, not more proof effort.
   * fork — `nhchwcoll_hchwpre_msg` and `EUFNAGCMA_FLSLXMSSMTTWESNPRF`, both
     inherited.
+* `GprocVI.ec` is the **V→VI hop**, added in run 26 and **admit-free**: MM45
+  proves its TRH and TRCO branches over a restructured game `_VI`, not `_V`
+  (`FORS_ES.ec:4828-4832`), so without this the T3 reduction has no alignable
+  left-hand side. Nine theorems, zero new assumptions — the split ledger stayed
+  at 239 across the promotion. It is a **prerequisite**, not a bound.
 * `FORS_C_TreePort.ec` (1733 lines) is the prior attempt at bounding `Q`. It was
   admitted to the split closure in run 23 *specifically so its real status is
   gate-enforced rather than asserted in its own prose*; certifying it raised the
@@ -51,7 +56,7 @@ closure files). A container recipe is in `../docker/`.
 
 ```sh
 export LC_ALL=C          # REQUIRED: identity hashing is collation-sensitive
-bash cert_gate_split.sh  # 23 targets, 78 pins, 1156 census rows
+bash cert_gate_split.sh  # 24 targets, 87 pins, 1159 census rows
 bash cert_gate_fork.sh   # 19 targets,  9 pins, 1089 census rows
 ```
 

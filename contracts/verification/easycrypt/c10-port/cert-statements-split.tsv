@@ -97,3 +97,18 @@ cdrafts-split/FORS_C_TreePort.ec::op_win_satisfiable	97acef007c041e20ef5f4b87aea
 cdrafts-split/GprocFORSC10.ec::gproc_V_eq	433196c21382dfdc9a92b8b4995c2127
 cdrafts-split/GprocFORSC10.ec::gproc_V_split	22e700d9eaca1b7073af0c03a3079289
 cdrafts-split/GprocFORSC10.ec::gproc_Q_decomposition	0ef81d5067032e8dd67b7f70909ea8e3
+# --- GprocVI: the V->VI hop, admitted to the closure 2026-08-05 (run 26) ----
+# gproc_V_VI_eq is the deliverable: Pr over Gproc_V = Pr over Gproc_VI for the
+# T3 event.  MM45 proves its TRH/TRCO branches over _VI, not _V, so without this
+# hop the T3 reduction byequiv has no alignable left-hand side.  The chain below
+# it is pinned too because the hop is only as good as the Merkle equivalence and
+# the keygen correspondence it rests on.
+cdrafts-split/GprocVI.ec::gproc_V_VI_eq	481b10689ee47e4e0586c406758796d8
+cdrafts-split/GprocVI.ec::gprockg_vi_eq	ca9e2b0b553d0090d7bce0d047644154
+cdrafts-split/GprocVI.ec::gprockg_vi_sk_eq	23212732cc23c4a58c59421cef8d49c2
+cdrafts-split/GprocVI.ec::GprocKgVI_pk_from_sk	b0bc95f2b2f9b0597feaaa1b3749b510
+cdrafts-split/GprocVI.ec::GprocTreeVI_root_h	603dacda7f5b19cbc7e8dac55f10a6cf
+cdrafts-split/GprocVI.ec::GprocTreeVI_root_ll	7fec0c632cc428706dd367b43169d86d
+cdrafts-split/GprocVI.ec::pkfors_of_from_roots	302ab305ea54372d8b3c1e62147611dd
+cdrafts-split/GprocVI.ec::cube_is_mkseq	aba73ce2f8a5251bdf536e3d94a89a93
+cdrafts-split/GprocVI.ec::size_cube	9ceedab53dc7d176b235cacf736be443

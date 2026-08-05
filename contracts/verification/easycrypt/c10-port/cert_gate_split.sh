@@ -30,7 +30,7 @@ TMPD=$(mktemp -d) || { echo 'FAIL mktemp'; exit 1; }
 trap 'rm -rf "$TMPD"' EXIT
 # Expected inventory sizes, COMMITTED. A guard that recomputes its expectation
 # from the file it is checking cannot detect truncation of that file.
-EXPECT_PINS=78
+EXPECT_PINS=87
 fail=0
 
 # TREE IDENTITY AND TOOLCHAIN, in the receipt itself.  A green receipt that does

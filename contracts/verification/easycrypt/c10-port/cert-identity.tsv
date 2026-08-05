@@ -75,6 +75,14 @@
 #   pool it characterises is `pkfors_of` verbatim.  Census UNCHANGED at 1156 rows
 #   (added=0 removed=0); only the identity moves, because the file is hashed.
 #
+# 2026-08-05 (run 26).  split b09d8a8d... -> 837da057....  Fork UNCHANGED.
+#   cdrafts-split/GprocVI.ec ADMITTED TO THE CLOSURE -- the V->VI hop, ADMIT-FREE.
+#   Census 1156 -> 1159, and all three added rows are MEANING (the module bodies
+#   GprocTreeVI, GprocKgVI, EUF_CMA_Gproc_VI).  LEDGER IS UNCHANGED AT 239: nine
+#   theorems entered the cone and not one new assumption.  EXPECT_PINS 78 -> 87.
+#   This is a PREREQUISITE for T3 (MM45 proves its TRH/TRCO branches over _VI,
+#   not _V), not a bound.  Q remains unbounded.
+#
 # tree	hash
-split	b09d8a8df902725b9aac51cc57c7cdf4
+split	837da05755a881bedc898d39eeec0185
 fork	7ab20d2ab0ba2c1f3942408a193b4836
