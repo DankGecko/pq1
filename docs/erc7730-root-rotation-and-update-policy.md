@@ -77,6 +77,30 @@ user wants rides a full FW release.
    ceremony below), not on every upstream registry PR. The 1.4 skip report +
    the 2.2 dedup gate make each resync a reviewable diff.
 
+## Advisory proxy-drift watch
+
+`tests/erc7730-semantic-evidence/proxy-watch.v1.json` binds a small watch list
+to existing fixed-block evidence packages and their archived proxy and
+implementation runtime hashes. `tools/erc7730_proxy_drift.py` can compare those
+historical facts with a current Ethereum JSON-RPC observation:
+
+```bash
+ERC7730_RPC_1=https://your-ethereum-rpc.example make erc7730-proxy-drift
+```
+
+The report under `target/` classifies each row as `MATCH`, `DRIFT`, or
+`UNKNOWN`. `MATCH` means only that the untrusted live observation equals the
+archived facts. `DRIFT` requires collecting and reviewing a new fixed-block
+evidence package before any descriptor change. `UNKNOWN` covers unavailable,
+malformed, wrong-chain, or unsupported observations and must not be confused
+with either match or drift. The current rows bind direct EIP-1967 proxies; a
+nonzero beacon slot is reported as architecture drift without resolving or
+trusting the beacon. None of the three states can admit a descriptor,
+alter the catalogue, authorize signing, or approve a release. The scheduled
+workflow is therefore a maintenance signal, not a production or provenance
+gate. Its offline parser/classifier suite runs with
+`make test-erc7730-proxy-drift` in normal CI.
+
 ## Roadmapped (NOT v1): a C10-signed descriptor-root artifact
 
 If post-ship descriptor freshness proves too coupled to FW releases, evaluate a

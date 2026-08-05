@@ -1,5 +1,14 @@
 # ERC-7730 nested calldata with authenticated child semantics
 
+> **UPDATE 2026-08-05 — implemented, production enrollment still dormant.**
+> The bounded N1–N4 mechanism landed on `master` at
+> `3b1b3dfd9c8ed66d1b618029d2cff57a57d5595b` (tree
+> `f81df48ff788dbe3212a23172938ce6d9a33a07a`) and #346 is closed. The source
+> below remains the frozen Phase-B design record. The one-level proof-set
+> engine is active, but `PRODUCTION_NESTED_CALLDATA_ENROLLMENTS` remains empty
+> and the current production catalogue contains zero `op=calldata` formats;
+> this grants no real-descriptor admission, recursion, or fallback authority.
+
 **Status:** Phase-B candidate freeze for
 [#346](https://github.com/EthereumPhone/PQ1/issues/346). This document
 authorizes no production descriptor admission, merge, release, or hardware

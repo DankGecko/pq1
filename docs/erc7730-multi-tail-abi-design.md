@@ -1,5 +1,13 @@
 # ERC-7730 bounded multi-tail ABI design
 
+> **UPDATE 2026-08-05 — implemented.** The bounded M1–M3 design landed on
+> `master` at `ee8699105939f5ffa8bc45ab89018ccd8af3e508` (tree
+> `f86271111e1cb0166ce28b78bc1dcc01bd0c065d`) and #347 is closed. Current
+> source accepts authenticated exact partitions of two to four top-level
+> `Blob` or one-word primitive-array tails; the current generated catalogue has
+> six deployment-format rows carrying the topology marker. The source below
+> remains the frozen design record and its non-goals remain unchanged.
+
 Status: Phase-B design freeze for GitHub issue #347. This document authorizes
 only the bounded, reversible Phase-C implementation described below. It does
 not authorize blind-sign fallback, deployment, flashing, or shipment.

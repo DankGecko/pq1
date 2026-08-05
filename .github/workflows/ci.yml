@@ -192,6 +192,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: stable
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       # `--tests` (NOT `--lib`): run each crate's integration suites in tests/
       # as well as its in-crate unit tests. The tests/ dirs hold almost all of
@@ -258,6 +261,12 @@ jobs:
             --features nested-calldata-test-fixture \
             --test erc7730_nested_calldata_fixture \
             --test erc7730_roundtrip
+      - name: ERC-7730 / ERC-8213 independent parity gate
+        run: |
+          python -m pip install --quiet uv==0.11.21
+          make erc7730-cross-parity
+      - name: ERC-7730 proxy-drift monitor (offline tests only)
+        run: make test-erc7730-proxy-drift
       # A3.1 independent-source KAT leg (work-todo #7): the EXISTING Rust verifier
       # must accept FRESH output from the clean-room Python C10 signer
       # (contracts/verification/scripts/independent_c10_signer.py) — implementation

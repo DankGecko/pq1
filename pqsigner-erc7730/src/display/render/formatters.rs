@@ -522,7 +522,9 @@ impl FormatterRoute {
             Self::AddressName => Self::IMPLEMENTED_STATUS,
             Self::Enum => Self::IMPLEMENTED_STATUS,
             Self::Unit => Self::IMPLEMENTED_STATUS,
-            Self::HardRefuseCalldata => "hard refusal (nested calldata unsupported)",
+            Self::HardRefuseCalldata => {
+                "one-level proof-set child renderer for exact firmware enrollments; otherwise hard refusal (production enrollments: 0)"
+            }
             Self::ChainId => Self::IMPLEMENTED_STATUS,
             Self::TokenTicker => Self::IMPLEMENTED_STATUS,
             Self::InteroperableAddressName => Self::IMPLEMENTED_STATUS,
@@ -3869,7 +3871,7 @@ mod semantic_manifest_tests {
                 0x0A,
                 "calldata",
                 FormatterRoute::HardRefuseCalldata,
-                "hard refusal (nested calldata unsupported)",
+                "one-level proof-set child renderer for exact firmware enrollments; otherwise hard refusal (production enrollments: 0)",
             ),
             (0x0B, "chainId", FormatterRoute::ChainId, IMPLEMENTED),
             (
@@ -4747,10 +4749,10 @@ mod kani_harness {
         assert!(pages.len == 0);
     }
 
-    /// ∀ field / params / pages-state: the nested-`calldata` formatter
-    /// (Phase 4 decline, deferral re-confirmed 2026-07-02) REJECTS and
-    /// leaves `Pages` untouched — an embedded inner call is never silently
-    /// "rendered" as a benign page.
+    /// ∀ field / params / pages-state: the legacy descriptor-only
+    /// `calldata` route REJECTS and leaves `Pages` untouched. Enrolled
+    /// one-level child rendering is owned by the proof-set entry point; an
+    /// embedded inner call is never silently rendered as a benign page.
     #[kani::proof]
     #[kani::unwind(34)]
     fn fmt_p0_calldata_nested_always_rejects_pages_untouched() {
@@ -4778,13 +4780,13 @@ mod kani_harness {
         let r = super::super::calldata_nested::render(&f, &mut pages, &params);
         assert!(matches!(
             r,
-            Err(RenderErr::Reject("7730 nested calldata p5"))
+            Err(RenderErr::Reject("7730 nested proof set required"))
         ));
         assert!(pages.len == before_len);
         assert!(pages.buf[pi][ri][ci] == before_cell);
     }
 
-    /// Non-vacuity witness for the nested-calldata Reject.
+    /// Non-vacuity witness for the legacy descriptor-only calldata Reject.
     #[kani::proof]
     #[kani::unwind(4)]
     fn fmt_p0_calldata_nested_rejects_concrete() {

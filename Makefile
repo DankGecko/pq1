@@ -1800,9 +1800,30 @@ test-unit: ## Rust workspace unit tests (host)
 #   make check-codegen
 #
 # Or as part of `make prod-erc7730-provenance-check` (Phase 2 onwards).
-.PHONY: check-codegen generate-erc7730-descriptors check-erc7730-build-input-shadows check-erc7730-descriptors check-erc7730-forced-eligible-binding check-solidity-constants check-research-bundles erc8176-coverage erc8176-coverage-test
+.PHONY: check-codegen generate-erc7730-descriptors check-erc7730-build-input-shadows check-erc7730-descriptors check-erc7730-forced-eligible-binding cross-parity-erc7730 cross-parity-erc8213 erc7730-cross-parity test-erc7730-proxy-drift erc7730-proxy-drift check-solidity-constants check-research-bundles erc8176-coverage erc8176-coverage-test
 check-codegen: check-erc7730-descriptors check-solidity-constants check-research-bundles
 	@echo "==> codegen artifacts in sync"
+
+cross-parity-erc8213: ## Compare live PQ1 ERC-8213 hashes with a lock-pinned independent Keccak implementation
+	@command -v uv >/dev/null 2>&1 || { echo "cross-parity-erc8213: FAIL — uv is required" >&2; exit 1; }
+	@uv run --frozen --project tools/erc7730-parity python tools/cross_parity_erc8213.py
+
+cross-parity-erc7730: ## Compare production semantics with the official resolver and run PQ1 render conformance
+	@command -v uv >/dev/null 2>&1 || { echo "cross-parity-erc7730: FAIL — uv is required" >&2; exit 1; }
+	@uv run --frozen --project tools/erc7730-parity python tools/cross_parity_erc7730.py
+
+erc7730-cross-parity: cross-parity-erc8213 cross-parity-erc7730 ## Combined clear-signing cross-implementation parity gate
+	@uv run --frozen --project tools/erc7730-parity python tools/erc7730-parity/test_parity_gates.py
+	@echo "==> erc7730-cross-parity: PASS"
+
+test-erc7730-proxy-drift: ## Run the offline advisory proxy-monitor suite
+	@PYTHONDONTWRITEBYTECODE=1 python3 tools/test_erc7730_proxy_drift.py
+
+erc7730-proxy-drift: ## Observe evidence-bound Ethereum proxies (advisory only; requires ERC7730_RPC_1)
+	@test -n "$$ERC7730_RPC_1" || { echo "erc7730-proxy-drift: FAIL — set ERC7730_RPC_1" >&2; exit 1; }
+	@PYTHONDONTWRITEBYTECODE=1 python3 tools/erc7730_proxy_drift.py \
+	    --rpc "1=$$ERC7730_RPC_1" --output target/erc7730-proxy-drift.json
+	@echo "==> advisory report: target/erc7730-proxy-drift.json"
 
 generate-erc7730-descriptors: check-erc7730-build-input-shadows ## Regenerate DBs with the explicit nested-calldata E2E fixture
 	@cargo run --locked -q -p dbgen --features $(ERC7730_E2E_GENERATOR_FEATURE)

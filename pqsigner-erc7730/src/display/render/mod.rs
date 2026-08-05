@@ -417,17 +417,16 @@ mod compact_mode_product_profile_tests {
 /// deeper member declines the whole format (fail-closed).
 const MAX_NESTED_DEPTH: u8 = 8;
 
-/// Belt-and-braces stack canary for the ERC-7730 renderer (Phase 5
-/// item 11). The walker recurses for nested calldata (capped at depth
-/// 4 in the renderer, depth 8 in the walker proper); a hostile
-/// descriptor that somehow defeats the depth cap and recurses
-/// unbounded would smash the stack silently. Writing a known sentinel
-/// to a stack-resident `u32` at entry and asserting equality at exit
-/// catches that class of bug — any stack overrun that smashes the
-/// canary panics the secure world (which the panic handler routes
-/// through `secure_log!` + halt) instead of being silently
-/// undetectable. See `docs/security/HARDENING.md §"ERC-7730 timing channels"`
-/// for the surrounding threat-model context.
+/// Belt-and-braces stack canary for the ERC-7730 renderer (Phase 5 item 11).
+/// Nested calldata is limited to one child and rejects a child containing
+/// another calldata field. `MAX_NESTED_DEPTH` and IR `MAX_NESTING` separately
+/// bound nested EIP-712 struct descent and path programs at eight. Writing a
+/// known sentinel to a stack-resident `u32` at entry and asserting equality at
+/// exit catches stack corruption behind those structural bounds — a smashed
+/// canary panics the secure world (whose panic handler routes through
+/// `secure_log!` + halt) instead of failing silently. See
+/// `docs/security/HARDENING.md §"ERC-7730 timing channels"` for the surrounding
+/// threat-model context.
 const STACK_CANARY: u32 = 0xDEAD_BEEF;
 
 /// Entry point for contract-context renders. Phase 4 wires this into

@@ -1,0 +1,66 @@
+{
+  "schema": "pq1-erc7730-proxy-watch-v1",
+  "authority": "advisory-only; never grants or changes signing authority",
+  "watches": [
+    {
+      "name": "aave-v3-ethereum-pool",
+      "chain_id": 1,
+      "proxy": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+      "expected_kind": "eip1967-direct",
+      "expected_implementation": "0x728a138a4823392c2efa55e028d434f526fe03cf",
+      "expected_proxy_code_keccak256": "0x96107dc4006b4c7fecd1827cfb275ffeef31e6194cd50466f85f8eb24ccf2679",
+      "expected_implementation_code_keccak256": "0x530cdbba5eb9487cd5d041bb74b7a1936ad3230bf9e361893ecd025373c7fbe5",
+      "evidence_manifest": "tests/erc7730-semantic-evidence/aave-v3-ethereum-pool/manifest.json",
+      "evidence_manifest_sha256": "5b550c04e108a8ff243d56114a8de6cfd0294553df32ce8786dc4d8aa5000933",
+      "evidence_block_number": 25574144,
+      "evidence_block_hash": "0xc764a3327787002b64c36ae2776c0f25a9c9e7fa8e94dc1748c04550adba4bfd",
+      "proxy_runtime_file": "tests/erc7730-semantic-evidence/aave-v3-ethereum-pool/runtime/PoolProxy.ethereum-mainnet.hex",
+      "implementation_runtime_file": "tests/erc7730-semantic-evidence/aave-v3-ethereum-pool/runtime/PoolImplementation.ethereum-mainnet.hex"
+    },
+    {
+      "name": "lombard-staked-lbtc-mainnet",
+      "chain_id": 1,
+      "proxy": "0x8236a87084f8b84306f72007f36f2618a5634494",
+      "expected_kind": "eip1967-direct",
+      "expected_implementation": "0x072072317469ebb6c340a47e41561c9c3b782bd9",
+      "expected_proxy_code_keccak256": "0xf8be24ba1828343d015f94b6814630b0d4771a95598e3257dfe5ba87fbce3f71",
+      "expected_implementation_code_keccak256": "0x355c327d4fd62d70e83d3e916589a5386b64b6bacf8ff6b8385592c177eb710d",
+      "evidence_manifest": "tests/erc7730-semantic-evidence/lombard-lbtc/manifest.json",
+      "evidence_manifest_sha256": "d039a123f2b164fc502ca40df780ae687455e436f9ce0c054bd0a087ba276080",
+      "evidence_block_number": 25582800,
+      "evidence_block_hash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+      "proxy_runtime_file": "tests/erc7730-semantic-evidence/lombard-lbtc/runtime/StakedLBTCProxy.ethereum-mainnet.hex",
+      "implementation_runtime_file": "tests/erc7730-semantic-evidence/lombard-lbtc/runtime/StakedLBTC.implementation.ethereum-mainnet.hex"
+    },
+    {
+      "name": "midas-mtbill-deposit-vault-mainnet",
+      "chain_id": 1,
+      "proxy": "0x99361435420711723af805f08187c9e6bf796683",
+      "expected_kind": "eip1967-direct",
+      "expected_implementation": "0xc8af8477f3caa89f60fe9d1f48eee5433c55982b",
+      "expected_proxy_code_keccak256": "0x4d9be648c5bf39973670d9f8b481d5d0b971e6a2db2deccc6b98cde21c5dd83e",
+      "expected_implementation_code_keccak256": "0x5e2bbb4565f29bb4316614a0594f5e71d48e6141767965900dd0e4850b4d6a42",
+      "evidence_manifest": "tests/erc7730-semantic-evidence/midas-mtbill-deposit-vault/manifest.json",
+      "evidence_manifest_sha256": "0c6db9147d5e8caa1ae598cc7a62c63e60ebf0c2b31c809231bdd335371d3023",
+      "evidence_block_number": 25579745,
+      "evidence_block_hash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+      "proxy_runtime_file": "tests/erc7730-semantic-evidence/midas-mtbill-deposit-vault/runtime/DepositVaultProxy.ethereum-mainnet.hex",
+      "implementation_runtime_file": "tests/erc7730-semantic-evidence/midas-mtbill-deposit-vault/runtime/DepositVault.implementation.ethereum-mainnet.hex"
+    },
+    {
+      "name": "midas-mtbill-redemption-vault-mainnet",
+      "chain_id": 1,
+      "proxy": "0xf6e51d24f4793ac5e71e0502213a9bbe3a6d4517",
+      "expected_kind": "eip1967-direct",
+      "expected_implementation": "0x2f1372244cedcaf8ee1759d2f02435628f14975f",
+      "expected_proxy_code_keccak256": "0x4d9be648c5bf39973670d9f8b481d5d0b971e6a2db2deccc6b98cde21c5dd83e",
+      "expected_implementation_code_keccak256": "0xede1589ceb924120de3cbc6788b1d54327380a075a67bfcaaaaa979473428429",
+      "evidence_manifest": "tests/erc7730-semantic-evidence/midas-mtbill-redemption-vault/manifest.json",
+      "evidence_manifest_sha256": "58646b8985d5e2c928bf7e5e38323c4c9f70ec09ad0db5ad28872671e6b734d5",
+      "evidence_block_number": 25579745,
+      "evidence_block_hash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+      "proxy_runtime_file": "tests/erc7730-semantic-evidence/midas-mtbill-redemption-vault/runtime/RedemptionVaultProxy.ethereum-mainnet.hex",
+      "implementation_runtime_file": "tests/erc7730-semantic-evidence/midas-mtbill-redemption-vault/runtime/RedemptionVault.implementation.ethereum-mainnet.hex"
+    }
+  ]
+}

@@ -1157,22 +1157,22 @@ fn quickswap_fixture_gap_still_has_merkle_verified_complete_route_conformance() 
         "addLiquidity transcript receipt must bind every page"
     );
     let rows = normalized_rows(&add_rendered.pages);
-    let mut cursor = 0usize;
+    let mut expected_rows = expected_quickswap_header("Add liquidity");
     for (label, amount, token) in [
         ("Maximum to Add", "1500000", TOKEN_IN),
         ("Conditional Min", "1400000", TOKEN_IN),
         ("Maximum to Add", "2500000", TOKEN_OUT),
         ("Conditional Min", "2300000", TOKEN_OUT),
     ] {
-        consume_normalized_token(&rows, &mut cursor, label);
-        consume_normalized_token(&rows, &mut cursor, amount);
-        consume_full_address(&rows, &mut cursor, &token);
+        append_expected_quickswap_amount(&mut expected_rows, label, amount, Some(&token));
     }
-    consume_normalized_token(&rows, &mut cursor, "LP Recipient");
-    consume_full_address(&rows, &mut cursor, &lp_recipient);
-    consume_normalized_token(&rows, &mut cursor, "Deadline");
-    consume_normalized_token(&rows, &mut cursor, "2033-05-18");
-    consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+    append_expected_quickswap_address(&mut expected_rows, "LP Recipient", &lp_recipient);
+    append_expected_quickswap_deadline_and_shell(&mut expected_rows);
+    assert_eq!(
+        &rows, &expected_rows,
+        "Merkle-verified QuickSwap addLiquidity must match its complete normalized device transcript"
+    );
+    assert_exact_transcript_mutations_fail(&expected_rows, "lprecipient");
 
     let mut changed_token_in = TOKEN_IN;
     changed_token_in[19] ^= 1;
@@ -1245,22 +1245,28 @@ fn quickswap_fixture_gap_still_has_merkle_verified_complete_route_conformance() 
         "addLiquidityETH transcript receipt must bind every page"
     );
     let rows = normalized_rows(&native_rendered.pages);
-    let mut cursor = 0usize;
-    consume_normalized_token(&rows, &mut cursor, "Maximum to Add");
-    consume_normalized_token(&rows, &mut cursor, "2 POL");
-    consume_normalized_token(&rows, &mut cursor, "Maximum to Add");
-    consume_normalized_token(&rows, &mut cursor, "1500000");
-    consume_full_address(&rows, &mut cursor, &TOKEN_IN);
-    consume_normalized_token(&rows, &mut cursor, "Conditional Min");
-    consume_normalized_token(&rows, &mut cursor, "1400000");
-    consume_full_address(&rows, &mut cursor, &TOKEN_IN);
-    consume_normalized_token(&rows, &mut cursor, "Conditional Min");
-    consume_normalized_token(&rows, &mut cursor, "1 POL");
-    consume_normalized_token(&rows, &mut cursor, "LP Recipient");
-    consume_full_address(&rows, &mut cursor, &lp_recipient);
-    consume_normalized_token(&rows, &mut cursor, "Deadline");
-    consume_normalized_token(&rows, &mut cursor, "2033-05-18");
-    consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+    let mut expected_rows = expected_quickswap_header("Add liquidity");
+    append_expected_quickswap_amount(&mut expected_rows, "Maximum to Add", "2 POL", None);
+    append_expected_quickswap_amount(
+        &mut expected_rows,
+        "Maximum to Add",
+        "1500000",
+        Some(&TOKEN_IN),
+    );
+    append_expected_quickswap_amount(
+        &mut expected_rows,
+        "Conditional Min",
+        "1400000",
+        Some(&TOKEN_IN),
+    );
+    append_expected_quickswap_amount(&mut expected_rows, "Conditional Min", "1 POL", None);
+    append_expected_quickswap_address(&mut expected_rows, "LP Recipient", &lp_recipient);
+    append_expected_quickswap_deadline_and_shell(&mut expected_rows);
+    assert_eq!(
+        &rows, &expected_rows,
+        "Merkle-verified QuickSwap addLiquidityETH must match its complete normalized device transcript"
+    );
+    assert_exact_transcript_mutations_fail(&expected_rows, "lprecipient");
 
     for (word_index, replacement) in [
         (0usize, address_word(changed_token_in)),
@@ -1370,24 +1376,28 @@ fn quickswap_fixture_gap_still_has_merkle_verified_complete_route_conformance() 
         );
 
         let rows = normalized_rows(&rendered.pages);
-        let mut cursor = 0usize;
-        consume_normalized_token(&rows, &mut cursor, first_label);
-        consume_normalized_token(&rows, &mut cursor, &first.to_string());
-        consume_full_address(&rows, &mut cursor, &first_token);
-        consume_normalized_token(&rows, &mut cursor, second_label);
-        consume_normalized_token(&rows, &mut cursor, &second.to_string());
-        consume_full_address(&rows, &mut cursor, &second_token);
-        consume_normalized_token(&rows, &mut cursor, "Route");
-        consume_normalized_token(&rows, &mut cursor, "3 items");
-        for token in path {
-            consume_normalized_token(&rows, &mut cursor, "Route");
-            consume_full_address(&rows, &mut cursor, &token);
-        }
-        consume_normalized_token(&rows, &mut cursor, "Beneficiary");
-        consume_full_address(&rows, &mut cursor, &beneficiary);
-        consume_normalized_token(&rows, &mut cursor, "Deadline");
-        consume_normalized_token(&rows, &mut cursor, "2033-05-18");
-        consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+        let mut expected_rows = expected_quickswap_header("Swap");
+        let first_amount = first.to_string();
+        let second_amount = second.to_string();
+        append_expected_quickswap_amount(
+            &mut expected_rows,
+            first_label,
+            &first_amount,
+            Some(&first_token),
+        );
+        append_expected_quickswap_amount(
+            &mut expected_rows,
+            second_label,
+            &second_amount,
+            Some(&second_token),
+        );
+        append_expected_quickswap_route(&mut expected_rows, &path, &beneficiary);
+        append_expected_quickswap_deadline_and_shell(&mut expected_rows);
+        assert_eq!(
+            &rows, &expected_rows,
+            "Merkle-verified QuickSwap {signature} must match its complete normalized device transcript"
+        );
+        assert_exact_transcript_mutations_fail(&expected_rows, "beneficiary");
     }
 
     const EXACT_TOKENS_FOR_NATIVE: &str =
@@ -1529,25 +1539,17 @@ fn quickswap_fixture_gap_still_has_merkle_verified_complete_route_conformance() 
             "QuickSwap native transcript receipt must bind every page"
         );
         let rows = normalized_rows(&rendered.pages);
-        let mut cursor = 0usize;
+        let mut expected_rows = expected_quickswap_header("Swap");
         for (label, amount, token) in amount_rows {
-            consume_normalized_token(&rows, &mut cursor, label);
-            consume_normalized_token(&rows, &mut cursor, amount);
-            if let Some(token) = token {
-                consume_full_address(&rows, &mut cursor, &token);
-            }
+            append_expected_quickswap_amount(&mut expected_rows, label, amount, token.as_ref());
         }
-        consume_normalized_token(&rows, &mut cursor, "Route");
-        consume_normalized_token(&rows, &mut cursor, "3 items");
-        for token in path {
-            consume_normalized_token(&rows, &mut cursor, "Route");
-            consume_full_address(&rows, &mut cursor, &token);
-        }
-        consume_normalized_token(&rows, &mut cursor, "Beneficiary");
-        consume_full_address(&rows, &mut cursor, &beneficiary);
-        consume_normalized_token(&rows, &mut cursor, "Deadline");
-        consume_normalized_token(&rows, &mut cursor, "2033-05-18");
-        consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+        append_expected_quickswap_route(&mut expected_rows, &path, &beneficiary);
+        append_expected_quickswap_deadline_and_shell(&mut expected_rows);
+        assert_eq!(
+            &rows, &expected_rows,
+            "Merkle-verified QuickSwap {signature} must match its complete normalized device transcript"
+        );
+        assert_exact_transcript_mutations_fail(&expected_rows, "beneficiary");
     }
 }
 
@@ -2029,6 +2031,206 @@ fn consume_full_address(rendered: &[String], cursor: &mut usize, address: &[u8; 
     }
 }
 
+fn normalized_expected_rows(rows: &[&str]) -> Vec<String> {
+    rows.iter().map(|row| normalize_text(row)).collect()
+}
+
+fn append_expected_full_address(rows: &mut Vec<String>, address: &[u8; 20]) {
+    let mut rendered = [[b' '; DISPLAY_COLS]; 3];
+    let [row1, row2, row3] = &mut rendered;
+    write_addr_full(row1, row2, row3, address);
+    rows.extend(rendered.iter().map(|row| {
+        normalize_text(
+            std::str::from_utf8(row)
+                .expect("address rows are ASCII")
+                .trim_end(),
+        )
+    }));
+}
+
+fn append_expected_raw_word(rows: &mut Vec<String>, label: &str, word: &[u8; 32]) {
+    let encoded = hex::encode(word);
+    let chunks: Vec<_> = encoded
+        .as_bytes()
+        .chunks(16)
+        .map(|chunk| std::str::from_utf8(chunk).expect("hex is ASCII"))
+        .collect();
+    assert_eq!(chunks.len(), 4, "a raw word renders as two exact pages");
+    rows.extend(normalized_expected_rows(&[
+        label,
+        chunks[0],
+        chunks[1],
+        "1/2 > next",
+        label,
+        chunks[2],
+        chunks[3],
+        "2/2 > next",
+    ]));
+}
+
+fn expected_lido_claim_transcript(request_id: &[u8; 32]) -> Vec<String> {
+    let mut expected =
+        normalized_expected_rows(&["Claim withdrawal", "Lido DAO", "Withdrawal Queue", "> next"]);
+    append_expected_raw_word(&mut expected, "Request ID", request_id);
+    expected.extend(normalized_expected_rows(&[
+        "Network:",
+        "Chain: 1",
+        "(mainnet)",
+        "> next",
+        "Max fee / gwei:",
+        "0.107200754",
+        "Tip / gwei:",
+        "0.041985156",
+        "Max total / ETH:",
+        "0.0000189179314>",
+        "59888",
+        "Gas: 176472",
+        "Nonce:",
+        "289",
+        "> next",
+        "L=cancel",
+        "R=confirm",
+    ]));
+    expected
+}
+
+fn expected_legacy_lido_transfer_transcript(
+    recipient: &[u8; 20],
+    token_contract: &[u8; 20],
+) -> Vec<String> {
+    let mut expected = normalized_expected_rows(&[
+        "Transfer wstETH",
+        "Lido DAO",
+        "wstETH",
+        "> next",
+        "Recipient",
+    ]);
+    append_expected_full_address(&mut expected, recipient);
+    expected.extend(normalized_expected_rows(&[
+        "Amount",
+        "0.00001 wstETH",
+        "> next",
+        "Token contract",
+    ]));
+    append_expected_full_address(&mut expected, token_contract);
+    expected.extend(normalized_expected_rows(&[
+        "Network:",
+        "Chain: 1",
+        "(mainnet)",
+        "> next",
+        "Max fee / gwei:",
+        "0.057007385",
+        "Tip / gwei:",
+        "0",
+        "Max total / ETH:",
+        "0.0000045605908",
+        "Gas: 80000",
+        "Nonce:",
+        "3",
+        "> next",
+        "L=cancel",
+        "R=confirm",
+    ]));
+    expected
+}
+
+fn expected_threshold_stake_transcript() -> Vec<String> {
+    normalized_expected_rows(&[
+        "Stake T for fee",
+        "rebates",
+        "Rebate Staking",
+        "> next",
+        "T to stake",
+        "1000 T",
+        "> next",
+        "Network:",
+        "Chain: 1",
+        "(mainnet)",
+        "> next",
+        "Max fee / gwei:",
+        "2",
+        "Tip / gwei:",
+        "0.1",
+        "Max total / ETH:",
+        "0.0005",
+        "Gas: 250000",
+        "Nonce:",
+        "80",
+        "> next",
+        "L=cancel",
+        "R=confirm",
+    ])
+}
+
+fn expected_quickswap_header(intent: &str) -> Vec<String> {
+    normalized_expected_rows(&[intent, "QuickSwap", "QuickSwap", "> next"])
+}
+
+fn append_expected_quickswap_amount(
+    rows: &mut Vec<String>,
+    label: &str,
+    amount: &str,
+    token: Option<&[u8; 20]>,
+) {
+    rows.extend(normalized_expected_rows(&[label, amount]));
+    if let Some(token) = token {
+        rows.extend(normalized_expected_rows(&[
+            "! raw, dec=?",
+            "Token (UNVERIFI~",
+        ]));
+        append_expected_full_address(rows, token);
+    } else {
+        rows.push(normalize_text("> next"));
+    }
+}
+
+fn append_expected_quickswap_address(rows: &mut Vec<String>, label: &str, address: &[u8; 20]) {
+    rows.push(normalize_text(label));
+    append_expected_full_address(rows, address);
+}
+
+fn append_expected_quickswap_route(
+    rows: &mut Vec<String>,
+    path: &[[u8; 20]],
+    beneficiary: &[u8; 20],
+) {
+    rows.extend(normalized_expected_rows(&["Route", "3 items"]));
+    assert_eq!(
+        path.len(),
+        3,
+        "the exact QuickSwap fixture route has three hops"
+    );
+    for token in path {
+        append_expected_quickswap_address(rows, "Route", token);
+    }
+    append_expected_quickswap_address(rows, "Beneficiary", beneficiary);
+}
+
+fn append_expected_quickswap_deadline_and_shell(rows: &mut Vec<String>) {
+    rows.extend(normalized_expected_rows(&[
+        "Deadline",
+        "2033-05-18",
+        "03:33:20 UTC",
+        "> next",
+        "Network:",
+        "Chain: 137",
+        "(polygon)",
+        "> next",
+        "Max fee / gwei:",
+        "0",
+        "Tip / gwei:",
+        "0",
+        "Max total / POL:",
+        "0",
+        "Gas: 0",
+        "Nonce:",
+        "0",
+        "> next",
+        "L=cancel",
+        "R=confirm",
+    ]));
+}
+
 #[derive(Debug, Deserialize)]
 struct WaiverFile {
     schema: u8,
@@ -2144,61 +2346,50 @@ fn lido_claim_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waive
 
     let rendered = normalized_rows(&pages);
     let waivers = case_waivers(relative_fixture, 2);
+    let signed_request_id: [u8; 32] = parsed.data[4..36]
+        .try_into()
+        .expect("complete signed request-ID word");
 
-    let expected = case["expectedTexts"]
+    let expected: Vec<_> = case["expectedTexts"]
         .as_array()
-        .expect("Lido expectedTexts");
-    let mut rendered_cursor = 0usize;
-    let mut used_waivers = BTreeSet::new();
-    for (text_index, expected) in expected.iter().enumerate() {
-        let expected = expected.as_str().expect("expected text string");
-        if let Some(waiver) = waivers.get(&text_index) {
-            assert_eq!(
-                waiver.text, expected,
-                "waiver must pin the exact upstream token"
-            );
-            used_waivers.insert(text_index);
-            continue;
-        }
-        if !expected.is_empty() && expected.bytes().all(|byte| byte.is_ascii_digit()) {
-            let value: u64 = expected.parse().expect("fixture integer fits u64");
-            let mut word = [0u8; 32];
-            word[24..].copy_from_slice(&value.to_be_bytes());
-            assert_eq!(
-                parsed.data.get(4..36),
-                Some(word.as_slice()),
-                "upstream decimal must equal the exact signed calldata word"
-            );
-            let encoded = hex::encode(word);
-            for chunk in encoded.as_bytes().chunks(16) {
-                let chunk = std::str::from_utf8(chunk).expect("hex ASCII");
-                let Some(relative_match) = rendered[rendered_cursor..]
-                    .iter()
-                    .position(|actual| actual == chunk)
-                else {
-                    panic!(
-                        "PQ1 did not render the complete 256-bit word for {expected}; rows={rendered:?}"
-                    );
-                };
-                rendered_cursor += relative_match + 1;
-            }
-            continue;
-        }
-        let normalized = normalize_text(expected);
-        let Some(relative_match) = rendered[rendered_cursor..]
-            .iter()
-            .position(|actual| actual == &normalized)
-        else {
-            panic!(
-                "unwaived upstream token {expected:?} was not present in order; PQ1 rows={rendered:?}"
-            );
-        };
-        rendered_cursor += relative_match + 1;
-    }
+        .expect("Lido expectedTexts")
+        .iter()
+        .map(|expected| expected.as_str().expect("expected text string"))
+        .collect();
     assert_eq!(
-        used_waivers.len(),
-        waivers.len(),
-        "unused waiver must fail the lane"
+        expected,
+        [
+            "Interaction with",
+            "Lido DAO",
+            "Request ID",
+            "117007",
+            "Max fees",
+            "0.00001891793145988 8 ETH",
+        ],
+        "the enrolled upstream claim vocabulary must remain exact"
+    );
+    assert_eq!(
+        waivers.keys().copied().collect::<Vec<_>>(),
+        [0, 4, 5],
+        "the claim must consume exactly its three presentation waivers"
+    );
+    for (text_index, waiver) in &waivers {
+        assert_eq!(
+            waiver.text, expected[*text_index],
+            "waiver must pin the exact upstream token"
+        );
+    }
+    let value: u64 = expected[3].parse().expect("fixture integer fits u64");
+    let mut upstream_word = [0u8; 32];
+    upstream_word[24..].copy_from_slice(&value.to_be_bytes());
+    assert_eq!(
+        upstream_word, signed_request_id,
+        "upstream decimal must equal the exact signed calldata word"
+    );
+    assert_eq!(
+        rendered,
+        expected_lido_claim_transcript(&signed_request_id),
+        "the Merkle-verified Lido claim must match the complete normalized device transcript, including protocol and page scaffolding"
     );
     assert!(
         rendered.iter().any(|row| row == "claimwithdrawal")
@@ -3122,6 +3313,45 @@ fn normalized_transcript_is_exact(rendered: &[String], expected: &[String]) -> b
     rendered == expected
 }
 
+fn assert_exact_transcript_mutations_fail(expected: &[String], semantic_row: &str) {
+    let semantic_index = expected
+        .iter()
+        .position(|row| row == semantic_row)
+        .unwrap_or_else(|| panic!("missing mutation anchor {semantic_row:?}"));
+
+    let mut missing = expected.to_vec();
+    missing.remove(semantic_index);
+    assert!(
+        !normalized_transcript_is_exact(&missing, expected),
+        "a missing semantic row must fail exact transcript comparison"
+    );
+
+    let mut extra = expected.to_vec();
+    extra.insert(semantic_index + 1, "unexpectedspender".to_string());
+    assert!(
+        !normalized_transcript_is_exact(&extra, expected),
+        "an extra semantic row must fail exact transcript comparison"
+    );
+
+    let mut reordered = expected.to_vec();
+    reordered.swap(semantic_index, semantic_index + 1);
+    assert!(
+        !normalized_transcript_is_exact(&reordered, expected),
+        "reordered semantic rows must fail exact transcript comparison"
+    );
+}
+
+#[test]
+fn exact_actual_renderer_transcripts_reject_missing_extra_and_reordered_rows() {
+    let mut request_id = [0u8; 32];
+    request_id[24..].copy_from_slice(&117_007u64.to_be_bytes());
+    assert_exact_transcript_mutations_fail(
+        &expected_lido_claim_transcript(&request_id),
+        "requestid",
+    );
+    assert_exact_transcript_mutations_fail(&expected_threshold_stake_transcript(), "ttostake");
+}
+
 fn assert_flat_raw_eip712_fixture(
     relative_fixture: &str,
     source_name: &str,
@@ -3258,14 +3488,15 @@ fn signed_type2_threshold_positive_matches_actual_merkle_verified_pq1_pages() {
     // PQ1 deliberately gives the source fixture's generic action/amount labels
     // a more specific rendering while preserving the authenticated 1000 T
     // operand. Pin both vocabularies so this cannot become an implicit waiver.
-    let mut cursor = 0usize;
-    for token in ["Stake T for fee", "rebates", "T to stake", "1000 T"] {
-        consume_normalized_token(&rendered, &mut cursor, token);
-    }
     assert_eq!(
         hex::encode(&adapted.data[4..]),
         "00000000000000000000000000000000000000000000003635c9adc5dea00000",
         "the displayed 1000 T amount must come from the complete signed calldata word"
+    );
+    assert_eq!(
+        rendered,
+        expected_threshold_stake_transcript(),
+        "the Merkle-verified Threshold stake must match the complete normalized device transcript, including protocol and page scaffolding"
     );
     assert!(
         rendered.iter().any(|row| row == "staketforfee")
@@ -3307,55 +3538,73 @@ fn legacy_lido_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waiv
     };
     let rendered =
         render_adapted_contract_fixture(&adapted, "calldata-wstETH.json", Some(&metadata));
-    let expected = fixture["tests"][3]["expectedTexts"]
+    let expected: Vec<_> = fixture["tests"][3]["expectedTexts"]
         .as_array()
-        .expect("Lido wstETH expectedTexts");
+        .expect("Lido wstETH expectedTexts")
+        .iter()
+        .map(|token| token.as_str().expect("Lido wstETH expected text"))
+        .collect();
+    assert_eq!(
+        expected,
+        [
+            "Interaction with",
+            "Lido DAO",
+            "Recipient",
+            "0xdB34FBB4E7989c3f 8957e9E9b346bf46Ee 0F0408",
+            "Amount",
+            "0.00001 wstETH",
+            "Max fees",
+            "0.0000045605908 ETH",
+        ],
+        "the enrolled upstream transfer vocabulary must remain exact"
+    );
     let waivers = case_waivers(relative_fixture, 3);
+    assert_eq!(
+        waivers.keys().copied().collect::<Vec<_>>(),
+        [0, 3, 6, 7],
+        "the transfer must consume exactly its four presentation waivers"
+    );
+    for (text_index, waiver) in &waivers {
+        assert_eq!(
+            waiver.text, expected[*text_index],
+            "waiver pins the exact upstream token"
+        );
+    }
     assert_eq!(
         waivers.get(&3).map(|waiver| waiver.class.as_str()),
         Some("line_wrapped_address_like"),
         "the signed recipient waiver must retain its byte-binding class"
     );
-    let mut used_waivers = BTreeSet::new();
-    let mut cursor = 0usize;
     let recipient_word: [u8; 32] = adapted.data[4..36]
         .try_into()
         .expect("legacy transfer recipient word");
-    for (text_index, token) in expected.iter().enumerate() {
-        let token = token.as_str().expect("Lido wstETH expected text");
-        if let Some(waiver) = waivers.get(&text_index) {
-            assert_eq!(waiver.text, token, "waiver pins the exact upstream token");
-            if waiver.class == "line_wrapped_address_like" {
-                let compact: String = token
-                    .chars()
-                    .filter(|character| !character.is_ascii_whitespace())
-                    .collect();
-                assert_eq!(
-                    hex::decode(compact.strip_prefix("0x").expect("upstream recipient 0x"))
-                        .expect("upstream recipient hex")
-                        .as_slice(),
-                    &recipient_word[12..],
-                    "the waived token must equal the signed recipient word"
-                );
-                let recipient_text = format!("0x{}", hex::encode(&recipient_word[12..]));
-                for chunk in recipient_text.as_bytes().chunks(16) {
-                    consume_normalized_token(
-                        &rendered,
-                        &mut cursor,
-                        std::str::from_utf8(chunk).expect("address hex is ASCII"),
-                    );
-                }
-            }
-            used_waivers.insert(text_index);
-            continue;
-        }
-        consume_normalized_token(&rendered, &mut cursor, token);
-    }
-    assert_eq!(used_waivers.len(), waivers.len(), "unused waiver must fail");
+    let signed_recipient: [u8; 20] = recipient_word[12..]
+        .try_into()
+        .expect("complete signed recipient address");
+    let compact_recipient: String = expected[3]
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect();
+    assert_eq!(
+        hex::decode(
+            compact_recipient
+                .strip_prefix("0x")
+                .expect("upstream recipient 0x")
+        )
+        .expect("upstream recipient hex")
+        .as_slice(),
+        signed_recipient,
+        "the waived token must equal the signed recipient word"
+    );
     assert_eq!(
         hex::encode(&adapted.data[36..68]),
         "000000000000000000000000000000000000000000000000000009184e72a000",
         "the exact 0.00001 wstETH amount must come from the signed calldata word"
+    );
+    assert_eq!(
+        rendered,
+        expected_legacy_lido_transfer_transcript(&signed_recipient, &metadata.contract),
+        "the Merkle-verified wstETH transfer must match the complete normalized device transcript, including protocol and page scaffolding"
     );
     assert!(
         rendered.iter().any(|row| row == "transferwsteth")

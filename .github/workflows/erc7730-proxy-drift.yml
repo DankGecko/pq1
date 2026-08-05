@@ -1,0 +1,59 @@
+name: ERC-7730 proxy drift (advisory)
+
+on:
+  schedule:
+    - cron: '43 5 * * 1' # Mondays at 05:43 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: erc7730-proxy-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  observe:
+    name: Observe evidence-bound proxies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Offline monitor tests
+        run: make test-erc7730-proxy-drift
+      - name: Read-only Ethereum observation
+        env:
+          ERC7730_RPC_1: https://ethereum-rpc.publicnode.com
+        run: |
+          make erc7730-proxy-drift
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path("target/erc7730-proxy-drift.json").read_text())
+          summary = report["summary"]
+          rows = [
+              "## ERC-7730 proxy drift (advisory only)",
+              "",
+              f"MATCH: {summary['MATCH']} · DRIFT: {summary['DRIFT']} · UNKNOWN: {summary['UNKNOWN']}",
+              "",
+              "This observation grants no signing, catalogue, release, or production authority.",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write("\n".join(rows) + "\n")
+          if summary["DRIFT"]:
+              print(f"::warning::{summary['DRIFT']} watched ERC-7730 proxy row(s) drifted")
+          if summary["UNKNOWN"]:
+              print(f"::warning::{summary['UNKNOWN']} watched ERC-7730 proxy row(s) are unknown")
+          PY
+      - name: Upload advisory report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: erc7730-proxy-drift-report
+          path: target/erc7730-proxy-drift.json
+          if-no-files-found: warn
+          retention-days: 14

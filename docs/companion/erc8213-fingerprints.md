@@ -103,14 +103,15 @@ companion fed the firmware.
 - Test vectors: every helper in `pqsigner-tx-core::erc8213` has
   pinned test vectors in `pqsigner-tx-core/src/erc8213.rs` —
   these run in the host test suite (`cargo test -p pqsigner-tx-core`).
-  They catch wire-format drift but not cross-implementation drift
-  (the parity gate that Cyfrin / viem / safe-hash-rs would each add;
-  see `tools/cross_parity_erc8213.py` — stub deferred per handoff
-  item 7).
+  The CI-enrolled `make erc7730-cross-parity` gate also executes the live
+  Rust helpers over fixed boundary vectors and byte-compares them with the
+  lock-pinned eth-hash/pycryptodome Keccak implementation. Missing tools,
+  partial output, changed fixtures, version drift, and digest mismatches fail
+  the gate.
 
 ## See also
 
 - ERC-8213 Magicians thread: <https://ethereum-magicians.org/t/erc-8213-wallet-signature-and-calldata-digest-display/24295>
 - `docs/companion/erc7730-integration.md` — full ERC-7730 spec on-device.
-- `tools/cross_parity_erc8213.py` — placeholder for the
-  cross-implementation parity check.
+- `tools/cross_parity_erc8213.py` — executable cross-implementation parity
+  gate; invoke it through `make erc7730-cross-parity`.

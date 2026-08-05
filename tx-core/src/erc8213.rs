@@ -10,9 +10,10 @@
 //!   eip712_final_hash(ds, sh)    = keccak256( 0x19 0x01 || ds || sh )
 //! ```
 //!
-//! Cross-parity vs viem / cast lands in Phase 5
-//! (`tools/cross_parity_erc8213.py`); Phase 4 ships self-consistency
-//! tests against [`crate::hash::keccak256`].
+//! `make erc7730-cross-parity` executes these exact functions over fixed
+//! boundary vectors and compares them with the lock-pinned
+//! eth-hash/pycryptodome Keccak implementation.  The in-crate tests below are
+//! the faster self-consistency layer.
 
 use sha3::{Digest, Keccak256};
 

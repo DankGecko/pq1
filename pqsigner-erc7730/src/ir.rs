@@ -41,7 +41,8 @@
 //!   rejects oversize)
 //! - 32 formats per descriptor (MAX_FORMATS)
 //! - 24 fields per format
-//! - 8 levels of nested calldata recursion
+//! - 8 path-program steps / nested EIP-712 struct levels; nested calldata is
+//!   limited separately to one child level
 //! - 256 B per individual pool entry
 //!
 //! Parsing is strict — any unknown opcode, unaligned offset, or
@@ -104,6 +105,8 @@ pub const CTX_EIP712: u8 = 0x02;
 pub const MAX_IR_LEN: usize = 4096;
 pub const MAX_FORMATS: usize = 32;
 pub const MAX_FIELDS_PER_FORMAT: usize = 24;
+/// Maximum path-program steps and nested EIP-712 struct depth. Nested calldata
+/// has its own one-child, no-recursion policy.
 pub const MAX_NESTING: usize = 8;
 pub const MAX_POOL_ENTRY_LEN: usize = 256;
 

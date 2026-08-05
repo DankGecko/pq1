@@ -14,6 +14,14 @@
 > tuples. See [the current implementation review](./erc7730-implementation-review-2026-07.md)
 > and [the 2026-07-10 findings](./security/adversarial-review/findings/clear-signing-2026-07-10.md).
 
+> **UPDATE 2026-08-05 — post-snapshot capability correction.** #346 and #347
+> are closed. The one-level proof-set nested-child engine landed, but its
+> production enrollment table remains empty and the current catalogue contains
+> zero `op=calldata` formats. Bounded authenticated multi-tail support also
+> landed for two to four top-level blob or one-word primitive-array tails; the
+> current generated catalogue contains six deployment-format topology rows.
+> Historical rows below remain snapshots, not current blockers.
+
 ## Current omission quick index (2026-07-21 snapshot)
 
 > **Reference snapshot, not authority or a TODO.** This index describes baseline

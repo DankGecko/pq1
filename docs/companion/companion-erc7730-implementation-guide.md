@@ -176,7 +176,7 @@ an exact `(chain, address)` lookup. Wildcard names never qualify.
 | `0x07` | `addressName` | implemented renderer (fail closed on invalid input) |
 | `0x08` | `enum` | implemented renderer (fail closed on invalid input) |
 | `0x09` | `unit` | implemented renderer (fail closed on invalid input) |
-| `0x0A` | `calldata` | hard refusal (nested calldata unsupported) |
+| `0x0A` | `calldata` | one-level proof-set child renderer for exact firmware enrollments; otherwise hard refusal (production enrollments: 0) |
 | `0x0B` | `chainId` | implemented renderer (fail closed on invalid input) |
 | `0x0C` | `tokenTicker` | implemented renderer (fail closed on invalid input) |
 | `0x0D` | `interoperableAddressName` | implemented renderer (fail closed on invalid input) |
@@ -1202,6 +1202,11 @@ Firmware-side smoke (run on QEMU before each release):
       — run the full secure host suite; use filters only for iteration.
 - [ ] `cargo test --locked -p dbgen --tests` — policy/includes, compiler, and
       round-trip suites.
+- [ ] `make erc7730-cross-parity` — compare representative production
+      descriptor semantics with the lock-pinned ERC-7730 resolver, execute the
+      Merkle-verified PQ1 upstream-render conformance suite, and compare live
+      ERC-8213 helpers with an independent Keccak implementation. This is a
+      compatibility test, not catalogue provenance or production authority.
 - [ ] `cargo run --locked -p pqsigner-xtask --
       gen-erc7730-descriptors --check` — catalog parity
       against checked-in artifacts.
@@ -1345,13 +1350,23 @@ does not enroll upstream templates that append their own unit copy. Once TLV
 than a downgrade to the static title. The separately derived exact-zero
 `"Revoke approval"` banner and interpolation cannot coexist.
 
-### 12.3 Nested calldata stubs out
+### 12.3 Nested calldata is implemented but production-dormant
 
-`Calldata` formatter (0x0A) rejects with `Reject("7730 nested
-calldata p5")`; a verified/known generic call therefore refuses. Safe v1's `execTransaction` uses
-this in the registry but is handled by a dedicated `safe_display`
-renderer; generic descriptors that use `nestedSelector` will not sign until a
-complete native rendering path exists.
+Format `0x0A` never authorizes arbitrary embedded bytes. The proof-set route
+may render exactly one child only when the parent descriptor, deployment,
+selector, field path, callee path, and ordinary zero-value `CALL` execution all
+match an exact firmware enrollment. The device derives the canonical child
+interval, target, and selector from the signed parent bytes, independently
+verifies the child descriptor proof, and completes child preflight before
+publishing the child boundary or any child page.
+
+The legacy descriptor-only route returns `Reject("7730 nested proof set
+required")`. A recursive child `calldata` field, missing, extra, or ambiguous
+proofs, non-zero/unknown/delegate execution, a reserved native child selector,
+or any resource overrun hard-refuses. The production enrollment table is
+currently empty, so the production catalogue contains zero `op=calldata`
+formats; synthetic fixtures exercise the mechanism. Dedicated native renderers,
+including the Safe path, remain independent and preferred.
 
 ### 12.4 NFT collection identity is bounded and injective
 
@@ -1432,5 +1447,8 @@ a compatibility protocol.
 - `dbgen/tests/erc7730_roundtrip.rs` — host-side round-trip test
   showing the catalog → trailer → on-device verifier flow
   byte-for-byte.
+- `tools/cross_parity_erc7730.py` and `tools/cross_parity_erc8213.py` —
+  CI-enrolled reference lanes; invoke them through
+  `make erc7730-cross-parity` so their Python dependency lock is enforced.
 - `secure/src/display_under_test/erc7730_render_pure_tests.rs` —
   host-side render-string tests. Mirror these companion-side.

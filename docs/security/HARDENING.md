@@ -361,7 +361,9 @@ Firmware update is its own project, outside the scope of this document, but note
 The on-device ERC-7730 clear-signing renderer walks a Merkle-verified
 descriptor's `FormatHeader` field list, evaluates each field's
 `Visibility` rule (`Always` / `Never` / `Optional` / `IfNotIn` /
-`MustMatch`), and dispatches to one of fourteen formatters. Two
+`MustMatch`), and dispatches across fifteen wire operations. Enrolled nested
+calldata uses the proof-set child path; encrypted operands and unenrolled
+calldata hard-refuse. Two
 sub-questions about timing channels:
 
 1. **Are visibility-rule evaluation paths secret-dependent?** No.
@@ -371,30 +373,31 @@ sub-questions about timing channels:
    instruction trace is a function of the descriptor + the inbound tx
    bytes (`(chain_id, to_address, calldata)`), both of which the
    attacker already knows. There is no secret-dependent branch in the
-   rule evaluator, the path walker, or any of the fourteen
-   formatters. → No `subtle::ConstantTimeEq` or branch-balanced
+   rule evaluator, the path walker, or any renderer route. → No
+   `subtle::ConstantTimeEq` or branch-balanced
    rewrite is required for this surface.
 
-2. **Stack-budget defence.** The walker recurses for nested calldata
-   (capped at depth 4 in the renderer, depth 8 in the walker proper
-   — see `pqsigner_erc7730::walker::MAX_NESTING`). Both
+2. **Stack-budget defence.** Nested calldata is limited to one child level;
+   a child format containing another calldata field hard-refuses.
+   `MAX_NESTED_DEPTH = 8` bounds nested EIP-712 struct descent and
+   `pqsigner_erc7730::ir::MAX_NESTING = 8` bounds nested EIP-712 validation
+   and path-program steps. Both
    `render_erc7730_pages` and `render_erc7730_eip712_pages` write a
    `STACK_CANARY = 0xDEAD_BEEF` to a stack-resident `u32` at entry and
    `assert!`-check it at exit (volatile read/write so LLVM cannot
    prove the value dead). A hostile descriptor that somehow defeats
    the depth cap and recurses unbounded smashes the canary →
    `assert!` panic → secure-world panic handler routes through
-   `secure_log!` + halt. Belt-and-braces against a defeated depth cap;
-   the cap itself is the primary defence.
+   `secure_log!` + halt. This is a belt-and-braces tripwire behind the
+   independent structural bounds; those bounds are the primary defence.
 
 3. **What this does NOT defend.** Stack canary is a single-fault
    detection mechanism. A multi-fault attack that simultaneously
    overflows the stack AND glitches the assert's compare instruction
-   bypasses. Defence in depth: the depth cap is checked separately
-   inside the walker (`pqsigner_erc7730::walker::resolve_program`),
-   and the `Pages` buffer's `MAX_PAGES = 31` bound caps the page-emit
-   side independently — neither path can grow without bound even if
-   the canary is defeated.
+   bypasses. Defence in depth: IR validation and the renderer independently
+   enforce the path, EIP-712, and one-child calldata limits, while the `Pages`
+   buffer's `MAX_PAGES = 31` bound caps page emission — neither path can grow
+   without bound even if the canary is defeated.
 
 ---
 

@@ -2562,8 +2562,9 @@ mod tests {
         ));
         assert!(semantics
             .contains("| `0x09` | `unit` | implemented renderer (fail closed on invalid input) |"));
-        assert!(semantics
-            .contains("| `0x0A` | `calldata` | hard refusal (nested calldata unsupported) |"));
+        assert!(semantics.contains(
+            "| `0x0A` | `calldata` | one-level proof-set child renderer for exact firmware enrollments; otherwise hard refusal (production enrollments: 0) |"
+        ));
         assert!(
             semantics.contains("| `0x0E` | `encrypted` | hard refusal (signed operand hidden) |")
         );
@@ -2591,8 +2592,8 @@ mod tests {
             ),
             guide.replacen("`0x04` | `nftName`", "`0x09` | `nftName`", 1),
             guide.replacen(
+                "one-level proof-set child renderer for exact firmware enrollments; otherwise hard refusal (production enrollments: 0)",
                 "hard refusal (nested calldata unsupported)",
-                "implemented renderer (fail closed on invalid input)",
                 1,
             ),
             guide.replacen(
