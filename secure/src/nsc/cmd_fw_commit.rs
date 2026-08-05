@@ -328,7 +328,36 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         *core::ptr::addr_of_mut!(FW_UPDATE) = None;
     }
 
-    // 6. Reboot into the new firmware with automatic USB re-enumeration.
+    // 6. Zeroize the unlocked session BEFORE resetting into the new image.
+    //
+    // SECURITY (2026-08-05): this call is load-bearing, not hygiene. COMMIT is
+    // PIN-gated (see the gate at the top of this function), so
+    // `SecureState::master_secret` is populated BY CONSTRUCTION when we get
+    // here. Step 5 above drops only `FwUpdateCtx` — the manifest copy and the
+    // running hashes — and leaves the wallet secret resident in SRAM1.
+    //
+    // SRAM survives a system reset. Provisioning burns `FLASH_OPTR.SRAM2_RST`
+    // (erases SRAM2, the NON-SECURE bank); the bit that would erase the bank
+    // holding secrets is `FLASH_OPTR.SRAM_RST`, which is not burned. And the
+    // boot path historically SKIPPED its defensive scrub for software resets
+    // on the assumption that "software resets always originate from code that
+    // zeroized first" — an assumption this very path violated.
+    //
+    // Net effect of the omission: the reset below hands control to a freshly
+    // installed image whose reset handler runs before Rust memory init, with
+    // the previous session's unlocked master secret readable out of retained
+    // SRAM — no PIN, no user interaction. That bypasses any confinement,
+    // authorization or signer-pinning guardrail built later, because those all
+    // govern what the successor image may DO, and the secret is already there
+    // before it does anything.
+    //
+    // `zeroize_sensitive_state()` also clears the SE driver's in-RAM session
+    // caches and revokes the trusted-UI watchdog exception; it issues no I2C
+    // traffic, so it is safe on this reboot path. `ResetCause::requires_secret_scrub`
+    // now also covers `Software` as defence in depth — keep BOTH.
+    super::zeroize_sensitive_state();
+
+    // 7. Reboot into the new firmware with automatic USB re-enumeration.
     //    Does not return.
     //
     // The OTP rollback floor is already bumped + the new manifest is

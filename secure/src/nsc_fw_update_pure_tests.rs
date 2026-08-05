@@ -1316,6 +1316,63 @@ fn legacy_commit_order_keeps_boot_state_after_manifest_before_reset() {
 }
 
 #[test]
+fn negative_commit_zeroizes_session_secrets_before_resetting_into_new_image() {
+    // REGRESSION GUARD (2026-08-05) — the FW_COMMIT secret-retention defect.
+    //
+    // COMMIT is PIN-gated, so `SecureState::master_secret` is populated BY
+    // CONSTRUCTION when COMMIT runs. It used to drop only `FwUpdateCtx` (the
+    // manifest copy + running hashes) and then reset into the freshly written
+    // image with the wallet secret still resident in SRAM1.
+    //
+    // SRAM survives a system reset. Provisioning burns FLASH_OPTR.SRAM2_RST,
+    // which erases SRAM2 — the NON-SECURE bank — not SRAM_RST, which covers
+    // the bank holding secrets. And main()'s defensive boot scrub used to skip
+    // Software resets outright. So the successor image's reset handler ran
+    // before Rust memory init with the previous session's unlocked master
+    // secret readable, needing no PIN and no user interaction.
+    //
+    // That defeats ANY later confinement / authorization / signer-pinning
+    // guardrail, because all of those govern what the successor may DO, and
+    // the secret is already sitting there before it does anything.
+    let zeroize_pos = COMMIT_SRC
+        .find("super::zeroize_sensitive_state();")
+        .expect(
+            "COMMIT must zeroize the unlocked session before resetting into the new image — \
+             see docs/security/vendor-signing-key-compromise.md defect D1",
+        );
+
+    // Must come before BOTH reset arms (plain sys_reset and the USB
+    // cc_open_then_reset variant), or the USB build keeps the hole.
+    let sys_reset_pos = COMMIT_SRC
+        .find("SCB::sys_reset()")
+        .expect("COMMIT must end with sys_reset");
+    let cc_reset_pos = COMMIT_SRC
+        .find("cc_open_then_reset()")
+        .expect("COMMIT must have the USB reset arm");
+    assert!(
+        zeroize_pos < sys_reset_pos,
+        "zeroize must precede sys_reset — otherwise the new image reads the master secret \
+         out of retained SRAM1"
+    );
+    assert!(
+        zeroize_pos < cc_reset_pos,
+        "zeroize must precede cc_open_then_reset too — the USB image resets via that arm"
+    );
+
+    // ORDERING: the zeroize must come AFTER the OTP floor bump, so nothing
+    // downstream of it still needs session state. If someone moves it earlier
+    // the wipe could land while a later step still expects an unlocked
+    // session — a correctness bug in the other direction.
+    let otp_pos = COMMIT_SRC
+        .find("otp::bump_to(new_rollback_floor)")
+        .expect("COMMIT must attempt the legacy floor bump");
+    assert!(
+        otp_pos < zeroize_pos,
+        "zeroize must run after the OTP bump — no step after it may need the unlocked session"
+    );
+}
+
+#[test]
 fn negative_commit_maps_otp_exhaustion_to_distinct_error_code() {
     // Companion must distinguish "this device is permanently out of
     // OTP budget" (manual support intervention) from a transient

@@ -100,6 +100,10 @@ impl ResetCause {
         )
     }
 
+    fn requires_secret_scrub(self) -> bool {
+        self.is_abnormal() || matches!(self, ResetCause::Software)
+    }
+
     fn tag(self) -> &'static str {
         match self {
             ResetCause::Cold => "cold",
@@ -185,15 +189,56 @@ fn positive_classify_pinrst_alone_is_unknown() {
 
 #[test]
 fn positive_is_abnormal_classification_is_exact() {
-    // The brownout-hardening contract (reset_cause.rs:62-77) says
-    // exactly these three causes are abnormal — Cold/Software/OptionByte
-    // are safe-by-construction.
+    // `is_abnormal` is the DIAGNOSTIC classification: exactly these three
+    // causes mean the firmware crashed or wedged without running its
+    // zeroization path. Cold/Software/OptionByte are not crashes.
+    //
+    // It is deliberately NOT the boot-scrub gate any more — see
+    // `positive_software_reset_requires_secret_scrub` below for why.
     assert!(ResetCause::Watchdog.is_abnormal());
     assert!(ResetCause::LowPower.is_abnormal());
     assert!(ResetCause::Unknown.is_abnormal());
     assert!(!ResetCause::Cold.is_abnormal());
     assert!(!ResetCause::Software.is_abnormal());
     assert!(!ResetCause::OptionByte.is_abnormal());
+}
+
+#[test]
+fn positive_software_reset_requires_secret_scrub() {
+    // REGRESSION GUARD (2026-08-05). The boot scrub used to gate on
+    // `is_abnormal()`, which EXCLUDES `Software`, justified by "software
+    // resets always originate from code that zeroized first".
+    //
+    // That was false. `cmd_fw_commit` resets into a freshly installed image,
+    // and COMMIT is PIN-gated — so `master_secret` is live by construction.
+    // SRAM survives a system reset (provisioning burns SRAM2_RST, which
+    // erases the NON-SECURE bank, not SRAM_RST), so the successor image's
+    // reset handler could read the previous session's master secret before
+    // Rust memory init, with no PIN and no user interaction.
+    //
+    // If this assertion ever fails, that hole is back.
+    assert!(
+        ResetCause::Software.requires_secret_scrub(),
+        "software resets MUST scrub: cmd_fw_commit resets with the master secret live"
+    );
+
+    // Everything abnormal still scrubs.
+    assert!(ResetCause::Watchdog.requires_secret_scrub());
+    assert!(ResetCause::LowPower.requires_secret_scrub());
+    assert!(ResetCause::Unknown.requires_secret_scrub());
+
+    // Two-sided control: Cold (SRAM retention has decayed) and OptionByte
+    // (external provisioner, not the user) remain excluded. If these flip to
+    // true the test is no longer discriminating between the gates.
+    assert!(!ResetCause::Cold.requires_secret_scrub());
+    assert!(!ResetCause::OptionByte.requires_secret_scrub());
+
+    // And the two gates must genuinely differ, or the split is pointless.
+    assert_ne!(
+        ResetCause::Software.is_abnormal(),
+        ResetCause::Software.requires_secret_scrub(),
+        "requires_secret_scrub must be strictly wider than is_abnormal"
+    );
 }
 
 #[test]
@@ -1000,17 +1045,25 @@ fn positive_reset_cause_runs_before_any_peripheral_init() {
 
 #[test]
 fn positive_reset_cause_drives_abnormal_zeroize() {
-    // The abnormal-reset SRAM zeroize is the load-bearing reason
-    // the classifier exists in the first place. Dropping the
-    // `if reset_cause.is_abnormal()` block — or replacing
-    // `zeroize_sensitive_state` with anything narrower — silently
-    // leaves stale secrets in SRAM across watchdog/lpwr/glitch
-    // resets, exactly the brownout-hardening invariant.
+    // The boot-time SRAM zeroize is the load-bearing reason the classifier
+    // exists in the first place. Dropping the branch — or replacing
+    // `zeroize_sensitive_state` with anything narrower — silently leaves
+    // stale secrets in SRAM across watchdog/lpwr/glitch resets, exactly the
+    // brownout-hardening invariant.
     assert!(
-        MAIN_SRC.contains("if reset_cause.is_abnormal() {"),
-        "main() must branch on reset_cause.is_abnormal() — see brownout-hardening contract"
+        MAIN_SRC.contains("if reset_cause.requires_secret_scrub() {"),
+        "main() must branch on reset_cause.requires_secret_scrub() — see brownout-hardening contract"
     );
     assert!(MAIN_SRC.contains("nsc::zeroize_sensitive_state();"));
+
+    // NEGATIVE CONTROL (2026-08-05): the gate must NOT be narrowed back to
+    // `is_abnormal()`, which excludes `Software` and therefore re-opens the
+    // firmware-update secret-retention hole.
+    assert!(
+        !MAIN_SRC.contains("if reset_cause.is_abnormal() {"),
+        "boot scrub must not gate on is_abnormal() — it excludes Software, \
+         and cmd_fw_commit resets with the master secret live"
+    );
 }
 
 #[test]

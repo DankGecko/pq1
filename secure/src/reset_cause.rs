@@ -59,21 +59,54 @@ pub enum ResetCause {
 }
 
 impl ResetCause {
-    /// True for any cause that suggests secrets might linger in SRAM.
+    /// True for a cause that indicates the firmware crashed or got wedged
+    /// without running its zeroization path.
     ///
-    /// Cold boots are safe because SRAM has been without Vdd long enough
+    /// Cold boots are excluded because SRAM has been without Vdd long enough
     /// to not hold useful data (and any cold-boot data belongs to an
-    /// older firmware version that predates our invariants anyway). The
-    /// software-reset path is also safe because it's always initiated
-    /// from code that zeroizes first.
+    /// older firmware version that predates our invariants anyway).
     ///
-    /// Watchdog / LowPower / Unknown are suspicious: the firmware
-    /// crashed or got wedged without running its zeroization path.
+    /// **This is a diagnostic classification, NOT the boot-scrub gate.** Use
+    /// [`ResetCause::requires_secret_scrub`] to decide whether to wipe SRAM
+    /// secrets at boot — a *deliberate* software reset is not "abnormal", but
+    /// it is not automatically clean either. See that method's note.
     pub fn is_abnormal(self) -> bool {
         matches!(
             self,
             ResetCause::Watchdog | ResetCause::LowPower | ResetCause::Unknown
         )
+    }
+
+    /// True for any cause after which secrets might linger in SRAM, i.e. the
+    /// boot path must wipe them before any subsequent unlock logic runs.
+    ///
+    /// This is [`is_abnormal`](Self::is_abnormal) **plus `Software`**, and the
+    /// `Software` arm is the whole point of the method existing separately.
+    ///
+    /// # Why `Software` is included (2026-08-05)
+    ///
+    /// The previous gate was `is_abnormal()`, justified by "software resets
+    /// always originate from code that zeroized first". **That invariant was
+    /// false.** `nsc::cmd_fw_commit` finishes a firmware install by resetting
+    /// into the newly written image, and `CMD_FW_COMMIT` is PIN-gated — so
+    /// `SecureState::master_secret` is populated *by construction* at that
+    /// moment. It dropped only the `FwUpdateCtx` (manifest bytes + running
+    /// hashes) and reset with the wallet secret still resident in SRAM1.
+    ///
+    /// That mattered because SRAM survives a system reset: provisioning burns
+    /// `FLASH_OPTR.SRAM2_RST` (erases SRAM2 — the *non-secure* bank), not
+    /// `FLASH_OPTR.SRAM_RST` (all other SRAMs, which is where secrets live).
+    /// The freshly installed image's reset handler therefore ran before Rust
+    /// memory init with the previous session's master secret readable, needing
+    /// no PIN and no user interaction.
+    ///
+    /// `cmd_fw_commit` now zeroizes explicitly before resetting; this gate is
+    /// the belt to that braces. Do not narrow it back to `is_abnormal()`
+    /// without re-auditing **every** `SCB::sys_reset` / `cc_open_then_reset`
+    /// call site for live secrets — the cost here is one cheap struct wipe on
+    /// a path that reboots anyway.
+    pub fn requires_secret_scrub(self) -> bool {
+        self.is_abnormal() || matches!(self, ResetCause::Software)
     }
 
     /// Short tag for semihosting logs.

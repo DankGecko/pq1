@@ -1014,18 +1014,25 @@ fn main() -> ! {
         reset_cause.tag(), reset_csr_raw
     );
 
-    // Defensive SRAM zeroization on abnormal reset. Complements the
-    // panic handler's zeroize_sensitive_state() — if the chip reset
-    // before the panic handler could run (watchdog bite, brownout,
-    // glitch-induced fault), this is our last chance to wipe SRAM
-    // secrets before any subsequent unlock logic touches them.
+    // Defensive SRAM zeroization. Complements the panic handler's
+    // zeroize_sensitive_state() — if the chip reset before the panic handler
+    // could run (watchdog bite, brownout, glitch-induced fault), this is our
+    // last chance to wipe SRAM secrets before any subsequent unlock logic
+    // touches them.
     //
-    // Skipped for Cold / Software / OptionByte causes: Cold boots have
-    // been off long enough for SRAM retention to decay; Software resets
-    // always originate from code that zeroized first; OptionByte
-    // reloads are triggered by the external provisioner, not the user.
-    if reset_cause.is_abnormal() {
-        secure_log!("[S] Abnormal reset — zeroizing sensitive SRAM");
+    // Covers abnormal causes (Watchdog / LowPower / Unknown) AND `Software`.
+    // Software resets were previously skipped on the assumption that they
+    // "always originate from code that zeroized first" — that assumption was
+    // FALSE for the firmware-update path, which is PIN-gated (so the master
+    // secret is live by construction) and resets into the newly installed
+    // image. `cmd_fw_commit` now zeroizes explicitly; this is the belt to that
+    // braces. See `ResetCause::requires_secret_scrub` for the full rationale.
+    //
+    // Still skipped for Cold (SRAM has been without Vdd long enough for
+    // retention to decay) and OptionByte (triggered by the external
+    // provisioner, not the user).
+    if reset_cause.requires_secret_scrub() {
+        secure_log!("[S] Reset may retain secrets — zeroizing sensitive SRAM");
         nsc::zeroize_sensitive_state();
     }
 
