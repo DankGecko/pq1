@@ -7,7 +7,8 @@
 //! only with `--features test-backend` (enabled for this crate's own
 //! integration tests via a self dev-dependency) and provides the
 //! scripted [`FreshArrayProbe`] source plus a mutation log for
-//! zero-write assertions.
+//! zero-write assertions and the FA-1.4 per-commitment measured-cost
+//! accounting (`PlanCostAccount`/`BegunPlan`, test builds only).
 
 use crate::arm_token::ArmState;
 use crate::floor::{EpochBumpReceipt, FloorView};
@@ -274,6 +275,75 @@ mod scripted {
         }
     }
 
+    /// The measured five-component cost of one logical target commitment
+    /// (FA-1.4; Draft 1.1 §14 L4380–4384: "the approved codec's
+    /// explicitly measured reservation, replica, completion, replacement,
+    /// and recovery cost"). Every value derives from the MODEL codec's
+    /// frozen constants (`floor.rs`); `OPEN-OTP-1..3` owns the production
+    /// numbers. TEST-ONLY (the fake backend's account).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct PlanCostAccount {
+        /// Durable stage-activation (`STAGEACT`) reservation cell, drawn
+        /// from the same virgin bank as the plan (R10-4; the model
+        /// codec's `+1` marker cell).
+        pub reservation: u32,
+        /// Initial replica witness cells required at establishment
+        /// (`floor::INITIAL_THRESHOLD`).
+        pub replica: u32,
+        /// Durable `COMPLETE` marker cell attesting the full initial
+        /// clean threshold was EOP-verified at establishment (R10-4's
+        /// second marker cell; R11-2 requires it to remain available
+        /// beyond the plan's own claims).
+        pub completion: u32,
+        /// Replacement margin cell inside the finite plan
+        /// (`floor::PLAN_CELLS - floor::INITIAL_THRESHOLD` — "three
+        /// initial replicas plus one replacement", floor.rs L28–29; the
+        /// claimable `PlanRole::Reserved` cell).
+        pub replacement: u32,
+        /// Recovery draw: ZERO per commitment. The §12.3 L3930–3932
+        /// recovery cell is a bank-level preserve outside the
+        /// per-commitment account, and `resume_from_recovery`
+        /// re-establishes the bound plan from its already-accounted
+        /// cells — it never begins a new plan (FROZEN-OTP-API-3
+        /// L1000–1002). The field exists so the account names every
+        /// §14 component explicitly.
+        pub recovery: u32,
+    }
+
+    impl PlanCostAccount {
+        /// The MODEL codec's measured per-commitment cost. The total
+        /// provably equals the frozen preflight gate `PLAN_CELLS + 2`
+        /// (floor.rs L1554–1582, R10-4): three replica witnesses + one
+        /// replacement + the STAGEACT and COMPLETE marker cells.
+        pub const MODEL: PlanCostAccount = PlanCostAccount {
+            reservation: 1,
+            replica: crate::floor::INITIAL_THRESHOLD,
+            completion: 1,
+            replacement: crate::floor::PLAN_CELLS - crate::floor::INITIAL_THRESHOLD,
+            recovery: 0,
+        };
+
+        /// Total virgin-bank cells one logical target commitment draws.
+        pub fn total(&self) -> u32 {
+            self.reservation + self.replica + self.completion + self.replacement + self.recovery
+        }
+    }
+
+    /// One accounted logical target commitment: the target, its
+    /// allocation group, the measured five-component cost, and the
+    /// proof-bound virgin margin the receipt carried at begin (R10-4).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct BegunPlan {
+        /// The plan target (`T > F` at begin).
+        pub target: u32,
+        /// The allocation group the plan was admitted under.
+        pub group: u32,
+        /// The measured five-component cost of this commitment.
+        pub cost: PlanCostAccount,
+        /// The receipt's proof-bound virgin-cell margin at begin.
+        pub margin: u32,
+    }
+
     /// A fake/scripted storage backend for host tests. Fixed capacity:
     /// `CELLS` probe scripts, 64 mutation-log entries. TEST-ONLY.
     pub struct ScriptedBackend<const CELLS: usize = 64> {
@@ -284,6 +354,8 @@ mod scripted {
         log_len: usize,
         floor_script: Option<FloorScript>,
         artifact_scripts: [Option<ArtifactScript>; 2],
+        begun: [Option<BegunPlan>; 8],
+        n_begun: usize,
     }
 
     impl<const CELLS: usize> Default for ScriptedBackend<CELLS> {
@@ -303,6 +375,8 @@ mod scripted {
                 log_len: 0,
                 floor_script: None,
                 artifact_scripts: [None, None],
+                begun: [None; 8],
+                n_begun: 0,
             }
         }
 
@@ -377,6 +451,21 @@ mod scripted {
                 .count()
         }
 
+        /// Number of logical target commitments begun through this
+        /// backend (FA-1.4: exactly one per target, ever).
+        pub fn begun_plan_count(&self) -> usize {
+            self.n_begun
+        }
+
+        /// The accounted commitment for `target`, if one began.
+        pub fn begun_plan(&self, target: u32) -> Option<BegunPlan> {
+            self.begun[..self.n_begun]
+                .iter()
+                .flatten()
+                .find(|p| p.target == target)
+                .copied()
+        }
+
         fn record(&mut self, m: Mutation) {
             assert!(self.log_len < 64, "mutation log capacity exhausted");
             self.log[self.log_len] = Some(m);
@@ -440,7 +529,38 @@ mod scripted {
         }
 
         fn begin_floor_plan(&mut self, permit: FloorBeginPermit, receipt: &EpochBumpReceipt) {
-            let _ = receipt;
+            // FA-1.4 (§14 L4380–4384): account the measured five-component
+            // cost of this one logical target commitment. Two fail-loud
+            // guards model physical truth so an entry-level regression
+            // cannot pass silently:
+            //   * one logical target commitment per target, ever — the
+            //     real bank can host at most one plan for `T` (while it
+            //     is in flight the decode is Recovering; once completed
+            //     `T == F` classifies same-epoch), and the entry's frozen
+            //     recheck is the primary gate;
+            //   * the receipt's proof-bound margin must fund the measured
+            //     plan (the entry's `receipt_matches` enforces the same
+            //     `PLAN_CELLS + 2` gate, R10-4).
+            let cost = PlanCostAccount::MODEL;
+            assert!(
+                !self.begun[..self.n_begun]
+                    .iter()
+                    .flatten()
+                    .any(|p| p.target == permit.target()),
+                "a second plan for the same target can never begin"
+            );
+            assert!(
+                receipt.margin() >= cost.total(),
+                "receipt margin cannot fund the measured commitment cost"
+            );
+            assert!(self.n_begun < self.begun.len(), "begun-plan log capacity exhausted");
+            self.begun[self.n_begun] = Some(BegunPlan {
+                target: permit.target(),
+                group: permit.group(),
+                cost,
+                margin: receipt.margin(),
+            });
+            self.n_begun += 1;
             self.record(Mutation::FloorBegin {
                 target: permit.target(),
                 group: permit.group(),

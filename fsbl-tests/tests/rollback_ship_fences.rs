@@ -126,6 +126,53 @@ fn assert_host_cargo_rejected(
     );
 }
 
+/// Positive-control counterpart of `assert_cargo_rejected`: the build
+/// MUST succeed with the given env. Used by the real-key fence row to
+/// prove the fence is scoped to the production policy hash and is not a
+/// blanket rejection of explicit keys.
+fn assert_cargo_builds(
+    workspace: &Path,
+    target_dir: &Path,
+    package: &str,
+    features: &str,
+    set_env: &[(&str, &str)],
+    remove_env: &[&str],
+) {
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(workspace)
+        .args([
+            "check",
+            "--locked",
+            "--release",
+            "--target",
+            "thumbv8m.main-none-eabi",
+            "--target-dir",
+        ])
+        .arg(target_dir)
+        .args([
+            "-p",
+            package,
+            "--no-default-features",
+            "--features",
+            features,
+        ]);
+    for (key, value) in set_env {
+        cmd.env(key, value);
+    }
+    for key in remove_env {
+        cmd.env_remove(key);
+    }
+    let output = cmd
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run cargo for {package}: {error}"));
+    assert!(
+        output.status.success(),
+        "expected successful build: package={package}, features={features}, env={set_env:?}\n\
+         --- cargo output ---\n{}",
+        combined_output(&output)
+    );
+}
+
 #[test]
 fn rollback_backend_cannot_enter_production_or_factory_images() {
     let workspace = workspace_root();
@@ -539,4 +586,137 @@ fn advertised_ship_and_irreversible_factory_gates_fail_loudly() {
             "legacy sentinel {value} was not labeled non-authoritative:\n{decode_text}"
         );
     }
+}
+
+/// The secure-world bench feature profile used by the real-key fence
+/// row: `make build-hw-se050-oled-standalone`'s exact set plus the two
+/// standing ship-blocker feature requirements (`consumption-mask`,
+/// `se050-derived-scp03`) and the current dev-unattested ERC-7730
+/// catalogue marker. It compiles the full secure image, so a successful
+/// check proves the real-key fence does not over-reach.
+const SECURE_BENCH_FEATURES: &str = concat!(
+    "se050,gpio-buttons,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe,",
+    "erc7730-dev-unattested,consumption-mask,se050-derived-scp03"
+);
+
+#[test]
+fn real_vendor_key_cannot_compose_with_legacy_backend_outside_production() {
+    let workspace = workspace_root();
+    let target_dir = workspace.join("target/real-key-fence-tests");
+
+    // Source pins: the fence exists in BOTH build scripts, wired AFTER the
+    // all-zero placeholder check, and names the #541 measurement-profile
+    // carve-out. In fsbl/build.rs it must also be wired AFTER the
+    // dev-fixture branch — the compare covers the RESOLVED embedded key
+    // from EITHER key path (wave-2 MEDIUM: the dev-fixture path previously
+    // embedded the key with no compare).
+    for build_rs in ["fsbl/build.rs", "secure/build.rs"] {
+        let src =
+            std::fs::read_to_string(workspace.join(build_rs)).expect("read build script");
+        let zero_pos = src
+            .find("all-zero FSBL_VENDOR_PUBKEY")
+            .expect("build script must reject the all-zero placeholder");
+        let fence_pos = src
+            .find("FW_ROLLBACK_REAL_KEY_BLOCKED:")
+            .expect("build script must carry the real-key fence");
+        assert!(
+            zero_pos < fence_pos,
+            "{build_rs}: FW_ROLLBACK_REAL_KEY_BLOCKED must be wired after the all-zero \
+             check in the explicit FSBL_VENDOR_PUBKEY path"
+        );
+        assert!(
+            src.contains("PQ_ROLLBACK_MEASUREMENT_PROFILE"),
+            "{build_rs}: the #541 measurement-profile carve-out must be named at the fence"
+        );
+    }
+    let fsbl_src = std::fs::read_to_string(workspace.join("fsbl/build.rs"))
+        .expect("read fsbl build script");
+    let dev_branch_pos = fsbl_src
+        .find("public development fixture")
+        .expect("fsbl must keep the dev-fixture branch");
+    let fsbl_fence_pos = fsbl_src
+        .find("reject_real_key_with_legacy_backend(&bytes")
+        .expect("fsbl must compare the RESOLVED embedded key");
+    assert!(
+        dev_branch_pos < fsbl_fence_pos,
+        "fsbl/build.rs: the real-key compare must run after BOTH key paths resolve"
+    );
+
+    // HONEST SCOPE NOTE: the blocking branch fires only when the explicit
+    // key's SHA-256 equals the reviewed production policy hash. The real
+    // production credential is deliberately NOT in-tree (the policy hash
+    // is in-tree; the key is not — and today the policy file is
+    // intentionally UNPROVISIONED, config/README.md), so the negative
+    // branch cannot be executed without the credential. The executed
+    // controls below prove the fence is SCOPED, not a blanket rejection
+    // of explicit keys.
+
+    // Positive control: an explicit, nonzero 32-byte fixture key that is
+    // neither the in-tree development key nor the production key still
+    // builds with `legacy-fw-rollback-unsafe` in both crates.
+    let fixture = [0xA5u8; 32];
+    std::fs::create_dir_all(&target_dir).expect("create fixture dir");
+    let fixture_path = target_dir.join("nonproduction-fixture-vendor-pubkey.bin");
+    std::fs::write(&fixture_path, fixture).expect("write fixture key");
+    let fixture_str = fixture_path.to_string_lossy().into_owned();
+    // Two-sided fixture hygiene: prove the fixture really is neither
+    // credential. Raw-byte compare against the dev key file (hex text);
+    // the fixture's SHA-256 (precomputed — the fixture is deterministic)
+    // against the policy file, which stays a valid inequality both while
+    // the policy is UNPROVISIONED and once it is provisioned.
+    let dev_hex = std::fs::read_to_string(
+        workspace.join("config/development-firmware-vendor-pubkey.hex"),
+    )
+    .expect("read development key");
+    assert_ne!(
+        dev_hex.trim(),
+        "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "fixture must not be the development key"
+    );
+    let policy = std::fs::read_to_string(
+        workspace.join("config/production-firmware-vendor-key.sha256"),
+    )
+    .expect("read production key policy");
+    assert_ne!(
+        policy.trim(),
+        "fc8b64001c5fdd0f2f40fb67dae4a865a2c5bd17836676d6d5b58b7917e33717",
+        "fixture SHA-256 must not equal the production policy hash"
+    );
+    assert_cargo_builds(
+        &workspace,
+        &target_dir,
+        "pqsigner-fsbl",
+        "legacy-fw-rollback-unsafe",
+        &[("FSBL_VENDOR_PUBKEY", fixture_str.as_str())],
+        &["FSBL_ALLOW_DEV_KEY"],
+    );
+    assert_cargo_builds(
+        &workspace,
+        &target_dir,
+        "sphincs-tz-secure",
+        SECURE_BENCH_FEATURES,
+        &[("FSBL_VENDOR_PUBKEY", fixture_str.as_str())],
+        &["FSBL_ALLOW_DEV_KEY"],
+    );
+
+    // Dev-fixture-key path: unchanged. The FSBL embeds the in-tree dev
+    // key under the explicit FSBL_ALLOW_DEV_KEY opt-in; the secure world
+    // embeds its bench placeholder with FSBL_VENDOR_PUBKEY unset. Neither
+    // touches the real-key fence.
+    assert_cargo_builds(
+        &workspace,
+        &target_dir,
+        "pqsigner-fsbl",
+        "legacy-fw-rollback-unsafe",
+        &[("FSBL_ALLOW_DEV_KEY", "1")],
+        &["FSBL_VENDOR_PUBKEY"],
+    );
+    assert_cargo_builds(
+        &workspace,
+        &target_dir,
+        "sphincs-tz-secure",
+        SECURE_BENCH_FEATURES,
+        &[],
+        &["FSBL_VENDOR_PUBKEY", "FSBL_ALLOW_DEV_KEY"],
+    );
 }

@@ -199,6 +199,16 @@ fn negative_reserved_status_9_maps_to_internal_error() {
 }
 
 #[test]
+fn negative_retired_status_16_maps_to_internal_error() {
+    // 16 was `FwUpdateOtpExhausted`; it was RETIRED in FA-1.5 (Draft 1.1
+    // §14 L4375) when the legacy unary OTP floor writer (`otp::bump_to`)
+    // was removed from COMMIT. The code stays reserved and must decode
+    // to InternalError, never silently revive a live variant.
+    let parsed = NscStatus::from(16);
+    assert_eq!(parsed, NscStatus::InternalError);
+}
+
+#[test]
 fn negative_unknown_status_discriminants_map_to_internal_error() {
     // Every value outside the documented set must fall through.
     let unknown_values: &[u32] = &[
@@ -232,7 +242,8 @@ fn negative_status_discriminant_values_are_not_renumbered() {
     assert_eq!(NscStatus::FwUpdateBadChunk as u32, 13);
     assert_eq!(NscStatus::FwUpdateBadImage as u32, 14);
     assert_eq!(NscStatus::FwUpdateFlashError as u32, 15);
-    assert_eq!(NscStatus::FwUpdateOtpExhausted as u32, 16);
+    // 16 (FwUpdateOtpExhausted) is RETIRED (FA-1.5) — pinned reserved in
+    // `negative_retired_status_16_maps_to_internal_error`.
     assert_eq!(NscStatus::OffchainSlotUnregistered as u32, 17);
     assert_eq!(NscStatus::OffchainGapExceeded as u32, 18);
     assert_eq!(NscStatus::OffchainCapExceeded as u32, 19);

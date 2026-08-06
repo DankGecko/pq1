@@ -1,10 +1,26 @@
 //! CMD_FW_COMMIT — legacy V1 staged-update finalizer (bench only).
 //!
-//! **Production-blocked:** this handler predates Draft 1.1. It advances the
-//! rejected unary OTP floor before candidate health and therefore does not
-//! provide the promised A/B rollback contract. The source is retained for
-//! pre-production diagnosis; `stm32u585 + mode-production` and all factory
-//! images fail compilation until the reviewed replacement is implemented.
+//! **Production-blocked:** this handler predates Draft 1.1. It used to
+//! advance the rejected unary OTP floor before candidate health and
+//! therefore did not provide the promised A/B rollback contract.
+//! **FA-1.5 (Draft 1.1 §14 L4375, L4388–4390): the runtime floor writer
+//! is REMOVED.** The legacy unary `otp::bump_to` re-programs one
+//! one-program-only ECC quad-word — not retry-safe on STM32U585 — and no
+//! reviewed rollback backend exists until OPEN-OTP-1..3, OPEN-ECC-1,
+//! OPEN-JRN-HW-1, and OPEN-JRN-DUR-1 close. COMMIT therefore has NO
+//! epoch-bump success path in any build: after the retained pre-commit
+//! re-verification gates it ends in a FAIL-CLOSED REFUSAL — no OTP
+//! program, no durable floor write, no reset into the staged slot BY
+//! THIS HANDLER. That refusal is scoped to this handler: FSBL slot
+//! selection is UNCHANGED (it re-verifies vendor fpr, signature, and
+//! rollback admissibility at every boot, and the floor never moved), so
+//! a staged slot whose boot-state write failed or tore can STILL be
+//! selected at the next reset under the legacy try-once fall-through.
+//! That is a staging-diagnosis state, not an authorization break:
+//! FSBL's own re-verification is the gate, and no floor was written.
+//! Production and real-vendor-key builds still compile-fail at the
+//! build-script quarantine (`FW_ROLLBACK_PRODUCTION_BLOCKED` /
+//! `FW_ROLLBACK_FACTORY_BLOCKED` in `secure/build.rs`).
 //!
 //! Runs the heavyweight checks that BEGIN could only partially do:
 //!
@@ -16,10 +32,14 @@
 //!      update?" prompt on the NV3007 LCD. Wait for long-right.
 //!   5. On confirm: write the target manifest page (`try_once = TRIED`),
 //!      point the boot-state page at the new slot, re-verify from flash
-//!      that the new slot is a legacy FSBL candidate, then attempt the
-//!      unsupported unary OTP bump and reset. This ordering narrows one old
-//!      pre-manifest brick window; it does not preserve a fallback through
-//!      probation and is not crash-safe for interrupted OTP programming.
+//!      that the new slot is a legacy FSBL candidate, then REFUSE
+//!      fail-closed (the floor write that used to follow is removed).
+//!      The retained manifest/boot-state writes stage the slot for
+//!      pre-production diagnosis; the handler itself performs NO
+//!      activation (no floor write, no reset). FSBL slot selection is
+//!      unchanged, so a torn or failed boot-state write can still leave
+//!      the staged slot selected at the next reset — gated by FSBL's own
+//!      manifest re-verification, never by this handler.
 //!   6. On cancel: drop the context; the inactive slot stays erased.
 
 use fw_manifest::{ManifestRef, MANIFEST_SIZE, TRY_ONCE_TRIED};
@@ -28,9 +48,8 @@ use sphincs_tz_shared::NscStatus;
 use super::state::{peek_state, FW_UPDATE};
 use super::{GatewayArgs, HandlerGuard};
 use crate::fw_update::{self, verify::ImageCheckError};
-use crate::hw::{boot_state, flash, otp};
+use crate::hw::{boot_state, flash};
 use crate::timeout;
-use crate::ui;
 
 /// # Safety
 /// CMSE non-secure-entry handler — dispatcher-invoked. The body
@@ -122,10 +141,11 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // Transport e2e gate (finding #25 / make fwup-transport-hw): the
     // over-USB transport test wants to validate the FULL state machine
     // + verify_images on real bytes-from-host, but MUST stop here —
-    // the OTP rollback bump and sys_reset below are irreversible and
-    // would brick a reflashable bench chip. Under `fwup-transport-e2e`
+    // the durable manifest/boot-state staging below is not wanted on a
+    // reflashable bench chip, and the handler no longer contains an OTP
+    // bump or reset arm at all (FA-1.5). Under `fwup-transport-e2e`
     // we drop the streaming ctx (zeroizing via ZeroizeOnDrop) and
-    // return Ok WITHOUT bumping OTP / writing the manifest / writing
+    // return Ok WITHOUT writing the manifest / writing
     // boot-state / resetting. The host test interprets Ok-without-
     // reset as PASS. Fenced out of mode-production (see nsc/mod.rs).
     #[cfg(feature = "fwup-transport-e2e")]
@@ -145,28 +165,31 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     let inactive: flash::Slot = ctx.inactive.into();
     let new_version = manifest.fw_version();
 
-    // The OTP rollback floor must land at `new_version - 1`, NOT
-    // `new_version`. `verify_rollback` (run by both FSBL at boot and
-    // BEGIN) accepts a manifest only when `fw_version > floor` (strict),
-    // so a floor equal to the just-installed version would make FSBL
-    // reject THIS slot on the next boot (`V > V` is false) and brick the
-    // device, while a floor of `V - 1` lets V boot yet still rejects
-    // every release `<= V - 1` (full anti-downgrade). We derive the
-    // floor from the SIGNED `fw_version`, never from the manifest's
-    // unsigned `boot_counter_snap` field: trusting that field would let
-    // a hostile companion lower the floor at BEGIN and re-open a
-    // downgrade window. `saturating_sub` is defensive — `new_version >= 1`
-    // always holds here (BEGIN's `verify_rollback` already rejected
-    // `fw_version <= floor`, and `floor >= 0`).
+    // The rollback floor a reviewed establishment path would have to land
+    // at is `new_version - 1`, NOT `new_version`. `verify_rollback` (run
+    // by both FSBL at boot and BEGIN) accepts a manifest only when
+    // `fw_version > floor` (strict), so a floor equal to the just-
+    // installed version would make FSBL reject THIS slot on the next boot
+    // (`V > V` is false) and brick the device, while a floor of `V - 1`
+    // lets V boot yet still rejects every release `<= V - 1` (full
+    // anti-downgrade). We derive the floor from the SIGNED `fw_version`,
+    // never from the manifest's unsigned `boot_counter_snap` field:
+    // trusting that field would let a hostile companion lower the floor
+    // at BEGIN and re-open a downgrade window. `saturating_sub` is
+    // defensive — `new_version >= 1` always holds here (BEGIN's
+    // `verify_rollback` already rejected `fw_version <= floor`, and
+    // `floor >= 0`). Post-FA-1.5 the value feeds ONLY the retained
+    // from-flash admissibility gate below; nothing programs it anywhere.
     let new_rollback_floor = new_version.saturating_sub(1);
 
-    // LEGACY ORDERING ONLY. Moving the floor write after the manifest closed
-    // the older "floor advanced before any new candidate exists" window. It
-    // did NOT make the transaction brick-safe: the candidate is selected as
-    // the sole floor-admissible slot before health, the legacy try-once
-    // fallback is nonfunctional in that state, and an interrupted OTP QW is
-    // ambiguous/lost. Draft 1.1 proposes replacing this sequence with
-    // PENDING -> ATTEMPTED -> health -> CONFIRMED -> FSBL-owned establishment.
+    // LEGACY ORDERING ONLY — PARTIAL FLOW POST-FA-1.5. Moving the floor
+    // write after the manifest had closed the older "floor advanced
+    // before any new candidate exists" window; it never made the
+    // transaction brick-safe. Draft 1.1 replaces this sequence with
+    // PENDING -> ATTEMPTED -> health -> CONFIRMED -> FSBL-owned
+    // establishment, and FA-1.5 removed the runtime floor writer
+    // entirely: the steps below stage the slot and re-verify it, then
+    // REFUSE — no OTP program, no reset.
 
     // 1. Write the target manifest page. The try_once_flag in the
     //    signed manifest should have been COMMITTED; we re-write it
@@ -210,9 +233,11 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
 
     // 2. Point the boot-state page at the new (tried) slot. Written only
     //    after the manifest is fully programmed (above), so the on-disk
-    //    pointer can never reference a half-written manifest. Still BEFORE
-    //    the OTP bump (step 4). This preserves the old slot only until the
-    //    later floor write; it is not the reviewed probation contract.
+    //    pointer can never reference a half-written manifest. This used to
+    //    preserve the old slot only until the floor write that followed;
+    //    post-FA-1.5 no floor write ever follows — the handler refuses
+    //    instead — and this staging is diagnostic-only, not the reviewed
+    //    probation contract.
     let new_boot_state = boot_state::BootState {
         active_slot: inactive,
         last_good_version: new_version,
@@ -234,18 +259,17 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     }
 
     // 3. Anti-brick gate: PROVE, from the bytes physically in flash, that
-    //    the new slot is now a valid FSBL candidate UNDER the floor we are
-    //    about to write — BEFORE the irreversible OTP bump. The per-
-    //    quadword `write_quadword_verified` above already read each QW back,
-    //    so re-running the manifest's own structural / CRC / digest checks
+    //    the new slot is now a valid FSBL candidate UNDER the floor a
+    //    reviewed establishment path would write. The per-quadword
+    //    `write_quadword_verified` above already read each QW back, so
+    //    re-running the manifest's own structural / CRC / digest checks
     //    here validates the assembled whole, and the strict
     //    `verify_rollback(new_rollback_floor)` is the keystone: it confirms
-    //    `fw_version > floor` still holds for the just-committed slot, so the
-    //    floor we write next cannot reject the very slot we are committing.
+    //    `fw_version > floor` still holds for the just-committed slot.
     //    We also confirm the boot-state pointer resolves to the new slot.
-    //    Any failure aborts without launching the legacy OTP bump. This
-    //    protects the pre-bump case only; it is not a global brick-safety
-    //    claim for the handler.
+    //    Any failure aborts before the (removed) floor-write point. This
+    //    protects the staged-candidate case only; it is not a global
+    //    brick-safety claim for the handler.
     {
         // SAFETY: `manifest_addr` is the 8 KB memory-mapped manifest page of
         // the inactive slot, fully programmed just above and not mutated
@@ -255,18 +279,25 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         let flash_manifest: &[u8; MANIFEST_SIZE] =
             unsafe { &*(manifest_addr as *const [u8; MANIFEST_SIZE]) };
         let committed = ManifestRef::new(flash_manifest);
-        // FI-hardening (X17-FW1 / playbook FW11): this is the LAST
-        // authorization gate before the irreversible OTP floor bump, so a
-        // bare `if !(a && b) { return }` reject would be one branch-flip
-        // away from falling through to `otp::bump_to` — two coordinated
-        // faults (tear the manifest write + skip the reject) brick the
-        // device (new slot boot-invalid, old slot floor-excluded). Route
-        // both verdicts through `check_true_into_sentinel` (double-
-        // evaluated + Hamming-distant sentinel) with
-        // `scrub_sentinel_register` between the paired callsites (stale-r0
-        // defence, F-15.r1), matching `verify_images`' aggregate-gate
-        // pattern. The closures RE-RUN the verifications; `black_box`
-        // stops LLVM from proving a re-evaluation redundant (F-1).
+        // FI-hardening (X17-FW1 / playbook FW11): RETAINED per the FI-
+        // retention acceptance row (Draft 1.1 §14 L4396–4398) — the
+        // reviewed sentinel/double-evaluation checks on signed digest /
+        // image binding and rollback admission stay in every build this
+        // campaign produces, even though the unary floor bump they once
+        // guarded is removed (the gate now precedes the fail-closed
+        // refusal below). HONEST SCOPE (merge wave-2 MEDIUM): post-removal
+        // the gate-fail arm and the fall-through refusal have identical
+        // side effects and status, so the retained checks are SOURCE-LEVEL
+        // retention pending the reviewed backend that will gate a real
+        // epoch-bump — they are not live FI coverage today, and the pin
+        // test asserts their presence and wiring, not a behavioural
+        // delta. Route both verdicts through
+        // `check_true_into_sentinel` (double-evaluated + Hamming-distant
+        // sentinel) with `scrub_sentinel_register` between the paired
+        // callsites (stale-r0 defence, F-15.r1), matching
+        // `verify_images`' aggregate-gate pattern. The closures RE-RUN
+        // the verifications; `black_box` stops LLVM from proving a
+        // re-evaluation redundant (F-1).
         crate::fi::wait_random();
         let manifest_gate = crate::fi::check_true_into_sentinel(|| {
             core::hint::black_box(committed.verify_structural().is_ok())
@@ -282,105 +313,63 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
             ))
         });
         if manifest_gate != crate::fi::OK_SENTINEL || pointer_gate != crate::fi::OK_SENTINEL {
-            // No OTP bump has happened: the old slot still boots. Drop the
-            // streaming context so a retry goes through a fresh, user-gated
-            // BEGIN (which re-erases + re-streams the inactive slot).
+            // No floor write has happened: the old slot still boots. Drop
+            // the streaming context so a retry goes through a fresh,
+            // user-gated BEGIN (which re-erases + re-streams the inactive
+            // slot).
             // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`
             // under the non-reentrant dispatcher + `HandlerGuard`.
             unsafe {
                 *core::ptr::addr_of_mut!(FW_UPDATE) = None;
             }
             secure_log!(
-                "[S][fwup] COMMIT pre-OTP re-verify FAIL — aborting before rollback-floor bump (old slot stays bootable)"
+                "[S][fwup] COMMIT pre-commit re-verify FAIL — aborting staged slot (old slot stays bootable)"
             );
             return NscStatus::FwUpdateFlashError as u32;
         }
     }
 
-    // 4. Attempt the rejected legacy unary floor update. Production never
-    //    reaches this code: STM32U585 OTP QWs are one-program-only, and a
-    //    reset/power loss during a launched program is not retry-safe.
-    // SAFETY: `otp::bump_to` is `unsafe fn` because it programs OTP one-way
-    // (irreversible). Precondition: the new slot's manifest + boot-state are
-    // durably written and were just re-verified from flash as a valid FSBL
-    // candidate under `new_rollback_floor`.
-    if let Err(e) = unsafe { otp::bump_to(new_rollback_floor) } {
-        // The new slot is fully written and boot-state points at it, but the
-        // legacy floor could not be raised. Surface the error and drop the
-        // context; do not claim recoverability if a QW program may have
-        // launched, because its post-reset state can be ambiguous.
-        // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`.
-        unsafe {
-            *core::ptr::addr_of_mut!(FW_UPDATE) = None;
-        }
-        return match e {
-            otp::OtpError::OutOfBudget => NscStatus::FwUpdateOtpExhausted as u32,
-            _ => NscStatus::FwUpdateFlashError as u32,
-        };
-    }
-
-    // 5. Drop the context (zeroize manifest bytes + running hashes).
+    // 4. FAIL-CLOSED REFUSAL (FA-1.5; Draft 1.1 §14 L4375 "runtime floor
+    //    writer removal", L4388–4390 "production and real-vendor-key builds
+    //    compile-fail on every epoch-bump success path").
+    //
+    //    The legacy unary floor update (`otp::bump_to`) is REMOVED from
+    //    this handler, and with it the ambiguous-launch handling (a QW
+    //    program whose post-reset state cannot be classified) and the
+    //    `FwUpdateOtpExhausted` status. STM32U585 OTP quad-words are
+    //    one-program-only and an interrupted program is not retry-safe,
+    //    and no reviewed rollback backend exists while OPEN-OTP-1..3,
+    //    OPEN-ECC-1, OPEN-JRN-HW-1, and OPEN-JRN-DUR-1 remain open
+    //    (§14 L4368–4370, L4385–4390). COMMIT therefore has NO epoch-bump
+    //    success path in any build: the floor is never raised at runtime,
+    //    and the handler never resets into the staged slot. Activation is
+    //    refused BY THIS HANDLER only: FSBL slot selection is unchanged,
+    //    so a staged slot whose boot-state write failed or tore can still
+    //    be selected at the next reset (legacy try-once fall-through),
+    //    gated by FSBL's own fpr/signature/rollback re-verification — not
+    //    an authorization break, since the floor never moved.
+    //
+    //    The 57d54657 zeroize-before-reset semantics are intact by
+    //    construction: no path below resets, so no reset hand-off can
+    //    carry the unlocked session into a successor image. The boot-side
+    //    defensive scrub (`ResetCause::requires_secret_scrub`, including
+    //    `Software`) is unchanged and stays pinned in
+    //    `main_sau_pure_tests.rs`.
+    //
+    //    Drop the streaming context so a retry goes through a fresh,
+    //    user-gated BEGIN (which re-erases + re-streams the inactive
+    //    slot), and surface the same generic failure bucket as the other
+    //    COMMIT aborts — no new wire status is introduced with the
+    //    removal.
     // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`
-    // under the non-reentrant dispatcher. The dropped `FwUpdateCtx`'s
-    // ZeroizeOnDrop impl wipes the manifest copy and IncrementalSha256
-    // running state.
+    // under the non-reentrant dispatcher + `HandlerGuard`. The dropped
+    // `FwUpdateCtx` zeroizes its manifest copy and running hashes via
+    // `ZeroizeOnDrop`.
     unsafe {
         *core::ptr::addr_of_mut!(FW_UPDATE) = None;
     }
-
-    // 6. Zeroize the unlocked session BEFORE resetting into the new image.
-    //
-    // SECURITY (2026-08-05): this call is load-bearing, not hygiene. COMMIT is
-    // PIN-gated (see the gate at the top of this function), so
-    // `SecureState::master_secret` is populated BY CONSTRUCTION when we get
-    // here. Step 5 above drops only `FwUpdateCtx` — the manifest copy and the
-    // running hashes — and leaves the wallet secret resident in SRAM1.
-    //
-    // SRAM survives a system reset. Provisioning burns `FLASH_OPTR.SRAM2_RST`
-    // (erases SRAM2, the NON-SECURE bank); the bit that would erase the bank
-    // holding secrets is `FLASH_OPTR.SRAM_RST`, which is not burned. And the
-    // boot path historically SKIPPED its defensive scrub for software resets
-    // on the assumption that "software resets always originate from code that
-    // zeroized first" — an assumption this very path violated.
-    //
-    // Net effect of the omission: the reset below hands control to a freshly
-    // installed image whose reset handler runs before Rust memory init, with
-    // the previous session's unlocked master secret readable out of retained
-    // SRAM — no PIN, no user interaction. That bypasses any confinement,
-    // authorization or signer-pinning guardrail built later, because those all
-    // govern what the successor image may DO, and the secret is already there
-    // before it does anything.
-    //
-    // `zeroize_sensitive_state()` also clears the SE driver's in-RAM session
-    // caches and revokes the trusted-UI watchdog exception; it issues no I2C
-    // traffic, so it is safe on this reboot path. `ResetCause::requires_secret_scrub`
-    // now also covers `Software` as defence in depth — keep BOTH.
-    super::zeroize_sensitive_state();
-
-    // 7. Reboot into the new firmware with automatic USB re-enumeration.
-    //    Does not return.
-    //
-    // The OTP rollback floor is already bumped + the new manifest is
-    // written with `try_once = TRIED` + boot-state points at the new
-    // slot, so a `sys_reset` boots the new firmware. `cc_open_then_reset`
-    // holds the USB-C CC lines open long enough that the host's typec
-    // layer registers a real detach, THEN resets — so the post-reset
-    // dead-battery Rd reads as a fresh attach and the device
-    // re-enumerates with NO physical replug (task #26; the bare
-    // `sys_reset` left the host port stuck because VBUS stays asserted).
-    // Re-enumeration latency is ~20-25 s (mostly device boot); the NV3007 LCD
-    // shows "reconnecting" across it. The companion app simply waits for
-    // the device to come back.
-    ui::show_status("Update OK", "reconnecting...");
-    // Only the USB image (`stm32u585` + `usb`) has `hw::usb_hw`. A
-    // display-only / semihosting / probe-rs bench image (`stm32u585`
-    // without `usb`, e.g. `make e2e-hw-dual-se`) and the QEMU build both
-    // take the plain `sys_reset` below — no USB host port to keep alive,
-    // and the new firmware boots either way. Both arms diverge (`-> !`).
-    #[cfg(all(feature = "stm32u585", feature = "usb"))]
-    unsafe {
-        crate::hw::usb_hw::cc_open_then_reset();
-    }
-    #[cfg(not(all(feature = "stm32u585", feature = "usb")))]
-    cortex_m::peripheral::SCB::sys_reset();
+    secure_log!(
+        "[S][fwup] COMMIT fail-closed refusal: runtime rollback-floor writer removed (FA-1.5) — no OTP program, no floor write, no reset BY THIS HANDLER; FSBL slot selection unchanged (a torn stage can still be selected at next reset under FSBL re-verification)"
+    );
+    return NscStatus::FwUpdateFlashError as u32;
 }

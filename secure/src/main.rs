@@ -1023,10 +1023,12 @@ fn main() -> ! {
     // Covers abnormal causes (Watchdog / LowPower / Unknown) AND `Software`.
     // Software resets were previously skipped on the assumption that they
     // "always originate from code that zeroized first" — that assumption was
-    // FALSE for the firmware-update path, which is PIN-gated (so the master
-    // secret is live by construction) and resets into the newly installed
-    // image. `cmd_fw_commit` now zeroizes explicitly; this is the belt to that
-    // braces. See `ResetCause::requires_secret_scrub` for the full rationale.
+    // FALSE for the pre-FA-1.5 firmware-update path, which was PIN-gated (so
+    // the master secret was live by construction) and reset into the newly
+    // installed image. FA-1.5 removed `cmd_fw_commit`'s reset arms (the
+    // handler now refuses fail-closed), and this scrub remains the
+    // defence-in-depth belt for any present or future software-reset path.
+    // See `ResetCause::requires_secret_scrub` for the full rationale.
     //
     // Still skipped for Cold (SRAM has been without Vdd long enough for
     // retention to decay) and OptionByte (triggered by the external

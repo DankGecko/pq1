@@ -1192,19 +1192,20 @@ fn nsc_status_to_sw(status: u32) -> u16 {
         //
         // BadState, BadChunk, FlashError → SW_CONDITIONS_NOT_SATISFIED
         //   The companion can issue CMD_FW_ABORT and retry from BEGIN.
+        //   (FlashError is also what the post-FA-1.5 fail-closed COMMIT
+        //   refusal returns; on this build shape COMMIT can never
+        //   succeed, so the "retry" advice is moot but harmless.)
         // BadManifest, BadVersion, BadImage → SW_WRONG_DATA
         //   The release the companion holds is unacceptable to this
         //   device. The companion must fetch a different release.
-        // OtpExhausted → SW_FEATURE_NOT_SUPPORTED
-        //   This device will never accept another update. Surface a
-        //   clear end-of-life message in the companion UI.
+        // (FwUpdateOtpExhausted → SW_FEATURE_NOT_SUPPORTED was RETIRED in
+        //   FA-1.5 with the removed unary OTP floor writer.)
         NscStatus::FwUpdateBadState => SW_CONDITIONS_NOT_SATISFIED,
         NscStatus::FwUpdateBadChunk => SW_CONDITIONS_NOT_SATISFIED,
         NscStatus::FwUpdateFlashError => SW_CONDITIONS_NOT_SATISFIED,
         NscStatus::FwUpdateBadManifest => SW_WRONG_DATA,
         NscStatus::FwUpdateBadVersion => SW_WRONG_DATA,
         NscStatus::FwUpdateBadImage => SW_WRONG_DATA,
-        NscStatus::FwUpdateOtpExhausted => SW_FEATURE_NOT_SUPPORTED,
         // Off-chain (EIP-1271) sign refusals. All recoverable on the
         // companion side: register a slot / publish a UserOp / rotate.
         NscStatus::OffchainSlotUnregistered => SW_CONDITIONS_NOT_SATISFIED,

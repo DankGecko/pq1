@@ -32,6 +32,25 @@ fn steady_proof_at(t: u32) -> SteadyProof {
     }
 }
 
+/// A SteadyProof after the group-2 bump to `t + 1` COMPLETED: committed
+/// group 1 at `t` plus committed group 2 at `t + 1` (no active stage).
+fn steady_proof_after_bump(t: u32) -> SteadyProof {
+    let mut bank = Bank::new();
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(t, 1));
+    }
+    bank.clean(floor::encode_complete_record(1));
+    for _ in 0..3 {
+        bank.clean(floor::encode_floor_record(t + 1, 2));
+    }
+    bank.clean(floor::encode_complete_record(2));
+    bank.route1(false);
+    match bank.decode(FENCE, None) {
+        FloorView::Steady(p) => p,
+        _ => panic!("steady after bump"),
+    }
+}
+
 /// A DeadStageProof with prior floor `t` and a dead stage at `t+1`.
 fn dead_proof(t: u32, binding: StageBinding) -> DeadStageProof {
     let mut bank = Bank::new();
@@ -183,6 +202,166 @@ fn start_epoch_bump_invokes_begin_exactly_once() {
         backend.mutation_log()[0],
         Some(Mutation::FloorBegin { target, .. }) if target == GOLDEN_T + 1
     ));
+}
+
+#[test]
+fn start_same_epoch_is_idempotent_and_never_touches_the_backend() {
+    // FA-1.4 (§14 L4380–4382): the `SameEpoch{T == F}` path issues no OTP
+    // program command and no durable stage write — and does so on every
+    // repetition over the same steady state (idempotent). The entry
+    // backend is DELIBERATELY left without a floor script, so its
+    // `redecode_floor` fails closed: the SameEpoch branch never consults
+    // the backend at all (FROZEN-OTP-API-3 L999–1000: "returns a
+    // no-write same-epoch result only for `T == F`"), and these starts
+    // succeed regardless. The fake's mutation surface cannot even
+    // express an OTP/durable-stage write (`Mutation` names only token
+    // transitions and floor-plan begin/resume), so a pristine log is the
+    // complete no-write proof.
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let mut backend = TestBackend::new(7);
+    for round in 0..3 {
+        let steady = steady_proof_at(GOLDEN_T);
+        let artifact = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E);
+        let intent = CheckedSteadyIntent::new(steady, artifact, None).expect("intent");
+        let out = start_from_steady(&mut backend, intent, &test_vendor_key()).expect("start");
+        assert_eq!(out, StartOutcome::SameEpochNoWrite, "round {round}");
+        assert!(
+            backend.is_pristine(),
+            "round {round}: ZERO mutating backend calls (no OTP program, no durable stage write)"
+        );
+        assert!(backend.mutation_log().is_empty(), "round {round}");
+        assert_eq!(backend.floor_mutation_count(), 0, "round {round}");
+        assert_eq!(backend.begun_plan_count(), 0, "round {round}: no plan begins at T == F");
+        assert!(
+            backend.read_arm_token().is_none(),
+            "round {round}: backend state unchanged (token untouched)"
+        );
+    }
+}
+
+#[test]
+fn start_epoch_bump_accounts_measured_five_component_cost() {
+    // FA-1.4 (§14 L4383–4384): the `T > F` path performs ONE logical
+    // target commitment carrying the codec's measured reservation,
+    // replica, completion, replacement, and recovery cost — accounted
+    // explicitly per commitment by the fake backend.
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let steady = steady_proof_at(GOLDEN_T);
+    let artifact = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1);
+    let receipt: EpochBumpReceipt =
+        floor::preflight(&steady, GOLDEN_T + 1, &artifact.artifact().identity().manifest_digest).unwrap();
+    let intent = CheckedSteadyIntent::new(steady, artifact, Some(receipt)).expect("intent");
+    let mut backend = TestBackend::new(7);
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
+    backend.set_artifact_script(
+        PhysicalSlot::A,
+        robust_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1, INSTALL_ID),
+    );
+    let out = start_from_steady(&mut backend, intent, &test_vendor_key()).expect("start");
+    assert_eq!(
+        out,
+        StartOutcome::Began {
+            target: GOLDEN_T + 1,
+            group: 2
+        }
+    );
+    // Exactly one accounted commitment, bound to this target.
+    assert_eq!(backend.begun_plan_count(), 1);
+    let plan = backend
+        .begun_plan(GOLDEN_T + 1)
+        .expect("the begun commitment is accounted");
+    assert_eq!(plan.group, 2);
+    // Each component derives from the MODEL codec's frozen constants
+    // (floor.rs), asserted here against the frozen-line definitions —
+    // OPEN-OTP-1..3 owns the production numbers.
+    assert_eq!(plan.cost.reservation, 1, "STAGEACT durable-stage reservation cell (R10-4)");
+    assert_eq!(plan.cost.replica, floor::INITIAL_THRESHOLD, "initial replica witnesses");
+    assert_eq!(plan.cost.completion, 1, "COMPLETE marker cell (R10-4/R11-2)");
+    assert_eq!(
+        plan.cost.replacement,
+        floor::PLAN_CELLS - floor::INITIAL_THRESHOLD,
+        "the finite plan's one replacement margin cell"
+    );
+    assert_eq!(
+        plan.cost.recovery, 0,
+        "recovery draws no per-commitment cell (bank-level preserve, §12.3 L3930–3932)"
+    );
+    // The account's total provably equals the frozen preflight gate
+    // (PLAN_CELLS + 2), and the receipt's proof-bound margin funded it.
+    assert_eq!(plan.cost.total(), floor::PLAN_CELLS + 2);
+    assert!(plan.margin >= plan.cost.total(), "the proof-bound margin funded the plan");
+}
+
+#[test]
+fn start_epoch_bump_same_target_never_begins_a_second_plan() {
+    // FA-1.4: single in-flight plan / idempotent commitment. One plan
+    // begins per target; a second start for the same `T` can never begin
+    // a second one — refused while the plan is in flight, and a same-
+    // epoch no-write once the floor has reached `T`.
+    let p = pass();
+    let mut setup = TestBackend::new(7);
+    let artifact = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1);
+    let mut backend = TestBackend::new(7);
+    backend.set_floor_script(steady_floor_script(GOLDEN_T));
+    backend.set_artifact_script(
+        PhysicalSlot::A,
+        robust_script(PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1, INSTALL_ID),
+    );
+
+    // First start: the one logical commitment for `GOLDEN_T + 1` begins.
+    let steady = steady_proof_at(GOLDEN_T);
+    let receipt: EpochBumpReceipt =
+        floor::preflight(&steady, GOLDEN_T + 1, &artifact.artifact().identity().manifest_digest).unwrap();
+    let intent = CheckedSteadyIntent::new(steady, artifact, Some(receipt)).expect("intent");
+    assert_eq!(
+        start_from_steady(&mut backend, intent, &test_vendor_key()).expect("start"),
+        StartOutcome::Began {
+            target: GOLDEN_T + 1,
+            group: 2
+        }
+    );
+    assert_eq!(backend.begun_plan_count(), 1);
+
+    // (a) In-flight plan: the bank now decodes `Recovering`, never
+    //     `Steady`, so no honest `CheckedSteadyIntent` can be built FROM
+    //     this state. A stale-snapshot intent (proof minted pre-begin)
+    //     is caught by the frozen recheck before any mutation
+    //     (FROZEN-OTP-API-3 L897–900): FloorDrift, no second begin.
+    let binding = binding_for(PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1, RECOVERING_ROLES);
+    backend.set_floor_script(recovering_floor_script(GOLDEN_T, binding));
+    let stale_steady = steady_proof_at(GOLDEN_T);
+    let artifact2 = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1);
+    let receipt2: EpochBumpReceipt = floor::preflight(
+        &stale_steady,
+        GOLDEN_T + 1,
+        &artifact2.artifact().identity().manifest_digest,
+    )
+    .unwrap();
+    let intent2 = CheckedSteadyIntent::new(stale_steady, artifact2, Some(receipt2))
+        .expect("intent validates against its own proof");
+    assert_eq!(
+        start_from_steady(&mut backend, intent2, &test_vendor_key()).unwrap_err(),
+        IntentError::FloorDrift
+    );
+    assert_eq!(backend.begun_plan_count(), 1, "still exactly one plan for the target");
+    assert_eq!(backend.floor_mutation_count(), 1, "no second begin");
+
+    // (b) Completed plan: the floor IS now the target, so a fresh start
+    //     for the same `T` classifies `T == F` — the idempotent
+    //     same-epoch no-write branch — and begins nothing. (The
+    //     SameEpoch path never consults the backend; the recovering
+    //     script left above is irrelevant to this arm.)
+    let completed_steady = steady_proof_after_bump(GOLDEN_T);
+    let artifact3 = accepted_artifact(&p, &mut setup, PhysicalSlot::A, GOLDEN_R, GOLDEN_E + 1);
+    let intent3 = CheckedSteadyIntent::new(completed_steady, artifact3, None).expect("T == F intent");
+    assert_eq!(
+        start_from_steady(&mut backend, intent3, &test_vendor_key()).expect("start"),
+        StartOutcome::SameEpochNoWrite
+    );
+    assert_eq!(backend.begun_plan_count(), 1, "the completed commitment is not rebegun");
+    assert_eq!(backend.floor_mutation_count(), 1, "no mutation on the idempotent repeat");
 }
 
 #[test]

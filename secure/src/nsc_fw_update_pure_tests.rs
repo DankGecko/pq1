@@ -9,9 +9,11 @@
 //!     inactive-slot erase, fresh `FwUpdateCtx` seed.
 //!   * `cmd_fw_chunk.rs`   — gate, NS payload snapshot, header parse,
 //!     bounds check, `staging::write_chunk` dispatch.
-//!   * `cmd_fw_commit.rs`  — gate, image re-verify, user confirm, OTP
-//!     rollback-floor bump, TRIED-flag manifest write, boot-state
-//!     update, system reset.
+//!   * `cmd_fw_commit.rs`  — gate, image re-verify, TRIED-flag manifest
+//!     write, boot-state update, retained sentinel-hardened from-flash
+//!     gates, then the post-FA-1.5 fail-closed refusal (the legacy OTP
+//!     rollback-floor bump and the reset arms are REMOVED — COMMIT has
+//!     no epoch-bump success path in any build).
 //!   * `cmd_fw_status.rs`  — NS write pointer validation, state-byte
 //!     derivation, big-endian counter emission.
 //!   * `cmd_fw_abort.rs`   — drop-in-place of the in-SRAM `FwUpdateCtx`
@@ -182,14 +184,18 @@ fn positive_nsc_status_fw_codes_pinned() {
     // The slice surfaces five distinct FW errors. Each must round-trip
     // via the From<u32> impl so the companion's status parser stays
     // in sync. A renumber breaks every released companion build.
+    // 16 (`FwUpdateOtpExhausted`) is RETIRED (FA-1.5, with the removed
+    // unary OTP floor writer): it no longer names a variant and decodes
+    // to InternalError — pinned here so the freed code never silently
+    // revives.
     assert_eq!(NscStatus::FwUpdateBadState as u32, 10);
     assert_eq!(NscStatus::FwUpdateBadManifest as u32, 11);
     assert_eq!(NscStatus::FwUpdateBadVersion as u32, 12);
     assert_eq!(NscStatus::FwUpdateBadChunk as u32, 13);
     assert_eq!(NscStatus::FwUpdateBadImage as u32, 14);
     assert_eq!(NscStatus::FwUpdateFlashError as u32, 15);
-    assert_eq!(NscStatus::FwUpdateOtpExhausted as u32, 16);
-    for code in [10u32, 11, 12, 13, 14, 15, 16] {
+    assert_eq!(NscStatus::from(16), NscStatus::InternalError);
+    for code in [10u32, 11, 12, 13, 14, 15] {
         let back: NscStatus = code.into();
         assert_eq!(back as u32, code);
     }
@@ -694,7 +700,7 @@ fn negative_chunk_checks_pin_verified_first() {
 fn negative_commit_checks_pin_verified_first() {
     assert!(
         COMMIT_SRC.contains("pin_verified.check_sentinel()"),
-        "cmd_fw_commit must gate on pin_verified — the OTP bump must NEVER happen on a locked device"
+        "cmd_fw_commit must gate on pin_verified — the staged-slot commit must NEVER happen on a locked device"
     );
     assert!(COMMIT_SRC.contains("NscStatus::NotInitialized"));
 }
@@ -1026,12 +1032,15 @@ fn negative_begin_resets_activity_timer_after_seed() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 14. Negative: source-text invariant pins — COMMIT ordering
+// 14. Negative: source-text invariant pins — COMMIT ordering + FA-1.5
+//     fail-closed refusal
 //
 // `cmd_fw_commit.rs`: the order of `verify_images` → manifest write →
-// boot-state write → from-flash re-verify → `otp::bump_to` → reset is
-// security-relevant inside the quarantined V1 path. The OTP-last pin closes
-// only the pre-candidate window; it does not preserve the fallback afterward.
+// boot-state write → from-flash re-verify → REFUSAL is security-relevant
+// inside the quarantined V1 path. FA-1.5 (Draft 1.1 §14 L4375) removed
+// the `otp::bump_to` call, its ambiguous-launch handling, the
+// `FwUpdateOtpExhausted` status, and BOTH reset arms: COMMIT now ends
+// in a fail-closed refusal with no epoch-bump success path in any build.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -1151,61 +1160,76 @@ fn positive_verifier_authorization_is_static_and_jittered() {
 }
 
 #[test]
-fn legacy_commit_bumps_otp_after_manifest_and_boot_state() {
-    // Pins the quarantined V1 ordering. Moving the bump last closes only the
-    // pre-candidate brick window: it does NOT preserve the old fallback after
-    // the floor advances, and the legacy FSBL has no functioning health writer.
-    // The handler is production-fenced; this is not an anti-brick proof.
+fn commit_stages_slot_then_refuses_fail_closed_without_otp_path() {
+    // FA-1.5 (Draft 1.1 §14 L4375, L4388–4390): the legacy unary floor
+    // writer is REMOVED from COMMIT. The retained flow stages the slot
+    // (manifest → boot-state), re-verifies it from flash, then refuses
+    // fail-closed. Pin BOTH halves:
+    //   * the removal is total — no OTP program command, no `otp::`
+    //     reference at all remains in the handler;
+    //   * the retained staging keeps its security-relevant order.
     let body = COMMIT_SRC;
-    let otp_pos = body
-        .find("otp::bump_to(new_rollback_floor)")
-        .expect("COMMIT must call otp::bump_to");
+    assert!(
+        !body.contains("unsafe { otp::"),
+        "FA-1.5 removed the legacy unary OTP floor bump from COMMIT — no otp:: call may remain \
+         (comments documenting the removal are expected; a CALL is not)"
+    );
+    assert!(
+        !body.contains("boot_state, flash, otp}"),
+        "COMMIT must not import the otp module post-removal"
+    );
+    let refusal_pos = body
+        .find("[S][fwup] COMMIT fail-closed refusal")
+        .expect("COMMIT must end in the FA-1.5 fail-closed refusal");
     let manifest_write_pos = body
         .find("flash::write_quadword_verified")
         .expect("COMMIT must program the new manifest");
     let boot_state_pos = body
         .find("boot_state::write(&new_boot_state)")
         .expect("COMMIT must write boot_state");
+    let gate_pos = body
+        .find("let manifest_gate = crate::fi::check_true_into_sentinel(")
+        .expect("COMMIT must retain the sentinel-hardened from-flash gates");
     assert!(
-        manifest_write_pos < otp_pos,
-        "new manifest write must PRECEDE the OTP bump — the new slot must be a valid \
-         candidate before the old slot is floored out (legacy ordering pin)"
+        manifest_write_pos < boot_state_pos,
+        "new manifest write must PRECEDE the boot-state write — the on-disk pointer can never \
+         reference a half-written manifest"
     );
     assert!(
-        boot_state_pos < otp_pos,
-        "boot-state write must PRECEDE the OTP bump — both slots stay valid until the \
-         floor is raised last (legacy ordering pin)"
+        boot_state_pos < gate_pos,
+        "the from-flash re-verify gates run AFTER both staging writes (they re-read flash)"
+    );
+    assert!(
+        gate_pos < refusal_pos,
+        "the fail-closed refusal is the LAST step — the gates remain the final authorization gate"
     );
 
-    // Legacy arithmetic pin only: V-1 keeps V internally admissible. It does
-    // not prove fallback availability or the physical OTP implementation.
+    // The floor arithmetic is RETAINED: it feeds the admissibility gate's
+    // `verify_rollback(new_rollback_floor)` — fw_version - 1 keeps V
+    // internally admissible. Nothing programs it anywhere.
     assert!(
         body.contains("new_rollback_floor = new_version.saturating_sub(1)"),
-        "legacy COMMIT arithmetic must remain fw_version - 1 while quarantined"
-    );
-    assert!(
-        body.contains("otp::bump_to(new_rollback_floor)")
-            && !body.contains("otp::bump_to(new_version)"),
-        "COMMIT must bump to new_rollback_floor (fw_version - 1), never to fw_version itself"
+        "the fw_version - 1 floor arithmetic must remain (it feeds the retained gate)"
     );
 }
 
 #[test]
-fn legacy_commit_reverifies_new_slot_from_flash_before_otp_bump() {
+fn commit_reverifies_new_slot_from_flash_before_refusing() {
     // Defense within quarantined V1: prove the candidate itself remains
-    // admissible before advancing its legacy floor. This does not prove A/B
-    // rollback or candidate health and grants no production authority.
+    // admissible before the handler's final refusal point. This does not
+    // prove A/B rollback or candidate health and grants no production
+    // authority.
     let body = COMMIT_SRC;
-    let otp_pos = body
-        .find("otp::bump_to(new_rollback_floor)")
-        .expect("COMMIT must call otp::bump_to");
+    let refusal_pos = body
+        .find("[S][fwup] COMMIT fail-closed refusal")
+        .expect("COMMIT must end in the FA-1.5 fail-closed refusal");
     let reverify_pos = body
         .find("verify_rollback(new_rollback_floor)")
-        .expect("COMMIT must re-verify the committed manifest's rollback floor before the bump");
+        .expect("COMMIT must re-verify the committed manifest's rollback floor before refusing");
     assert!(
-        reverify_pos < otp_pos,
-        "the from-flash rollback re-verify must run BEFORE the OTP bump — the floor is \
-         raised only once the new slot is proven a valid candidate"
+        reverify_pos < refusal_pos,
+        "the from-flash rollback re-verify must run BEFORE the refusal — the staged slot is \
+         only left behind once proven a valid candidate"
     );
     assert!(
         body.contains("ManifestRef::new(flash_manifest)"),
@@ -1287,132 +1311,119 @@ fn legacy_commit_sets_try_once_tried_and_recomputes_crc() {
 }
 
 #[test]
-fn legacy_commit_order_keeps_boot_state_after_manifest_before_reset() {
+fn commit_order_keeps_boot_state_after_manifest_before_refusal() {
     // boot_state::write is the single atomic "now boot from the new
-    // slot" commit point. Writing it before the manifest is fully
-    // programmed would have FSBL try to boot a torn slot. Writing
-    // it after sys_reset is impossible. The fixed order is
-    // manifest → boot_state → from-flash re-verify → OTP → sys_reset
-    // This is a legacy ordering pin, not an anti-brick proof; see
-    // `legacy_commit_bumps_otp_after_manifest_and_boot_state`.
+    // slot" staging point. Writing it before the manifest is fully
+    // programmed would have FSBL try to boot a torn slot. Post-FA-1.5
+    // the handler ends in the fail-closed refusal (no reset, no OTP
+    // bump), so the fixed order is
+    // manifest → boot_state → from-flash re-verify → refusal.
     let manifest_pos = COMMIT_SRC
         .find("flash::write_quadword_verified")
         .expect("COMMIT must program the manifest");
     let boot_state_pos = COMMIT_SRC
         .find("boot_state::write(&new_boot_state)")
         .expect("COMMIT must write boot_state");
-    let reset_pos = COMMIT_SRC
-        .find("SCB::sys_reset()")
-        .expect("COMMIT must end with sys_reset");
+    let refusal_pos = COMMIT_SRC
+        .find("[S][fwup] COMMIT fail-closed refusal")
+        .expect("COMMIT must end with the fail-closed refusal (FA-1.5 removed the reset arms)");
     assert!(
         manifest_pos < boot_state_pos,
         "boot_state::write must run AFTER manifest is programmed — partial manifest must not be \
          the boot target"
     );
     assert!(
-        boot_state_pos < reset_pos,
-        "sys_reset must be the last thing COMMIT does"
+        boot_state_pos < refusal_pos,
+        "the fail-closed refusal must be the last thing COMMIT does"
     );
 }
 
 #[test]
-fn negative_commit_zeroizes_session_secrets_before_resetting_into_new_image() {
-    // REGRESSION GUARD (2026-08-05) — the FW_COMMIT secret-retention defect.
+fn negative_commit_has_no_reset_arm_so_no_secret_handoff() {
+    // REGRESSION GUARD (2026-08-05 defect; adapted FA-1.5). The FW_COMMIT
+    // secret-retention defect: COMMIT is PIN-gated, so
+    // `SecureState::master_secret` is populated BY CONSTRUCTION when
+    // COMMIT runs. The pre-FA-1.5 handler reset into the freshly written
+    // image with the wallet secret still resident in SRAM1 (SRAM survives
+    // a system reset; provisioning burns SRAM2_RST — the NON-SECURE bank
+    // — not SRAM_RST, and the boot scrub used to skip Software resets).
     //
-    // COMMIT is PIN-gated, so `SecureState::master_secret` is populated BY
-    // CONSTRUCTION when COMMIT runs. It used to drop only `FwUpdateCtx` (the
-    // manifest copy + running hashes) and then reset into the freshly written
-    // image with the wallet secret still resident in SRAM1.
-    //
-    // SRAM survives a system reset. Provisioning burns FLASH_OPTR.SRAM2_RST,
-    // which erases SRAM2 — the NON-SECURE bank — not SRAM_RST, which covers
-    // the bank holding secrets. And main()'s defensive boot scrub used to skip
-    // Software resets outright. So the successor image's reset handler ran
-    // before Rust memory init with the previous session's unlocked master
-    // secret readable, needing no PIN and no user interaction.
-    //
-    // That defeats ANY later confinement / authorization / signer-pinning
-    // guardrail, because all of those govern what the successor may DO, and
-    // the secret is already sitting there before it does anything.
-    let zeroize_pos = COMMIT_SRC
-        .find("super::zeroize_sensitive_state();")
-        .expect(
-            "COMMIT must zeroize the unlocked session before resetting into the new image — \
-             see docs/security/vendor-signing-key-compromise.md defect D1",
+    // FA-1.5 closed the hole structurally: COMMIT has NO reset arm at all
+    // (the handler refuses fail-closed instead of resetting into the new
+    // image), so no reset hand-off can carry the unlocked session
+    // anywhere. Pin that no reset path — and no "update OK" UI beat —
+    // survives in the handler.
+    for forbidden in [
+        "SCB::sys_reset()",
+        "cc_open_then_reset()",
+        "ui::show_status(\"Update OK\"",
+    ] {
+        assert!(
+            !COMMIT_SRC.contains(forbidden),
+            "COMMIT must not contain reset/success arm `{forbidden}` — FA-1.5 made the handler \
+             fail-closed, so the secret-retention hole is structurally closed"
         );
-
-    // Must come before BOTH reset arms (plain sys_reset and the USB
-    // cc_open_then_reset variant), or the USB build keeps the hole.
-    let sys_reset_pos = COMMIT_SRC
-        .find("SCB::sys_reset()")
-        .expect("COMMIT must end with sys_reset");
-    let cc_reset_pos = COMMIT_SRC
-        .find("cc_open_then_reset()")
-        .expect("COMMIT must have the USB reset arm");
-    assert!(
-        zeroize_pos < sys_reset_pos,
-        "zeroize must precede sys_reset — otherwise the new image reads the master secret \
-         out of retained SRAM1"
-    );
-    assert!(
-        zeroize_pos < cc_reset_pos,
-        "zeroize must precede cc_open_then_reset too — the USB image resets via that arm"
-    );
-
-    // ORDERING: the zeroize must come AFTER the OTP floor bump, so nothing
-    // downstream of it still needs session state. If someone moves it earlier
-    // the wipe could land while a later step still expects an unlocked
-    // session — a correctness bug in the other direction.
-    let otp_pos = COMMIT_SRC
-        .find("otp::bump_to(new_rollback_floor)")
-        .expect("COMMIT must attempt the legacy floor bump");
-    assert!(
-        otp_pos < zeroize_pos,
-        "zeroize must run after the OTP bump — no step after it may need the unlocked session"
-    );
+    }
+    // The boot-side defensive scrub (`ResetCause::requires_secret_scrub`,
+    // including `Software`) remains the defence-in-depth belt for any
+    // other software-reset path; it is pinned in
+    // `main_sau_pure_tests.rs::positive_software_reset_requires_secret_scrub`
+    // and `positive_reset_cause_drives_abnormal_zeroize`.
 }
 
 #[test]
-fn negative_commit_maps_otp_exhaustion_to_distinct_error_code() {
-    // Companion must distinguish "this device is permanently out of
-    // OTP budget" (manual support intervention) from a transient
-    // flash error (retry). The discriminator is the
-    // FwUpdateOtpExhausted code.
-    assert!(
-        COMMIT_SRC.contains("otp::OtpError::OutOfBudget"),
-        "COMMIT must surface OutOfBudget as a discriminated case"
-    );
-    assert!(
-        COMMIT_SRC.contains("NscStatus::FwUpdateOtpExhausted"),
-        "COMMIT must map OutOfBudget → FwUpdateOtpExhausted (not FwUpdateFlashError)"
-    );
+fn negative_commit_has_no_otp_exhaustion_path() {
+    // FA-1.5: the `FwUpdateOtpExhausted` status and the ambiguous-launch
+    // handling disappeared WITH the removed unary floor writer — they
+    // must never come back through this handler. (The enum variant is
+    // retired in proto; code 16 decodes to InternalError.) Pins key on
+    // the CODE forms: comments documenting the removal mention the names
+    // legitimately.
+    for forbidden in [
+        "OtpError::OutOfBudget =>",
+        "FwUpdateOtpExhausted as u32",
+        "unsafe { otp::",
+    ] {
+        assert!(
+            !COMMIT_SRC.contains(forbidden),
+            "COMMIT must not reference removed OTP-bump landmark `{forbidden}`"
+        );
+    }
 }
 
 #[test]
-fn negative_commit_pre_otp_authorization_gate_is_sentinel_hardened() {
-    // X17-FW1 / playbook FW11: the pre-OTP re-verify is the LAST
-    // authorization gate before the irreversible OTP floor bump. A bare
-    // `&&`/`if` chain there is one branch-flip away from falling through
-    // to `otp::bump_to` with a boot-invalid new slot and the old slot
-    // floor-excluded. Both verdicts (manifest chain + boot-state pointer)
-    // must be routed through `check_true_into_sentinel`, with
-    // `scrub_sentinel_register` between the paired callsites (stale-r0
-    // defence), matching `verify_images`' aggregate-gate pattern.
+fn negative_commit_pre_refusal_authorization_gate_is_sentinel_hardened() {
+    // HONEST SCOPE (merge wave-2 MEDIUM): post-FA-1.5 both post-gate
+    // outcomes (gate-fail arm and fall-through refusal) have identical
+    // side effects, so this pin asserts SOURCE-LEVEL retention of the
+    // sentinel/double-eval gates pending the reviewed backend — not live
+    // FI behavioural coverage.
+    // FI-RETENTION ACCEPTANCE ROW (Draft 1.1 §14 L4396–4398; not removable
+    // headroom per §5): the reviewed sentinel/double-evaluation checks on
+    // the signed digest/image binding and rollback admission are RETAINED
+    // in every build this campaign produces. In COMMIT that is the
+    // from-flash re-verify gate (X17-FW1 / playbook FW11), which used to
+    // be the last authorization gate before the unary OTP floor bump and
+    // now precedes the FA-1.5 fail-closed refusal. Both verdicts
+    // (manifest chain + boot-state pointer) must stay routed through
+    // `check_true_into_sentinel`, with `scrub_sentinel_register` between
+    // the paired callsites (stale-r0 defence, F-15.r1), matching
+    // `verify_images`' aggregate-gate pattern.
     assert!(
         COMMIT_SRC.contains("let manifest_gate = crate::fi::check_true_into_sentinel("),
-        "pre-OTP manifest re-verify must be sentinel-hardened (X17-FW1), not a bare bool"
+        "pre-refusal manifest re-verify must be sentinel-hardened (X17-FW1), not a bare bool"
     );
     assert!(
         COMMIT_SRC.contains("let pointer_gate = crate::fi::check_true_into_sentinel("),
-        "pre-OTP boot-state pointer check must be sentinel-hardened (X17-FW1), not a bare bool"
+        "pre-refusal boot-state pointer check must be sentinel-hardened (X17-FW1), not a bare bool"
     );
     assert!(
         COMMIT_SRC.contains("crate::fi::scrub_sentinel_register()"),
-        "paired pre-OTP sentinel callsites must be separated by scrub_sentinel_register (F-15.r1)"
+        "paired pre-refusal sentinel callsites must be separated by scrub_sentinel_register (F-15.r1)"
     );
     assert!(
         COMMIT_SRC.contains("!= crate::fi::OK_SENTINEL"),
-        "pre-OTP gate must compare verdicts against OK_SENTINEL (sentinel-encoded, not a raw bool)"
+        "pre-refusal gate must compare verdicts against OK_SENTINEL (sentinel-encoded, not a raw bool)"
     );
 }
 

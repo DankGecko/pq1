@@ -34,6 +34,25 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_MODE_PRODUCTION");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_LCD_TEST");
     println!("cargo:rerun-if-env-changed=FSBL_ALLOW_DEV_KEY");
+    println!("cargo:rerun-if-env-changed=PQ_ROLLBACK_MEASUREMENT_PROFILE");
+    // Firmware-rollback ship quarantine (FSBL half).  The fence keys on a
+    // REACHABLE epoch-bump success path: while the Draft-1.1 rollback
+    // candidate is not implementation-approved or implemented
+    // (OPEN-OTP-1..3 / OPEN-ECC-1 / OPEN-JRN-HW-1 / OPEN-JRN-DUR-1 open,
+    // §14 L4385–4390), no production image may compose with the
+    // legacy/unresolved backend, and every bench FSBL build must carry
+    // the explicit `legacy-fw-rollback-unsafe` marker so the quarantine
+    // cannot go vacuous.  FA-1.5 (§14 L4375) removed the runtime floor
+    // writer from the secure world's `cmd_fw_commit`; these FSBL gates
+    // are retained unchanged and are negative-control exercised by
+    // `fsbl-tests/tests/rollback_ship_fences.rs`.
+    //
+    // CARVE-OUT (issue #541; stated here per FA-1.5, not left implicit):
+    // the named §5 warning-build measurement profile links conservative
+    // reservation stubs that fail closed at runtime and therefore has NO
+    // reachable epoch-bump success path — it is explicitly not a target
+    // of this quarantine.  A green warning build records measurements
+    // only and grants no code or hardware authority (§14 L4348–4354).
     if mode_production {
         panic!(
             "FW_ROLLBACK_FSBL_PRODUCTION_BLOCKED: the Draft-1.1 rollback candidate is not implementation-approved or implemented"
@@ -164,6 +183,13 @@ fn main() {
     bytes[..16].copy_from_slice(&pk_seed);
     bytes[16..].copy_from_slice(&pk_root);
 
+    // Real-vendor-key fence (FA-1.5 follow-up; Draft 1.1 §14 L4376–4390).
+    // Keys on the RESOLVED embedded key, covering BOTH the explicit
+    // `FSBL_VENDOR_PUBKEY` path and the dev-fixture path above — a real
+    // production key placed at the dev fixture's path is fenced exactly
+    // like one named by the env var.
+    reject_real_key_with_legacy_backend(&bytes, mode_production);
+
     // Emit a source file with the pubkey as a literal byte array plus
     // its SHA-256 fingerprint. The fingerprint is pre-computed at build
     // time so the FSBL's vendor-fpr check is a plain memcmp at runtime.
@@ -190,6 +216,60 @@ fn main() {
     // FSBL row and the secure-world `measured_boot` row are visually
     // identical. ~480 bytes of rodata.
     generate_font_flat(&out_dir);
+}
+
+
+// Real-vendor-key fence (FA-1.5 follow-up; Draft 1.1 §14 L4376–4390).
+// `mode-production` is panic-blocked in `main()`, but the reviewed
+// PRODUCTION vendor key must ALSO never compose with the legacy/unresolved
+// rollback backend in any non-mode-production build: the quarantine keys on
+// a REACHABLE epoch-bump success path, and today every rollback backend in
+// this tree is legacy/unresolved. Scoped EXACTLY to policy-hash equality —
+// the dev fixture and any other non-production key build as before.
+//
+// CARVE-OUT (issue #541; mirrors the quarantine comment in `main()`): the
+// named §5 warning-build measurement profile links conservative reservation
+// stubs that fail closed at runtime and therefore has NO reachable
+// epoch-bump success path — it opts in by setting
+// `PQ_ROLLBACK_MEASUREMENT_PROFILE` (any value; unset today) and grants no
+// code or hardware authority.
+fn reject_real_key_with_legacy_backend(bytes: &[u8; 32], mode_production: bool) {
+    use sha2::{Digest, Sha256};
+    let actual: [u8; 32] = Sha256::digest(bytes).into();
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let policy_path = manifest_dir.join(PRODUCTION_KEY_POLICY);
+    println!("cargo:rerun-if-changed={}", policy_path.display());
+    let policy = fs::read_to_string(&policy_path).unwrap_or_else(|e| {
+        panic!(
+            "reading production firmware-key policy {}: {e}",
+            policy_path.display()
+        )
+    });
+    // The policy intentionally holds `UNPROVISIONED` before the factory/HSM
+    // key ceremony (config/README.md): with no reviewed production
+    // fingerprint there is nothing for this fence to match, and every key
+    // builds as before. Any OTHER malformed content fails closed in
+    // `parse_hex_32`.
+    let expected = if policy.trim() == "UNPROVISIONED" {
+        None
+    } else {
+        Some(parse_hex_32(&policy, &policy_path.display().to_string()))
+    };
+    if !mode_production
+        && expected == Some(actual)
+        && env::var_os("PQ_ROLLBACK_MEASUREMENT_PROFILE").is_none()
+    {
+        panic!(
+            "FW_ROLLBACK_REAL_KEY_BLOCKED: the embedded vendor key matches the reviewed \
+             production vendor-key policy hash. Draft 1.1 §14 L4376–4390 forbids \
+             composing the real vendor key with the legacy/unresolved rollback \
+             backend in any build (mode-production is separately compile-blocked); \
+             only an approved production rollback backend may build with it. The \
+             #541 warning-build measurement profile (fail-closed reservation stubs, \
+             no reachable epoch-bump success path) opts in when \
+             PQ_ROLLBACK_MEASUREMENT_PROFILE is set (unset today)."
+        );
+    }
 }
 
 fn validate_production_key(bytes: &[u8; 32], source_path: &str) {

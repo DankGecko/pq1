@@ -209,17 +209,21 @@ fn positive_software_reset_requires_secret_scrub() {
     // `is_abnormal()`, which EXCLUDES `Software`, justified by "software
     // resets always originate from code that zeroized first".
     //
-    // That was false. `cmd_fw_commit` resets into a freshly installed image,
-    // and COMMIT is PIN-gated — so `master_secret` is live by construction.
-    // SRAM survives a system reset (provisioning burns SRAM2_RST, which
-    // erases the NON-SECURE bank, not SRAM_RST), so the successor image's
-    // reset handler could read the previous session's master secret before
-    // Rust memory init, with no PIN and no user interaction.
+    // That was false: the pre-FA-1.5 `cmd_fw_commit` reset into a freshly
+    // installed image, and COMMIT is PIN-gated — so `master_secret` was
+    // live by construction. SRAM survives a system reset (provisioning
+    // burns SRAM2_RST, which erases the NON-SECURE bank, not SRAM_RST),
+    // so the successor image's reset handler could read the previous
+    // session's master secret before Rust memory init, with no PIN and
+    // no user interaction. FA-1.5 removed COMMIT's reset arms entirely
+    // (fail-closed refusal; no epoch-bump success path), but this scrub
+    // stays load-bearing as defence in depth for ANY software reset
+    // (panic paths, future reset arms).
     //
     // If this assertion ever fails, that hole is back.
     assert!(
         ResetCause::Software.requires_secret_scrub(),
-        "software resets MUST scrub: cmd_fw_commit resets with the master secret live"
+        "software resets MUST scrub: a PIN-gated handler may reset with the master secret live"
     );
 
     // Everything abnormal still scrubs.
@@ -1058,11 +1062,13 @@ fn positive_reset_cause_drives_abnormal_zeroize() {
 
     // NEGATIVE CONTROL (2026-08-05): the gate must NOT be narrowed back to
     // `is_abnormal()`, which excludes `Software` and therefore re-opens the
-    // firmware-update secret-retention hole.
+    // firmware-update secret-retention hole (pre-FA-1.5 `cmd_fw_commit`
+    // reset with the master secret live; the scrub stays as defence in
+    // depth after FA-1.5 removed that reset arm).
     assert!(
         !MAIN_SRC.contains("if reset_cause.is_abnormal() {"),
         "boot scrub must not gate on is_abnormal() — it excludes Software, \
-         and cmd_fw_commit resets with the master secret live"
+         and a PIN-gated handler may reset with the master secret live"
     );
 }
 

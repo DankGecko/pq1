@@ -7,9 +7,10 @@
 //! the secure firmware is *also* accepted at boot by FSBL.
 //!
 //! Without this, the secure firmware would have to defer signature
-//! verification to FSBL after reset, leaving the OTP rollback-floor
-//! bump in `cmd_fw_commit` running on unverified bytes (C-1 in the
-//! security review).
+//! verification to FSBL after reset, which is what left the pre-FA-1.5
+//! OTP rollback-floor bump in `cmd_fw_commit` running on unverified
+//! bytes (C-1 in the security review). FA-1.5 removed that bump; the
+//! on-device verify at BEGIN remains the binding authenticity gate.
 //!
 //! Bench builds may intentionally embed the all-zero reject-all placeholder;
 //! production builds require an absolute immutable key snapshot whose hash

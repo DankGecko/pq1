@@ -52,7 +52,13 @@
 // Production quarantine for the rejected unary OTP rollback reader.  The
 // build-script mirrors these gates so the intended error appears before key
 // and linker policy; keeping a Rust-side fence prevents a custom build-script
-// bypass from silently producing a shipping image.
+// bypass from silently producing a shipping image.  The fence keys on a
+// REACHABLE epoch-bump success path (FA-1.5, Draft 1.1 §14 L4375).
+//
+// CARVE-OUT (issue #541; see `fsbl/build.rs` for the full statement): the
+// named §5 warning-build measurement profile links conservative reservation
+// stubs that fail closed at runtime and has NO reachable epoch-bump success
+// path — it is explicitly not a target of this quarantine.
 #[cfg(feature = "mode-production")]
 compile_error!(
     "FW_ROLLBACK_FSBL_PRODUCTION_BLOCKED: the Draft-1.1 rollback candidate is not implementation-approved or implemented"

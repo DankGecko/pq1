@@ -1901,10 +1901,13 @@ pub enum NscStatus {
     /// An internal flash program / erase operation failed. The inactive
     /// slot may be in an undefined state; retry a fresh BEGIN.
     FwUpdateFlashError = 15,
-    /// OTP rollback budget exhausted — this device can no longer
-    /// accept any further firmware updates. A tracked companion-side
-    /// warning should have fired well before this.
-    FwUpdateOtpExhausted = 16,
+    // 16 is RETIRED (FA-1.5, Draft 1.1 §14 L4375): `FwUpdateOtpExhausted`
+    // disappeared with the removed legacy unary OTP floor writer
+    // (`otp::bump_to`) — COMMIT now refuses fail-closed and never
+    // reaches an OTP-budget condition. The code stays reserved: it
+    // decodes to `InternalError`, and a future status must not reuse it
+    // without a wire-format review (released companions parsed 16 as
+    // "permanently out of OTP budget").
 
     // ── CMD_SIGN_OFFCHAIN errors ───────────────────────────────────
     /// Off-chain sign requested for a slot that this firmware has no
@@ -1942,7 +1945,6 @@ impl From<u32> for NscStatus {
             13 => Self::FwUpdateBadChunk,
             14 => Self::FwUpdateBadImage,
             15 => Self::FwUpdateFlashError,
-            16 => Self::FwUpdateOtpExhausted,
             17 => Self::OffchainSlotUnregistered,
             18 => Self::OffchainGapExceeded,
             19 => Self::OffchainCapExceeded,

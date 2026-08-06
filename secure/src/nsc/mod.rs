@@ -406,18 +406,27 @@ compile_error!(
      circuits boot into a firmware anti-rollback test — never a shipping image."
 );
 
-// Firmware-rollback backend quarantine. The current hardware implementation
-// treats one ECC-protected OTP quad-word as a reusable per-bit tally, but
+// Firmware-rollback backend quarantine. The legacy hardware implementation
+// treated one ECC-protected OTP quad-word as a reusable per-bit tally, but
 // STM32U585 user OTP permits only one program operation per 128-bit QW.
-// Draft 1.1 is the current research candidate for replacement interfaces and
-// deliberately leaves approval plus physical journal/ECC/OTP/resource gates
-// open. It is not implementation authority.
+// FA-1.5 (Draft 1.1 §14 L4375) removed that runtime floor writer from
+// `cmd_fw_commit` (the handler now refuses fail-closed; no epoch-bump
+// success path exists in any build). Draft 1.1 remains the research
+// candidate for replacement interfaces and deliberately leaves approval
+// plus physical journal/ECC/OTP/resource gates open. It is not
+// implementation authority.
 //
 // Shipping builds are blocked unconditionally. Bench images must carry a
 // conspicuous no-behaviour-change opt-in (normally inherited from debug-log,
 // mock-se, e2e-test, or otp-hardcoded-master-key). Factory provisioning is
 // blocked separately because its entry and completion receipts reprogram the
 // same OTP QW and therefore cannot complete on this MCU.
+//
+// CARVE-OUT (issue #541; see `secure/build.rs` for the full statement):
+// the named §5 warning-build measurement profile links conservative
+// reservation stubs that fail closed at runtime and has NO reachable
+// epoch-bump success path — it is explicitly not a target of this
+// quarantine.
 #[cfg(all(feature = "mode-production", feature = "stm32u585"))]
 compile_error!(
     "FW_ROLLBACK_PRODUCTION_BLOCKED: the legacy firmware rollback path \

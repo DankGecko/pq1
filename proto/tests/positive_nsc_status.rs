@@ -28,7 +28,8 @@ fn positive_each_variant_round_trips_through_from_u32() {
         (13, NscStatus::FwUpdateBadChunk),
         (14, NscStatus::FwUpdateBadImage),
         (15, NscStatus::FwUpdateFlashError),
-        (16, NscStatus::FwUpdateOtpExhausted),
+        // 16 (FwUpdateOtpExhausted) is RETIRED (FA-1.5); it decodes to
+        // InternalError and is pinned in negative_cmd_and_status.rs.
         (17, NscStatus::OffchainSlotUnregistered),
         (18, NscStatus::OffchainGapExceeded),
         (19, NscStatus::OffchainCapExceeded),

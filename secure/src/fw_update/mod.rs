@@ -448,24 +448,25 @@ pub fn verify_manifest(m: &ManifestRef, rollback_floor: u32) -> Result<(), Verif
     // C-1 fix: the secure firmware now embeds the vendor SPHINCS+C10
     // public key (mirrored from `fsbl/build.rs`). We verify the
     // manifest's signature here, BEFORE the destructive ops in COMMIT
-    // (slot erase, OTP rollback-floor bump, boot-state write) can run.
+    // (slot erase, manifest/boot-state staging) can run.
     //
     // Why the previous "defer to FSBL on next reboot" model was unsafe:
     //   - The vendor-fpr-match-active-slot check is bypassable by any
     //     attacker who can read the active manifest (it's flash, not
     //     a secret) — they just copy the fpr bytes into a forged
     //     manifest.
-    //   - The OTP rollback-floor bump in `cmd_fw_commit` is
-    //     irreversible. A user who confirms a malicious manifest
-    //     (social engineering or a half-finished OLED confirm) bumps
-    //     the OTP floor before FSBL ever gets a chance to reject the
-    //     bad signature. The wallet then refuses any legitimate
-    //     firmware whose version is below the attacker-chosen value
-    //     — permanent update-DoS.
+    //   - The pre-FA-1.5 OTP rollback-floor bump in `cmd_fw_commit` was
+    //     irreversible. A user who confirmed a malicious manifest
+    //     (social engineering or a half-finished OLED confirm) bumped
+    //     the OTP floor before FSBL ever got a chance to reject the
+    //     bad signature. The wallet then refused any legitimate
+    //     firmware whose version was below the attacker-chosen value
+    //     — permanent update-DoS. FA-1.5 removed that bump (COMMIT now
+    //     refuses fail-closed), and the verify-at-BEGIN ordering stays
+    //     as the binding gate regardless.
     //
-    // With the signature check here, COMMIT only runs on a real
-    // vendor-signed manifest, so the OTP bump only fires on
-    // legitimate updates.
+    // With the signature check here, COMMIT only ever stages a real
+    // vendor-signed manifest.
     //
     // **Timing normalization (finding C in docs/security/usb-fw-update-hardening.md):**
     // we deliberately do NOT short-circuit on early failures — every
