@@ -373,6 +373,21 @@
       "note": "During the rollback quarantine, CI first resolves the canonical required/forbidden production feature set, then requires prod-check-ship to fail for the exact open rollback-backend reason and executes the secure/FSBL/factory negative-compilation/process suite. Draft 1.1 is an unapproved research candidate, not the selected backend. Enrolled so the meta-gate catches the quarantine step being removed or made non-blocking."
     },
     {
+      "id": "verify-rollback-freeze-pin",
+      "make": "make -C contracts/verification verify-rollback-freeze-pin",
+      "polices_paths": [
+        ".github/workflows/ci.yml",
+        "contracts/verification/Makefile",
+        "contracts/verification/scripts/check_rollback_freeze_pin.py",
+        "docs/security/fw-rollback-freeze-receipt-2026-07-26.md",
+        "docs/security/a-b-firmware-rollback-architecture.md",
+        "docs/security/fw-rollback-draft12-candidate-2026-07-21.md"
+      ],
+      "runs_in": "ci.yml",
+      "enforcement": "per_pr_blocking",
+      "note": "Frozen Draft 1.1/1.2 digest pin (2026-07-26 ratification condition 3: any byte change reopens the gate; fb66a1e5's HW-CONFIRM->HW-ASSUME rename proved drift can go unnoticed for six days). Deliberately in ci.yml invariant-gates and NOT lean-fv.yml: that workflow's paths filter watches contracts/verification/** only, so docs/security-only drift would never trigger it there. Green means the bytes match the receipt; it asserts NOTHING about approval — the receipt's GATE STATE note carries that. Enrolled 2026-08-06: the merge wave caught the CI-wired gate escaping this manifest (G1META-1 completeness)."
+    },
+    {
       "id": "prod-erc7730-provenance-check",
       "make": "make prod-erc7730-provenance-check",
       "polices_paths": [

@@ -107,6 +107,19 @@ jobs:
       # --self-test negative control (asserted first).
       - name: HW-ASSUME ledger falsifiable (anchors / real tests / bidirectional ids)
         run: make -C contracts/verification verify-hw-assumptions
+      # Frozen Draft 1.1/1.2 rollback pair. Those docs are reviewed at an exact
+      # digest and the 2026-07-26 ratification says any byte change reopens the
+      # gate -- but nothing enforced it, so `fb66a1e5`'s HW-CONFIRM->HW-ASSUME
+      # rename silently reopened a ratified gate and went unnoticed for six days
+      # (found only by hand-hashing during an unrelated review). Hosted HERE and
+      # not in lean-fv.yml for the same reason as the gate above: its inputs are
+      # docs/security/**, which that workflow's contracts/verification/** path
+      # filter would ignore -- i.e. it would be silenced by exactly the commits
+      # that break it. This job has no path filter. Pure digest inspection, no
+      # Lean build. Green here means the bytes match the receipt; it asserts
+      # NOTHING about whether those bytes are approved.
+      - name: Rollback Draft 1.1/1.2 frozen-pair digest pin
+        run: make -C contracts/verification verify-rollback-freeze-pin
       # C2 (MMIO bases vs ST's CMSIS header) is NOT here: it SKIP-exits 0 when
       # STM32CubeU5 is absent (never on CI runners), so as a CI step it was a
       # permanent green no-op asserting nothing (F51). It is a real LOCAL gate —

@@ -6,15 +6,89 @@ is recorded here.
 
 ## Frozen pair
 
+> **GATE STATE: REOPENED (2026-08-06).** The digests below are the CURRENT
+> freeze identity. They are **not** the digests the dual APPROVE was granted
+> over — see "Re-freeze 2026-08-06" immediately after this table. Milestone 0
+> is **reopened** pending re-ratification. Do not cite this receipt as an
+> approval of the current bytes.
+
 | document | path | SHA-256 |
 |---|---|---|
-| Draft 1.1 (post-errata-4) | `docs/security/a-b-firmware-rollback-architecture.md` | `abc058b1667d76cecf73f563340d24da17af4a35af61312e7abe61ee86da6284` |
-| Draft 1.2 (post-BLOCKER-1) | `docs/security/fw-rollback-draft12-candidate-2026-07-21.md` | `6173fe598d43ec7ac597f7ab843142bebe3456d63a63653cebc0ed369ad964ee` |
+| Draft 1.1 (post-errata-4, unchanged) | `docs/security/a-b-firmware-rollback-architecture.md` | `abc058b1667d76cecf73f563340d24da17af4a35af61312e7abe61ee86da6284` |
+| Draft 1.2 (post-BLOCKER-1, post-`fb66a1e5`) | `docs/security/fw-rollback-draft12-candidate-2026-07-21.md` | `51be51b78053097a8ad24b0a6c6a793335f66de9a4e6435d3ee65073a686ebb8` |
 
 Superseded pair (GPT-5.6 SOL run-7 APPROVE, 2026-07-26): Draft 1.1
 `57b7e359…8293` + Draft 1.2 `eb856dd4…700b` — superseded by the
 BLOCKER-1 remediation recorded below; that APPROVE is historical and does
 not carry to the new pair.
+
+**Approved-but-superseded pair (dual APPROVE + owner ratification,
+2026-07-26):** Draft 1.1 `abc058b1…6284` + Draft 1.2 `6173fe59…64ee`. That
+approval is recorded in full below and remains the historical record of what
+was reviewed; per ratification condition 3 it does **not** carry to the pair
+in the table above.
+
+## Re-freeze 2026-08-06 — mechanical re-pin, gate reopened
+
+**What happened.** The 2026-07-26 ratification states: *"Any byte change to
+either draft document reopens the gate."* On 2026-07-31, commit `fb66a1e5`
+(*"fix(fv): rename HW-CONFIRM-\* ledger ids to HW-ASSUME-\* — the gate could not
+see them"*) changed Draft 1.2. Draft 1.1 was untouched and still matches its
+approved digest.
+
+**The exact delta** — one token, line 375, inside non-normative Reconciliation
+prose:
+
+```diff
+-   pin, `HW-CONFIRM-PUTKEY-KCV-RESP`, DEK-liveness bench. This draft's
++   pin, `HW-ASSUME-PUTKEY-KCV-RESP`, DEK-liveness bench. This draft's
+```
+
+Provenance verified by reproduction:
+`git show fb66a1e5^:docs/security/fw-rollback-draft12-candidate-2026-07-21.md |
+sha256sum` = `6173fe59…64ee`, i.e. the pre-`fb66a1e5` bytes are exactly the
+approved ones, and the edit above is the entire difference.
+
+**Why the bytes were NOT reverted.** `HW-ASSUME-PUTKEY-KCV-RESP` is the
+canonical identifier in `contracts/verification/docs/HW_ASSUMPTIONS.json:116`,
+enforced by `contracts/verification/scripts/check_hw_assumptions.py` in CI.
+Restoring `HW-CONFIRM-*` would reintroduce an orphan id that the assumption
+gate cannot see — trading a governance break for a verification break. The
+rename stands; the freeze identity is re-pinned to it.
+
+**What this re-pin does and does not do.**
+
+- **Does:** record the current freeze identity, so drift is detectable from here
+  on, and give the new CI gate (below) a single source of truth.
+- **Does NOT:** re-grant the dual APPROVE, and does not re-close Milestone 0.
+  No reviewer has run against `51be51b7…ebb8`. Ratification condition 2
+  (honest recording) forbids describing the gate as closed at these bytes.
+
+**To re-close Milestone 0, one of:**
+
+1. Re-run both exact-digest legs (GPT-5.6 SOL + Claude Opus 5 second leg)
+   against the pair in the table above, plus owner ratification; **or**
+2. A **de-minimis owner acceptance** naming this specific delta — that the
+   `HW-CONFIRM-*` → `HW-ASSUME-*` rename in non-normative prose does not
+   disturb any reviewed row — recorded here as an amendment. This is the cheap
+   path and the diff above is the entire scope it must cover.
+
+Either way a re-freeze is now owed, so the "adopting it reopens the freeze"
+objection to any *substantive* amendment (e.g. the recovery-key row, the §6.3
+step-11 zeroization row, or the fingerprint-input-scope row discussed in
+`vendor-signing-key-compromise.md`) charges a cost that is already sunk. If
+substantive rows are wanted, batch them with this repair rather than paying two
+review cycles.
+
+**Root cause and the fix that landed with this re-pin.** Nothing pinned these
+digests anywhere in `Makefile`, `.github/`, `xtask/`, `scripts/`, `tools/` or
+`contracts/verification/`, so a single-token edit in an unrelated workstream
+silently reopened a ratified gate and went unnoticed for six days. The gate
+`contracts/verification/scripts/check_rollback_freeze_pin.py` (run by
+`make -C contracts/verification verify-rollback-freeze-pin`, and in CI) now
+recomputes both digests against **this table** and fails the build on any drift.
+Re-pinning is therefore a deliberate, reviewable edit to this file rather than
+an invisible side effect of editing a draft.
 
 ## Gate history (all GPT-5.6 SOL `ultra`, exact-digest)
 
@@ -125,6 +199,7 @@ not carry to the new pair.
 **DUAL APPROVAL over one digest pair, 2026-07-26:** Draft 1.1
 `abc058b1667d76cecf73f563340d24da17af4a35af61312e7abe61ee86da6284` +
 Draft 1.2 `6173fe598d43ec7ac597f7ab843142bebe3456d63a63653cebc0ed369ad964ee`.
+
 This meets the dual exact-digest review requirement of Draft 1.1 §14
 Milestone 0; owner ratification (below) completed Milestone 0 the same
 day. Specification-stage approval only — no implementation, production,
@@ -194,6 +269,11 @@ reviewers' convergent RATIFY-WITH-CONDITIONS calls:
 Milestone 0 of Draft 1.1 §14 is therefore CLOSED: dual exact-digest
 APPROVE over one digest pair + owner ratification, both recorded here.
 Specification-stage authority only, per §14's own bounds.
+
+*Superseded 2026-08-06: that closure covered digests `abc058b1…6284` /
+`6173fe59…64ee` only. Draft 1.2's bytes have since changed (see "Re-freeze
+2026-08-06"), so the current state is the GATE STATE: REOPENED note at the
+top of this file — do not quote this paragraph as current closure.*
 
 ## Banked non-blocking observations (Opus-5 leg run 1)
 

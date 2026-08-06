@@ -125,8 +125,11 @@ the threat model either way.
       to a legitimately locked-out user). Prerequisite for any PIN- or
       enrollment-gated authority, and for A3/A4 refusal.
 - [ ] **D3** — correct the "verified twice" comment at `fw_update/mod.rs:25-29`.
-- [ ] **WRP is never programmed anywhere in the tree** — invariant #10's
-      immutable anchor is unimplemented. Belongs on `docs/STATUS.md` §A as a
+- [ ] **The write-once fingerprint anchor is staged nowhere yet** — the open
+      work is the FACTORY option-byte staging recipe (RDP-0, reversible) plus
+      the boot-side verifier pin, NOT any device-side write: the device never
+      writes WRP — verify-never-heal is the adopted hardened design (Draft 1.2
+      :350; correction C1 below). Belongs on `docs/STATUS.md` §A as a
       ship-blocker, not only in this note.
 - [ ] Option B **and** an immutable `FSBL_MIN_ACCEPTED_FW_VERSION` floor taken
       as ONE decision at the WRP freeze review (each is near-worthless alone).
@@ -155,6 +158,39 @@ the threat model either way.
 - [ ] Run the cheap silicon experiment: does secure-*unprivileged* code actually
       fault on I2C1/I2C2 and a monitor-owned SRAM block? Every register exists in
       CMSIS; nothing in the tree configures any of them; there is no receipt.
+
+### Added by round 3 (2026-08-05) — see the Draft 1.1/1.2 cross-check
+
+- [x] **URGENT, unrelated to this note's topic: re-freeze the Draft 1.1/1.2
+      pair** — DONE 2026-08-06, in the commit that lands this round-3 block:
+      Draft 1.2 on disk is `51be51b7…ebb8` (broken by `fb66a1e5` renaming one
+      non-normative token) and the receipt now pins exactly that, carries an
+      explicit GATE STATE: REOPENED note, and names the two re-closure routes.
+      The dual APPROVE still does not carry — re-ratification is the owner's
+      pending decision, not a done item.
+- [x] **Add a CI digest-pin gate for the frozen pair** — DONE 2026-08-06:
+      `contracts/verification/scripts/check_rollback_freeze_pin.py` via
+      `make -C contracts/verification verify-rollback-freeze-pin`, wired into
+      the unfiltered ci.yml invariant-gates job and enrolled in
+      `scripts/gate_enforcement.json`.
+- [ ] **Refresh `docs/STATUS.md:269` and `:329`** — both still say "pending
+      exact-digest dual review + owner approval" against a two-generations-old
+      SHA. Milestone 0 closed 2026-07-26 at `6173fe59…64ee` and is **reopened
+      at current bytes** (`51be51b7…ebb8`) pending re-ratification — the
+      refresh must record that, not "closed". (Keep "implementation NO-GO":
+      the approval is specification-stage only.)
+- [ ] **C4 is now-or-never: widen the FSBL fingerprint's INPUT SCOPE before the
+      freeze.** Draft 1.2 §1 freezes the generator's mutability, not what it
+      measures; §3 row 4 makes later changes a freeze-review event and invariant
+      #10(c) makes them physically impossible after RDP-2.
+- [ ] Raise a Draft 1.2 §3 amendment row for **§6.3 step-11 zeroization** (the
+      D1 spec gap — implementing it literally reintroduces the defect).
+- [ ] Re-scope the D1 regression guard as a **repo-wide invariant over reset
+      call sites**, not an `include_str!` path pin on a handler slated for
+      replacement.
+- [ ] Correct the FSBL budget framing wherever it is reused: the enforced gate is
+      **32,768 B (legacy bench)**; the Draft-1.1 candidate is **42,212 B, 1,252 B
+      OVER** its 40,960 B ceiling.
 
 ---
 
@@ -436,6 +472,161 @@ compromised device drains the wallet. Quorum must live outside the wallet.
   On this hardware, nothing does.
 
 ---
+
+# UPDATE 2026-08-05 (round 3) — cross-check against frozen Draft 1.1 + Draft 1.2
+
+The owner pointed out that the bootloader design is covered by **Draft 1.1**
+(`a-b-firmware-rollback-architecture.md`) and **Draft 1.2**
+(`fw-rollback-draft12-candidate-2026-07-21.md`), which rounds 1–2 did not read
+in depth. Cross-checking corrected four claims above and produced one urgent
+finding unrelated to this note's topic.
+
+**The answer to the owner's question does not change.** But the drafts let it be
+stated from inside an internal specification that was dual-approved at the
+2026-07-26 pair — Draft 1.1 is unchanged at `abc058b1…6284`, while Draft
+1.2's CURRENT bytes (`51be51b7…ebb8`) are NOT the approved ones; the gate is
+reopened, see the URGENT section below — instead of by analogy to other
+vendors. Draft 1.1 §4.1 (`:1546-1555`) says it directly: *"Arbitrary
+secure-runtime code execution or a maliciously signed secure image can rewrite
+secure state, forge the runtime-owned confirmation replicas, or corrupt the
+fallback and is outside this architecture's guarantee."*
+
+## URGENT and unrelated to this note: the frozen pair is broken on disk
+
+`fw-rollback-freeze-receipt-2026-07-26.md` records **dual exact-digest APPROVE +
+owner ratification** closing Milestone 0, with ratification condition 3: *"Any
+byte change to either draft document reopens the gate."* Verified by me:
+
+| document | pinned | on disk |
+|---|---|---|
+| Draft 1.1 | `abc058b1…6284` | `abc058b1…6284` ✅ |
+| Draft 1.2 | `6173fe59…64ee` | `51be51b7…ebb8` ❌ |
+
+*This table records the discovery state BEFORE the 2026-08-06 re-pin that
+landed in the same commit as this round-3 block: the receipt now pins
+`51be51b7…ebb8` under an explicit GATE STATE: REOPENED note — the ❌ row is
+history, not current state, and the approval still does not carry.*
+
+Cause: commit `fb66a1e5` (2026-07-31, *"rename HW-CONFIRM-* ledger ids to
+HW-ASSUME-*"*) changed **one token** on line 375 — `HW-CONFIRM-PUTKEY-KCV-RESP`
+→ `HW-ASSUME-PUTKEY-KCV-RESP` — inside non-normative Reconciliation prose.
+`git show fb66a1e5^:…draft12… | sha256sum` reproduces the pin exactly, so the
+substantive approval is almost certainly intact — but the ratification admits no
+de-minimis exception, so **the gate is formally reopened.**
+
+Root cause: **nothing pins these digests.** Grepping `6173fe59` / `abc058b1`
+across `Makefile`, `.github/`, `xtask/`, `scripts/`, `tools/` and
+`contracts/verification/` returns empty, while `check_c10_source_pin.py` in the
+`a31-transcription.yml` gate proves the repo already knows how to do this. A
+~10-line CI gate turns a silent gate-reopening into a build failure at the
+moment of the edit. **A re-freeze is owed regardless** — which means the
+"adopting it reopens the freeze" argument against the recovery key charges
+Option B for an already-sunk cost.
+
+*Dated 2026-08-06: the gate this paragraph asks for landed in the same commit
+as this round-3 block (`check_rollback_freeze_pin.py`, wired into ci.yml and
+enrolled in `scripts/gate_enforcement.json`) and the re-freeze is recorded in
+the receipt — read this root cause as the pre-fix record, not open work. The
+re-ratification it calls owed is still owed; that part is the owner's
+pending decision.*
+
+Also stale: `docs/STATUS.md:269` still says Draft 1.1 is *"pending exact-digest
+dual review + owner approval"* and `:329` cites SHA `743bc156…3d7ad`, two
+generations old. (`:329`'s *"implementation NO-GO"* remains correct — the
+approval is **specification-stage only**, explicitly carrying "no
+implementation, production, hardware, or irreversible-action authority".)
+
+## Corrections to this note
+
+**C1 — "WRP is never programmed" — tree fact CONFIRMED, framing corrected.**
+Nothing in the tree programs a protecting WRP, and Draft 1.1 corroborates in its
+own words (`:1687-1690`: *"current tooling does not satisfy them, and this
+document authorizes no burn"*). But three corrections:
+1. **The device never writing WRP is the ADOPTED HARDENED DESIGN, not an
+   omission.** Option B ("hardened B, minus the heal") was adopted upstream
+   2026-07-22; the **factory** stages WRP at RDP-0 (where it is reversible, so
+   staging is free) and the device does *verify-never-heal*. The Reconciliation
+   table records the field option-byte-write primitive as **"eliminated — the
+   device never writes WRP at all"**. Published as a bare gap, my wording
+   invited precisely the fix the frozen pair forbids.
+2. **The live gap is the verifier, and it is inert by design.**
+   `WRP1A_MASK_PINNED = false` makes `verify_ship_profile` fail *closed*, so
+   every `rdp2-self-lock` unit halts at `ObField::Wrp1a` — the self-lock is
+   unreachable by construction pending an RM0456 `WRP1AR` bench pin (issue #46).
+   That is deliberate, so an unpinned layout cannot vacuously wave a
+   removable-WRP unit through the one check invariant #10 depends on.
+3. The genuinely absent artifact is **factory tooling** for the staged profile.
+
+**C2 — FSBL numbers: I conflated two different budgets.** `Makefile:2068`
+enforces `cap=32768`, described at `:2444` as the *"32768 B legacy bench
+region"* — that is today's FSBL. The resource map's 40,960 B is the **Draft 1.1
+proposed** envelope, where the "2,100 B ceiling headroom" and "52 B warning
+margin" live. Those are two FSBLs, not one, and the 2,100 B is contested by the
+unimplemented rollback backend rather than free. The number that actually
+governs the candidate is **42,212 B — 1,252 B OVER the hard ceiling.** Any cost
+estimate must name which budget it spends.
+
+**C3 — the "WRP freeze review" deadline I invoked seven times does not exist**
+under that name anywhere else in the repo, and the floor half is superseded in
+mechanism: Draft 1.1 §1.1 (`:151-166`) locates the anti-rollback floor in
+**STM32U585 user OTP** as `F = rejected_through_epoch` with admission `E > F`,
+and explicitly rejects a frozen-constant floor. My decision-point prior ("none
+expected: key identity ≠ version floor") is **falsified** by `:139-141`: `R` is
+scoped to the `(PQFW_V6, embedded vendor-key fingerprint)` namespace, so a
+second key changes the namespace the monotonicity is defined in. A recovery key
+now needs a named Draft 1.2 §3 amendment row against §15's "never selects
+another key" — decide it on merits (custody, the 42,212 B overrun,
+OPEN-C10-1's per-key budget), not on procedural cost.
+
+**C4 — CONFIRMED, and upgraded to the one genuinely expiring item here.**
+Draft 1.2 §1 freezes the fingerprint **generator's mutability** but says nothing
+about its **input scope**, so today's secure-image-only coverage is inherited by
+default. §3 row 4 then makes any later change to `firmware_fingerprint_lines`,
+the base-27 table, or the render path a *freeze-review event*, and
+invariant #10(c) makes it physically impossible after RDP-2. **Widen the
+fingerprint before the freeze or never.**
+
+**C5 — over-stated.** The drafts *do* designate an immutable policy anchor (the
+OTP floor above; Draft 1.2 §1 C3 explains why it cannot live in option bytes —
+"they freeze"). But this does **not** revive a device-side extraction predicate,
+and the reason is the anchor's **type**: `F` with `E > F` is a monotone lower
+bound over a total order on epochs. It can express *"reject anything older than
+epoch N"*. It cannot express *"reject this image"* or *"reject any image with
+capability X"*, and a maliciously signed image at the current or any higher
+epoch is **always admissible**. This forecloses the obvious follow-up ("put the
+acceptance predicate in the OTP floor") on type grounds. Draft 1.1 §7.1
+(`:2672-2676`) keeps policy off-device deliberately: device authority is exactly
+signature + image binding + the OTP floor.
+
+**C6 (the D1 fix) — no conflict**, but three things it must carry:
+1. Draft 1.2 §3 row 3 declares `cmd_fw_commit`'s runtime OTP bump
+   **nonconforming**, and Draft 1.1 §6.3 replaces the whole COMMIT sequence. My
+   regression guard binds `COMMIT_SRC` via `include_str!` on a **path**, so a
+   replacement landing as a *new file* leaves the guard green against a dead
+   handler; and its `otp_pos < zeroize_pos` assertion becomes unsatisfiable once
+   the OTP bump moves out. Restate as a repo-wide invariant over reset call
+   sites (today exactly two carry live secrets: `cmd_fw_commit.rs` and
+   `hw/tzic.rs:233`).
+2. **Implementing Draft 1.1 §6.3 step 11 literally would reintroduce D1.** It
+   says "consume/zeroize all update authority and reset without releasing wallet
+   or NS authority" — which constrains what the *successor is granted*, not what
+   is *resident in SRAM*. The pre-fix code also granted the successor nothing.
+   §7.3 names the property on the probation path and not the commit path, so
+   this is an oversight: raise a §3 amendment row.
+3. **The requirement grows under the draft.** §8 step 5 reconstructs the wallet
+   master before NS boots, and §8/§9.5 add at least four failure exits that
+   mandate a reset *after* reconstruction while naming no zeroization. That
+   makes `requires_secret_scrub()` covering `Software` materially **more**
+   load-bearing — the strongest argument against ever narrowing it back.
+
+**C7 (post-personalization update freeze) and C8 (`PQDESC_V1` data-only
+updates) — untouched by both drafts.** `PQDESC` has zero occurrences in either.
+C8 is therefore the one recommendation in this note with **no freeze coupling**
+and can proceed immediately.
+
+Note that Draft 1.2 §2.2 (`:126-129`) already **cites this document** (#486) for
+pre-lock blast-radius bounding, so amendments here have a named downstream
+reader inside the frozen architecture.
 
 # UPDATE 2026-08-05 (round 2) — the negative result was over-stated; here is the corrected version
 

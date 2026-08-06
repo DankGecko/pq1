@@ -303,7 +303,7 @@ override _FV_EVIDENCE_TARGETS := \
 	verify-bytecode verify-clean verify-extraction-freshness \
 	verify-extraction-regen verify-extraction-regen-self-test \
 	verify-extract-differential verify-extracted verify-extracted-heavy \
-	verify-spec-vendored-fidelity
+	verify-spec-vendored-fidelity verify-rollback-freeze-pin
 # This is also the exact parser-guard inventory below.  Its self-test compares
 # it bidirectionally with every concrete `verify*:` definition in this file.
 .PHONY: $(_FV_EVIDENCE_TARGETS)
@@ -446,6 +446,23 @@ verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live
 verify-hw-assumptions: ## HW-ASSUME ledger falsifiable: anchors resolve, tests real, ids bidirectional
 	@$(_FV_PYTHON3) scripts/check_hw_assumptions.py --self-test
 	@$(_FV_PYTHON3) scripts/check_hw_assumptions.py
+
+# Frozen Draft 1.1 + Draft 1.2 rollback/lock pair. Those documents are reviewed
+# at an EXACT DIGEST and the 2026-07-26 owner ratification says any byte change
+# reopens the gate — but nothing enforced it, so the HW-CONFIRM->HW-ASSUME
+# rename in `fb66a1e5` silently reopened a ratified gate for six days. The
+# receipt's "## Frozen pair" table is the single source of truth; this target
+# recomputes both digests against it. Re-pinning is therefore a deliberate edit
+# to the receipt, not an invisible side effect of editing a draft.
+# Needs no build — pure digest/source inspection. It says NOTHING about whether
+# the current bytes are approved; read the receipt's gate-state note for that.
+# Ships its own --self-test negative control (asserted first, same pattern as
+# verify-hw-assumptions): the parser must fail closed on a battery of in-memory
+# mutations, so a later edit that weakens the parser turns this target red.
+.PHONY: verify-rollback-freeze-pin
+verify-rollback-freeze-pin: ## Draft 1.1/1.2 frozen pair still matches its receipt digests
+	@$(_FV_PYTHON3) scripts/check_rollback_freeze_pin.py --self-test
+	@$(_FV_PYTHON3) scripts/check_rollback_freeze_pin.py
 
 # TLA+/TLC models. Until now these had NO make target and the only tla2tools.jar
 # on the box lived in a scratch directory belonging to a session that no longer
