@@ -231,6 +231,27 @@ add_hits '\bunsafe[[:space:]]'      'unsafe'
 add_hits '\bpartial[[:space:]]'     'partial'
 add_hits 'ofReduceBool'            'ofReduceBool'
 add_hits '\breduceBool\b'           'reduceBool'
+# DECLARATION INJECTION (added 2026-08-11).  The Lean 4 kernel soundness bug
+# #14576 ("Kernel accepts wrong-structure projections, allowing an axiom-free
+# proof of False", 2026-07-28) is reachable ONLY by handing a declaration to the
+# kernel directly -- the frontend catches the ill-typed term, so ordinary tactic
+# proofs cannot trigger it.  The resulting `False` is AXIOM-FREE: it prints
+# "does not depend on any axioms", so dump_axioms / AXIOM_STATUS.json /
+# verify-ledger-consistency / the `Evil : False` canary are all blind to it BY
+# CONSTRUCTION, and verify-lean4checker replays through the same C++ kernel.
+# This lint is therefore the only cheap gate for the class.  It was verified by
+# hand on 2026-08-11 that our trees contain none of these; that was a SNAPSHOT,
+# and this makes it an INVARIANT -- which matters because this repo runs LLM
+# agents over Lean sources and the original exploit was AI-generated
+# metaprogramming.  A legitimate need (an audit/exe main) is excluded the same
+# way the other hatches are, in collect_source_files().
+add_hits '\baddDecl\b'              'addDecl'
+add_hits '\baddDeclCore\b'          'addDeclCore'
+add_hits '\baddAndCompile\b'        'addAndCompile'
+add_hits '\baddInductive\b'         'addInductive'
+add_hits '\binductDecl\b'           'inductDecl'
+add_hits '\bmkProj\b'               'mkProj'
+add_hits 'Expr\.proj\b'             'Expr.proj'
 
 if [ -n "${ESCAPE_HITS//[[:space:]]/}" ]; then
   err ""
@@ -238,9 +259,13 @@ if [ -n "${ESCAPE_HITS//[[:space:]]/}" ]; then
   printf '%s' "${ESCAPE_HITS}" | sed 's/^/    /' >&2
   err ""
   err "These bypass kernel checking (native_decide / reduceBool), inject"
-  err "unverified compiled code (@[implemented_by]/@[extern]/@[csimp]), or"
-  err "escape totality (unsafe/partial). Remove them from proof code, or — if"
-  err "this is a new IO/exe/audit main — exclude it in collect_source_files()."
+  err "unverified compiled code (@[implemented_by]/@[extern]/@[csimp]),"
+  err "escape totality (unsafe/partial), or hand declarations to the kernel"
+  err "directly (addDecl/addAndCompile/inductDecl/mkProj) — the ONLY route to"
+  err "the #14576 class, whose forged `False` is axiom-free and therefore"
+  err "invisible to every axiom-accounting gate we own. Remove them from proof"
+  err "code, or — if this is a new IO/exe/audit main — exclude it in"
+  err "collect_source_files()."
   OVERALL_EXIT=1
 else
   printf '    PASS — no escape-hatch constructs on proof paths\n'
@@ -498,13 +523,98 @@ else
 fi
 rm -f /tmp/lint_fv_guard.out
 
+
+###############################################################################
+# (e) VACUOUS-AXIOM gate — REPO-WIDE, deliberately wider than (a).
+#
+# WHY THIS EXISTS AND WHY ITS SCOPE DIFFERS.  On 2026-08-11 two declarations
+#
+#     axiom hypertree_verify_equivalent_to_rust (…) : True     [verity/…/Hypertree.lean]
+#     axiom verify_byte_equivalent_to_rust      (…) : True     [verity/…/Top.lean]
+#
+# were found sitting in contracts/verity/, each described in its own docstring
+# as "load-bearing" cross-validation of Lean against the Rust reference.  `True`
+# asserts NOTHING, so these were not weak assumptions -- they were no-ops
+# wearing an axiom's name, in the very tree AXIOM_STATUS.json names as the
+# deductive path for closing the A3.1 forall.  A reader, or a census counting
+# premises, would have booked a cross-validation that did not exist.
+#
+# Two separate detectors already existed and BOTH missed them, for the same
+# reason -- scope:
+#   * lint_axioms.sh DOES fail on True-typed axioms, but enumerates from the
+#     elaborated SphincsCVerify environment only;
+#   * this script's (a) gate is textual and repo-ish, but collect_source_files()
+#     walks only SphincsCVerify/ and extracted/Extracted/.
+# contracts/verity/ is in NEITHER.  So the class check is deliberately given its
+# own file walk here rather than folded into (a): (a)'s corpus is "proof paths
+# we hold to the escape-hatch contract", and widening that to a half-built
+# scaffold would change what (a) means.  Vacuity, by contrast, is worth
+# forbidding EVERYWHERE -- there is no tree in which `axiom X : True` is
+# legitimate.
+#
+# Matching is on the comment-stripped text of each axiom declaration, so an
+# axiom whose TYPE is True is caught however the signature is wrapped across
+# lines, and a `True` appearing only inside a `--` comment is not.
+###############################################################################
+printf '==> [lint_fv] (e) vacuous-axiom gate (repo-wide: no `axiom … : True`)\n'
+# Pinned interpreter, same reason the stripper is pinned: a PATH-planted
+# `python3` that exits 0 with no output would make THIS gate pass vacuously --
+# which would be a vacuity check defeated by vacuity.
+VACUOUS="$(
+  ${FV_PYTHON3} - <<'PYEOF'
+import os, re
+hits = []
+for root, dirs, files in os.walk('contracts'):
+    dirs[:] = [d for d in dirs if d != '.lake']
+    for f in files:
+        if not f.endswith('.lean'):
+            continue
+        p = os.path.join(root, f)
+        lines = open(p, encoding='utf-8', errors='replace').read().split('\n')
+        i = 0
+        while i < len(lines):
+            if lines[i].startswith('axiom '):
+                buf, j = [], i
+                while j < len(lines):
+                    if j > i and lines[j].strip() == '':
+                        break
+                    if j > i and not lines[j].startswith((' ', '\t')):
+                        break
+                    buf.append(re.sub(r'--.*$', '', lines[j]))
+                    j += 1
+                decl = re.sub(r'\s+', ' ', ' '.join(x.strip() for x in buf)).strip()
+                m = re.search(r':\s*([A-Za-z0-9_. ]+)$', decl)
+                if m and m.group(1).strip() == 'True':
+                    hits.append(f"{p}:{i+1}: {decl[:100]}")
+                i = j
+            else:
+                i += 1
+for h in hits:
+    print(h)
+PYEOF
+)"
+if [ -n "${VACUOUS//[[:space:]]/}" ]; then
+  err ""
+  err "(e) FAIL: axiom(s) whose TYPE is \`True\` — these assert NOTHING:"
+  printf '%s\n' "${VACUOUS}" | sed 's/^/    /' >&2
+  err ""
+  err "An \`axiom X : True\` is strictly worse than no axiom: absence is visible,"
+  err "vacuity is not, and any premise census counts it as a real assumption."
+  err "State a real proposition, or record an OPEN OBLIGATION in prose and delete"
+  err "the declaration."
+  OVERALL_EXIT=1
+else
+  printf '    PASS — no `axiom … : True` anywhere under contracts/\n'
+fi
+
 ###############################################################################
 # REPORT.
 ###############################################################################
 if [ "${OVERALL_EXIT}" -eq 0 ]; then
-  printf '\n==> [lint_fv] PASS — all four FV-invariant sub-lints green\n'
+  printf '\n==> [lint_fv] PASS — all five FV-invariant sub-lints green\n'
   printf '    (a) escape-hatch  (b) BreaksHash firewall\n'
   printf '    (c) Gap-3 + theft_free closure  (d) opaque-guard\n'
+  printf '    (e) vacuous-axiom (repo-wide)\n'
 else
   err ""
   err "==> [lint_fv] FAIL — see sub-lint diagnostics above."

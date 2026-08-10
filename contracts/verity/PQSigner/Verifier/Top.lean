@@ -10,9 +10,13 @@
     - `verify_deterministic`       — same args ⇒ same result
     - `hmsg_domain_separator_matches_yul` — H_msg literal `0xFF...FF`
                                             matches the Yul constant
-    - `verify_byte_equivalent_to_rust`  — stays `axiom` (load-bearing,
-                                          empirically witnessed by
-                                          the KAT diff harness)
+    - `verify_byte_equivalent_to_rust`  — DELETED 2026-08-11. It was an
+                                          `axiom … : True`, i.e. asserted
+                                          NOTHING while being described as
+                                          load-bearing. Now an OPEN
+                                          OBLIGATION (see below); the KAT
+                                          diff harness is an empirical
+                                          witness, not a proof.
 
   Together with the per-phase theorems
   (Params.signature_len_eq_4008, Wots.target_sum_enforced,
@@ -96,16 +100,18 @@ theorem hmsg_domain_separator_matches_yul :
   · simp [Array.getD]
   · simp [Array.getD]
 
-/-! ## The byte-equivalence axiom (load-bearing, externally witnessed)
+/-! ## The byte-equivalence OPEN OBLIGATION (never proved; formerly a vacuous axiom)
 
     `verify_byte_equivalent_to_rust`: for every input
     `(pkSeed, pkRoot, msgHash, sig)`, the Lean `verify` and the Rust
     `sphincs-c10::verify` agree.
 
-    This is an **axiom**, not a theorem, because closing it requires
-    reasoning about Rust semantics from within Lean — which needs
-    either an FFI bridge or a verified Rust-to-Lean translator,
-    neither of which exists in the standalone Lean stdlib.
+    This is NEITHER an axiom NOR a theorem: it is UNSTATED. Closing it requires
+    reasoning about Rust semantics from within Lean — which needs either an FFI
+    bridge or a verified Rust-to-Lean translator, neither of which exists in the
+    standalone Lean stdlib. Until one does, the claim cannot even be written
+    down, which is precisely why the placeholder that used to stand here
+    degenerated to `True`.
 
     The empirical witness is the 10-vector KAT diff harness at
     `contracts/smart-wallet/test/c10_test_vectors.json` + the Foundry
@@ -120,11 +126,24 @@ theorem hmsg_domain_separator_matches_yul :
     emit Yul from this Lean spec. At that point the Yul→Lean
     equivalence becomes a separate axiom; chaining both gives the
     Lean→Rust→Yul triangle the handoff calls for. -/
-axiom verify_byte_equivalent_to_rust
-    (pkSeed pkRoot msgHash sig : ByteVec) :
-    -- Documented in the docstring. No Lean side, since the Rust side
-    -- is not expressible.
-    True
+/-! HISTORY, 2026-08-11 — this was an `axiom … : True` and is now DELETED.
+
+    The docstring above describes a byte-equivalence between Lean `verify` and
+    `sphincs-c10::verify` and calls it load-bearing. The declaration that stood
+    here asserted `True`, i.e. nothing at all: not a weak premise but a no-op
+    with an axiom's name, which any reader or axiom census would have counted as
+    a real cross-validation. It was consumed by no proof, so its removal costs
+    no content; it removes a false premise from the tree `AXIOM_STATUS.json`
+    names as the A3.1 closure path.
+
+    The obstruction is genuine and unchanged: the Rust side is not expressible
+    here, so the claim cannot be stated, let alone proved. That is an OPEN
+    OBLIGATION, and it is now recorded as one rather than papered over with a
+    trivially-true axiom. State a real axiom over a real proposition if and when
+    a proof here actually needs it.
+
+    Recurrence is gated: `lint_fv_invariants.sh` fails on `axiom … : True`
+    anywhere under `contracts/`. -/
 
 /-! ## Summary
 
@@ -160,11 +179,13 @@ axiom verify_byte_equivalent_to_rust
       - Hypertree: 3 closed + 1 axiom
         (hypertree_d_eq_2_unrolls_into_two_layers,
         layer_parsing_deterministic, signature_length_is_4008;
-        hypertree_verify_equivalent_to_rust is an axiom — see Top.lean)
+        hypertree_verify_equivalent_to_rust was a vacuous `: True` axiom,
+        DELETED 2026-08-11 — now an open obligation, see Hypertree.lean)
       - Top: 5 closed + 1 axiom (verify_length_enforced,
         verify_rejects_short_sig, verify_rejects_long_sig,
         verify_deterministic, hmsg_domain_separator_matches_yul;
-        verify_byte_equivalent_to_rust is the load-bearing axiom)
+        verify_byte_equivalent_to_rust was a vacuous `: True` axiom,
+        DELETED 2026-08-11 — now an open obligation, see above)
 
     Net: ~40 closed theorems + 2 axioms + 1 documented sorry.
 -/

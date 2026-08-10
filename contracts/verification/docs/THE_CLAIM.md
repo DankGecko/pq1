@@ -246,6 +246,47 @@ injected real defects were caught, most at compile time), but the scope is the
   (NB the in-tree `sha256_pure` is a kernel-proven *theorem*, not an axiom — do not
   conflate it with these byte-level postulates.)
 
+## ⚠️ What no automated gate checks (added 2026-08-11)
+
+This section exists because its absence was itself the defect: this document and
+`AXIOM_STATUS.json` described what is *verified* and never stated what is
+*unverified*, so a reader could reasonably assume CI covers everything below.
+
+- **The end-to-end WYSIWYS theorem is not in CI.**
+  `Extracted.FormatDecimal.FormatDecimalSpec.format_decimal_spec` is carved out
+  of the default lib into `ExtractedFormatDecimalHeavy`, reachable only through
+  `make verify-extracted-heavy` — which appears in `.github/workflows/` **only
+  inside comments** (zero live references; verified 2026-08-11). It needs a
+  ≥48 GB runner, and one theorem in that tree already costs ~42 GB / ~1470 s.
+  It is proved locally; a regression in it would fail **no** automated gate.
+
+- **`make verify-lean4checker` is manual and partial.** Its own header says
+  "MANUAL pre-release gate, not in CI" (~40–60 min), and it covers
+  `contracts/verification/lean/` only — not `extracted/`. It is also a
+  SAME-LINEAGE replay (it drives the same C++ kernel), so it is not an
+  independent check: see `scripts/run_lean4checker.sh:28-33`, which states that
+  the older "recomputes the TRUE closure" wording was wrong.
+
+- **`contracts/verity/` is scanned by no axiom lint.** `lint_axioms.sh`
+  enumerates the elaborated `SphincsCVerify` environment; `lint_fv_invariants.sh`
+  sub-lint (a) walks only `SphincsCVerify/` + `extracted/Extracted/`. That blind
+  spot is how two `axiom … : True` placeholders — each described in its own
+  docstring as "load-bearing" cross-validation of Lean against Rust — sat in the
+  tree `AXIOM_STATUS.json` names as the A3.1 closure path, while the ledger
+  reported `placeholder_true_typed: 0`. Both were DELETED on 2026-08-11 (they
+  were consumed by no proof, so nothing was lost but a false premise), and the
+  class is now gated repo-wide by `lint_fv_invariants.sh` sub-lint (e). The
+  scope gap for every *other* check in that tree remains.
+
+- **An axiom-free forged proof would pass every gate here.** Lean issue #14576
+  ("Kernel accepts wrong-structure projections, allowing an axiom-free proof of
+  `False`") produces a `False` that reports "does not depend on any axioms", so
+  `dump_axioms`, `AXIOM_STATUS.json`, `verify-ledger-consistency` and the
+  `Evil : False` canary are blind to it **by construction**. It is only reachable
+  by handing declarations to the kernel directly; `lint_fv_invariants.sh` now
+  fails on `addDecl`/`inductDecl`/`mkProj` on proof paths, which is the cheap
+  structural gate for that class — not a proof of absence.
+
 ## ❌ NOT claimable (the named gaps)
 
 Do **not** say any of the following:

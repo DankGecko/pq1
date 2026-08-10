@@ -8,11 +8,14 @@
   Then the final reconstructed root is compared to `pk_root`.
 
   This file builds on the Phase 1-5 primitives but does NOT close the
-  load-bearing `hypertree_verify_equivalent_to_rust` theorem — that
+  `hypertree_verify_equivalent_to_rust` obligation — which until
+  2026-08-11 was a vacuous `axiom … : True` (deleted; see below) — that
   requires inducting over Rust semantics, which Lean cannot do
   without either FFI or a verified Rust-to-Lean bridge. The
-  obligation is stated as `sorry` and discharged empirically via the
-  multi-vector KAT diff harness at `contracts/smart-wallet/test/c10_test_vectors.json`.
+  obligation is NOT stated in Lean at all (it was never a `sorry` either —
+  that wording was wrong); it is witnessed only EMPIRICALLY by the multi-vector
+  KAT diff harness at `contracts/smart-wallet/test/c10_test_vectors.json`,
+  which is a test, not a proof.
 -/
 
 import PQSigner.Verifier.Params
@@ -193,19 +196,38 @@ theorem layer_parsing_deterministic
 theorem signature_length_is_4008 : SIGNATURE_LEN = 4008 := by
   exact signature_len_eq_4008
 
-/-- **The `hypertree_verify_equivalent_to_rust` theorem** — load-bearing
-    cross-validation against `sphincs-c10/src/hypertree.rs:verify`.
-    Stated here for completeness; closing it requires either an FFI
-    bridge to Rust or a verified Rust→Lean translator. Until then it
-    stands as a `sorry` and is discharged empirically by the multi-
-    vector KAT diff harness (`contracts/smart-wallet/test/c10_test_vectors.json`). -/
-axiom hypertree_verify_equivalent_to_rust
-    (pkSeed pkRoot msgHash sig : ByteVec) :
-    -- The Lean port agrees with the Rust ref impl on every input
-    -- accepted by both `sphincs-c10::verify` and Lean `verifyHypertree`.
-    -- This is an axiom, not a theorem, because we cannot reason about
-    -- Rust semantics from within Lean. The KAT diff harness is the
-    -- empirical witness.
-    True
+/-! ### OPEN OBLIGATION — hypertree verify ≡ `sphincs-c10/src/hypertree.rs:verify`
+
+    NOT STATED IN LEAN, AND DELIBERATELY NOT AN AXIOM.
+
+    The claim we want is: the Lean port agrees with the Rust reference
+    implementation on every input accepted by both `sphincs-c10::verify` and
+    Lean `verifyHypertree`. Closing it needs an FFI bridge to Rust or a verified
+    Rust→Lean translator; neither exists here. Rust semantics have no denotation
+    in this development, so the statement cannot even be *written*.
+
+    HISTORY, 2026-08-11. Until today this sat here as
+
+        axiom hypertree_verify_equivalent_to_rust (…) : True
+
+    described in its own docstring as "load-bearing". `True` asserts NOTHING, so
+    that axiom was not a weak assumption — it was a no-op wearing an axiom's
+    name, and a reader (or an axiom census) counting premises would have booked
+    a cross-validation that did not exist. It was consumed by no proof, so
+    deleting it removes no content; what it removes is a false entry in the
+    A3.1 story, since `AXIOM_STATUS.json` names this tree as the deductive path
+    for closing that ∀.
+
+    An axiom of type `True` is strictly WORSE than no axiom: absence is visible,
+    vacuity is not. If a proof here ever genuinely needs this premise, state it
+    as a real axiom over a real proposition at that point — do not resurrect a
+    trivially-satisfied placeholder.
+
+    The empirical witness remains what it always was, and is NOT a proof: the
+    multi-vector KAT diff harness
+    (`contracts/smart-wallet/test/c10_test_vectors.json`).
+
+    Recurrence is now gated: `lint_fv_invariants.sh` fails on any
+    `axiom … : True` anywhere under `contracts/`. -/
 
 end PQSigner.Verifier.Hypertree
