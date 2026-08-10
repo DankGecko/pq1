@@ -223,9 +223,14 @@ theorem signature_length_is_4008 : SIGNATURE_LEN = 4008 := by
     as a real axiom over a real proposition at that point — do not resurrect a
     trivially-satisfied placeholder.
 
-    The empirical witness remains what it always was, and is NOT a proof: the
-    multi-vector KAT diff harness
-    (`contracts/smart-wallet/test/c10_test_vectors.json`).
+    AND THE "EMPIRICAL WITNESS" WAS ITSELF OVERSTATED — including by the first
+    version of this note, which repeated it. `contracts/verity/lakefile.lean`
+    declares a LIBRARY ONLY (no `lean_exe`), and nothing in this project reads
+    `contracts/smart-wallet/test/c10_test_vectors.json`; the Foundry harness that
+    does consume those vectors executes the SOLIDITY verifier, not this Lean
+    port. So the KAT diff is evidence about Solidity-vs-Rust, and has never been
+    evidence about THIS port's Lean↔Rust agreement. There is currently no
+    witness, empirical or formal, for that claim.
 
     Recurrence is now gated: `lint_fv_invariants.sh` fails on any
     `axiom … : True` anywhere under `contracts/`. -/

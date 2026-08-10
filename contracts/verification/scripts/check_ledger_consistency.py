@@ -1495,7 +1495,10 @@ def main() -> int:
           f"signature pins: {len(ledger.get('signature_pins', {}))} | "
           f"witnesses: {len(ledger.get('witness_coverage', []))}")
     print("  NOTE: live source is `#print axioms` (under-reports in lean v4.22.0); "
-          "verify-lean4checker is the completeness backstop.")
+          "verify-lean4checker is NOT a completeness backstop: it replays the "
+          "SAME version-matched C++ kernel and cannot see the #8840 omission "
+          "shape (corrected 2026-08-11; see run_lean4checker.sh:28-33). The "
+          "allowlist backstop is TRACKED AND NOT IMPLEMENTED.")
     if fails:
         print(f"\nFAIL: {len(fails)} ledger/kernel divergence(s):", file=sys.stderr)
         for f in fails:

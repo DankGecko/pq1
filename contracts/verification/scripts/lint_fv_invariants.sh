@@ -4,7 +4,7 @@
 # audit anti-patterns ("escape hatches") in the SphincsCVerify (lean/) and
 # Aeneas-extracted (extracted/) Lean source trees.
 #
-# Four independent sub-lints (each can fail the run; all run before exit):
+# Five independent sub-lints (each can fail the run; all run before exit):
 #
 #   (a) ESCAPE-HATCH gate — no proof-path use of the kernel-trust escape
 #       hatches:  native_decide, `decide +native`, @[csimp],

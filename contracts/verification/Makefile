@@ -389,7 +389,8 @@ verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closure
 # NEGATIVE CONTROL: `python3 scripts/check_ledger_consistency.py --self-test`
 # corrupts each check's input and asserts it fires (proves the gate is not vacuous).
 # CAVEAT: the live source is `#print axioms`, which under-reports in lean v4.22.0;
-# verify-lean4checker is the completeness backstop. See the script header and
+# verify-lean4checker is NOT the completeness backstop (corrected 2026-08-11:
+# same-kernel replay, blind to the #8840 omission shape). See the script header and
 # docs/verification/fv-adversarial-review-playbook.md §B.
 # This is the implementation target.  An authoritative local/CI receipt MUST
 # enter through scripts/run_authoritative_make.sh using the documented setuid

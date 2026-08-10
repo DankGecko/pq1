@@ -176,18 +176,25 @@ theorem hmsg_domain_separator_matches_yul :
         forced_zero_mask_width_eq_11, forced_zero_mask_value,
         forced_zero_fors_enforced, forced_zero_iff_high_bits_clear,
         pkFromSig_uses_K_roots, extract_at_132_matches_kth_index)
-      - Hypertree: 3 closed + 1 axiom
+      - Hypertree: 3 closed + 0 axioms (was "1 axiom" — that axiom was the
+        vacuous `: True` one, DELETED 2026-08-11)
         (hypertree_d_eq_2_unrolls_into_two_layers,
         layer_parsing_deterministic, signature_length_is_4008;
         hypertree_verify_equivalent_to_rust was a vacuous `: True` axiom,
         DELETED 2026-08-11 — now an open obligation, see Hypertree.lean)
-      - Top: 5 closed + 1 axiom (verify_length_enforced,
+      - Top: 5 closed + 0 axioms (was "1 axiom", same vacuous `: True`
+        declaration, DELETED 2026-08-11) (verify_length_enforced,
         verify_rejects_short_sig, verify_rejects_long_sig,
         verify_deterministic, hmsg_domain_separator_matches_yul;
         verify_byte_equivalent_to_rust was a vacuous `: True` axiom,
         DELETED 2026-08-11 — now an open obligation, see above)
 
     Net: ~40 closed theorems + 2 axioms + 1 documented sorry.
+    CORRECTED 2026-08-11 — the "2 axioms" are NOT the two Lean↔Rust bridges
+    (those asserted `True` and are deleted). The two real axioms in this tree are
+    `sha256_size` and `sha256_deterministic` (Verifier/Hash.lean:40,47), i.e. the
+    opaque-hash interface. The count was right by coincidence and wrong in
+    attribution.
 -/
 
 end PQSigner.Verifier.Top
