@@ -367,7 +367,7 @@ verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closure
 	elif [ -e "$$sentinel" ]; then \
 	  echo "CONTROL FAILURE: the lint comment-stripper resolved python3 through the caller PATH" >&2; \
 	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilbin $$sentinel; exit 1; \
-	elif ! grep -Fq 'lint_fv] PASS — all four FV-invariant sub-lints green' $$out; then \
+	elif ! grep -Fq 'lint_fv] PASS — all five FV-invariant sub-lints green' $$out; then \
 	  echo "CONTROL FAILURE: verify-fv-lints did not complete its real sub-lints" >&2; \
 	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilbin $$sentinel; exit 1; \
 	fi; \

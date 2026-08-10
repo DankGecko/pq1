@@ -91,10 +91,12 @@ contracts/verity/
         │                       + forced_zero_fors_enforced theorem
         ├── Hypertree.lean     D=2 layer loop, SigReader for parsing
         │                       + hypertree_d_eq_2_unrolls_into_two_layers theorem
-        │                       + hypertree_verify_equivalent_to_rust axiom (witnessed by KAT diff)
+        │                       + hypertree_verify_equivalent_to_rust — DELETED 2026-08-11
+        │                         (was `: True`, asserted nothing; now an OPEN OBLIGATION)
         └── Top.lean           top-level verify entry + length check
                                 + verify_length_enforced / verify_deterministic theorems
-                                + verify_byte_equivalent_to_rust axiom (witnessed by KAT diff)
+                                + verify_byte_equivalent_to_rust — DELETED 2026-08-11
+                                  (was `: True`, asserted nothing; now an OPEN OBLIGATION)
 ```
 
 Part B is **standalone pure-Lean** — no Verity dependency. Uses Lean
@@ -140,8 +142,8 @@ axioms (load-bearing, externally witnessed) + 1 documented sorry
 | B25 | `verify_rejects_short_sig` / `verify_rejects_long_sig` | `Verifier/Top.lean` | proved |
 | B26 | `verify_deterministic` | `Verifier/Top.lean` | proved (rfl) |
 | B27 | `hmsg_domain_separator_matches_yul` (H_msg 0xFF...FF pad pinned) | `Verifier/Top.lean` | proved (simp) |
-| **AXIOM 1** | `hypertree_verify_equivalent_to_rust` | `Verifier/Hypertree.lean` | externally witnessed (KAT diff) |
-| **AXIOM 2** | `verify_byte_equivalent_to_rust` | `Verifier/Top.lean` | externally witnessed (KAT diff) |
+| ~~AXIOM 1~~ | ~~`hypertree_verify_equivalent_to_rust`~~ | `Verifier/Hypertree.lean` | **DELETED 2026-08-11 — OPEN OBLIGATION.** It was `axiom … : True`, i.e. asserted NOTHING while being listed here as an axiom. Consumed by no proof. The KAT diff is an empirical witness, not a premise. |
+| ~~AXIOM 2~~ | ~~`verify_byte_equivalent_to_rust`~~ | `Verifier/Top.lean` | **DELETED 2026-08-11 — OPEN OBLIGATION.** Same shape and same reason. |
 | sorry | `yul_swap_selector_in_known_set` (helper, non-essential) | `Verifier/Merkle.lean` | documented |
 
 The two axioms cannot be proved in Lean without an FFI bridge to

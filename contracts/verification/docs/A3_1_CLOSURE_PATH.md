@@ -76,9 +76,14 @@ for the C10 verifier (started 2026-05-12):
   ports of the verifier stages, with per-phase invariants already closeable
   (length enforcement, WOTS target-sum, FORS forced-zero, branchless swap, the
   H_msg domain separator literal).
-- `Verifier/Top.lean` keeps `verify_byte_equivalent_to_rust` as an **axiom**
-  (the model↔code bridge, KAT-witnessed); `PQSigner/Theorems.lean` is
-  `sorry`-stubbed skeleton.
+- `Verifier/Top.lean` USED TO carry `verify_byte_equivalent_to_rust` as an
+  **axiom** (the model↔code bridge, KAT-witnessed). CORRECTED 2026-08-11: its
+  type was literally `True`, so it asserted NOTHING and was a premise only in
+  name; it was consumed by no proof and is now DELETED and recorded as an OPEN
+  OBLIGATION in that file. Nothing in the A3.1 story is weakened by the removal
+  — the bridge was never actually assumed here — but this closure path must not
+  be read as already having a model↔code axiom in hand.
+  `PQSigner/Theorems.lean` is a `sorry`-stubbed skeleton.
 
 The main `SphincsCVerify` project independently has the *spec-internal* ∀
 refinement `verifyRefined_eq_spec : verifyYulModel = Spec.verify` closing by
@@ -94,7 +99,9 @@ explosion:
 
 - **(R1) MODEL ↔ deployed bytecode.** The interpreter model is a
   hand-transcription of the Yul; relating it to the *deployed EVM bytecode* is an
-  axiom in both projects (PQSigner `verify_byte_equivalent_to_rust`; upstream
+  axiom in both projects (PQSigner: `verify_byte_equivalent_to_rust`, which as
+  of 2026-08-11 is an OPEN OBLIGATION rather than a stated axiom — see above;
+  upstream
   `c13_refines_byte_spec` / `MODEL-EXEC-BRIDGE`, `Proofs.lean:12250`). This is a
   transcription-TCB element — mechanically checkable by review + the existing
   three-way Rust↔Yul↔Lean differential — **not** a symbolic-search wall. Eliminating
@@ -157,9 +164,13 @@ hand-transcription (R1, shared with upstream) and SHA-256 byte-addressed memory
    via a `Sha256Bridge`; the climb/guard/branchless machinery is hash-agnostic
    and ports unchanged). The hash stays an opaque pure function — **zero** new
    crypto axioms beyond the existing A1 (SHA-256 = FIPS-180-4).
-3. **R1 stays a cited bridge** (`verify_byte_equivalent_to_rust`), now backed by
-   the proven model↔spec equality + the differential — or eliminated later via
-   verified compilation (multi-person-year, out of scope).
+3. **R1 stays a cited bridge** — but note (2026-08-11) that
+   `verify_byte_equivalent_to_rust` is an OPEN OBLIGATION, not a stated axiom:
+   the declaration that bore that name asserted `True` and has been deleted, so
+   R1 is currently cited in PROSE only, backed by the proven model↔spec equality
+   + the differential — or eliminated later via verified compilation
+   (multi-person-year, out of scope). Stating R1 as a real axiom is the honest
+   minimum if anything is to depend on it.
 
 Effort for 1+2: ~3-6 months (the upstream took a comparable multi-week effort per
 variant, plus the byte-addressed-memory refactor for SHA-256). It is the right

@@ -552,47 +552,100 @@ rm -f /tmp/lint_fv_guard.out
 # forbidding EVERYWHERE -- there is no tree in which `axiom X : True` is
 # legitimate.
 #
-# Matching is on the comment-stripped text of each axiom declaration, so an
-# axiom whose TYPE is True is caught however the signature is wrapped across
-# lines, and a `True` appearing only inside a `--` comment is not.
+# SCOPE, STATED HONESTLY.  This matches the LITERAL `: True` conclusion of an
+# axiom declaration across a wrapped signature, ignoring `--` comments.  It does
+# NOT unfold aliases (`abbrev MyTrue : Prop := True` then `axiom Y : MyTrue`),
+# does NOT catch compound vacuities (`: True /\ True`), and by construction does
+# NOT cover the sibling shape `theorem X : True := trivial`.  It is a cheap
+# TRIPWIRE for the exact shape that actually occurred twice, in the one tree no
+# other checker walks -- not a decision procedure for vacuity.  The sound
+# version is the elaborated-environment scan in lint_axioms.sh (it unfolds
+# aliases and reads the elaborated conclusion); extending THAT to
+# contracts/verity, which is a separate lake project, is the tracked follow-up.
 ###############################################################################
 printf '==> [lint_fv] (e) vacuous-axiom gate (repo-wide: no `axiom … : True`)\n'
 # Pinned interpreter, same reason the stripper is pinned: a PATH-planted
 # `python3` that exits 0 with no output would make THIS gate pass vacuously --
 # which would be a vacuity check defeated by vacuity.
-VACUOUS="$(
-  ${FV_PYTHON3} - <<'PYEOF'
-import os, re
+#
+# THE ROOT IS PASSED IN ABSOLUTE, AND THE WALK IS FAIL-CLOSED.  The first version
+# of this gate walked a RELATIVE 'contracts', so running the lint from any other
+# directory scanned ZERO files and printed PASS -- a vacuity gate that was itself
+# vacuous, which is precisely the defect class it exists to catch.  Caught in
+# review 2026-08-11 by invoking it with cwd=/tmp.  It now takes ${REPO_ROOT} and
+# ERRORS (exit 2) if the walk yields no .lean files at all, on the same
+# anti-fail-open principle as the manifest-truncation guards elsewhere here: a
+# check that inspected nothing must not be able to report success.
+# THE CORPUS IS THE COMMENT-STRIPPED ONE, via the SAME proven stripper (a)/(b)
+# use.  First attempt matched raw text and, once made indent-tolerant, fired on
+# the deleted axiom QUOTED INSIDE the /-! … -/ history note that documents its
+# deletion -- a false positive that would have red-lined CI forever.  `--` lines
+# alone are not enough; nested /- -/ blocks must go too, and that logic already
+# exists here, so it is reused rather than re-implemented.
+VACUOUS_FILES="$(find "${REPO_ROOT}/contracts" -name '*.lean' -not -path '*/.lake/*' | sort)"
+if [ -z "${VACUOUS_FILES//[[:space:]]/}" ]; then
+  err "(e) INTERNAL: found no .lean files under ${REPO_ROOT}/contracts — refusing to report PASS"
+  exit 2
+fi
+# The matcher goes to a TEMP FILE, not `python3 -`.  `python3 -` reads its
+# PROGRAM from stdin, so `… | python3 - <<'PYEOF'` hands python the heredoc and
+# DISCARDS the piped corpus -- the gate then sees empty input.  Caught here only
+# because the fail-closed empty-corpus check fired; without it this would have
+# been a silent always-PASS.
+VACUOUS_PY="$(mktemp)"
+trap 'rm -f "${VACUOUS_PY}"' EXIT
+cat >"${VACUOUS_PY}" <<'PYEOF'
+import sys, re
+from collections import OrderedDict
+
+# stdin lines are `path:lineno:stripped-content` (blank lines already dropped).
+per_file = OrderedDict()
+for raw in sys.stdin:
+    raw = raw.rstrip('\n')
+    a = raw.find(':'); b = raw.find(':', a + 1)
+    if a < 0 or b < 0:
+        continue
+    path, lineno, content = raw[:a], raw[a+1:b], raw[b+1:]
+    try:
+        lineno = int(lineno)
+    except ValueError:
+        continue
+    per_file.setdefault(path, []).append((lineno, content))
+
+if not per_file:
+    sys.stderr.write('FATAL: vacuous-axiom gate received an EMPTY stripped corpus\n')
+    sys.exit(3)
+
+# A declaration boundary: anything that starts a new top-level-ish item.
+BOUNDARY = re.compile(
+    r'^\s*(@\[|axiom\s|theorem\s|lemma\s|def\s|abbrev\s|instance\s|structure\s|'
+    r'inductive\s|namespace\s|end\b|open\s|section\b|import\s|/-)')
+AXIOM = re.compile(r'^\s*(?:@\[[^\]]*\]\s*)?axiom\s+([A-Za-z_][A-Za-z0-9_\'!?]*)')
+
 hits = []
-for root, dirs, files in os.walk('contracts'):
-    dirs[:] = [d for d in dirs if d != '.lake']
-    for f in files:
-        if not f.endswith('.lean'):
+for path, entries in per_file.items():
+    for idx, (lineno, content) in enumerate(entries):
+        m = AXIOM.match(content)
+        if not m:
             continue
-        p = os.path.join(root, f)
-        lines = open(p, encoding='utf-8', errors='replace').read().split('\n')
-        i = 0
-        while i < len(lines):
-            if lines[i].startswith('axiom '):
-                buf, j = [], i
-                while j < len(lines):
-                    if j > i and lines[j].strip() == '':
-                        break
-                    if j > i and not lines[j].startswith((' ', '\t')):
-                        break
-                    buf.append(re.sub(r'--.*$', '', lines[j]))
-                    j += 1
-                decl = re.sub(r'\s+', ' ', ' '.join(x.strip() for x in buf)).strip()
-                m = re.search(r':\s*([A-Za-z0-9_. ]+)$', decl)
-                if m and m.group(1).strip() == 'True':
-                    hits.append(f"{p}:{i+1}: {decl[:100]}")
-                i = j
-            else:
-                i += 1
+        parts = [content]
+        for lineno2, content2 in entries[idx+1:]:
+            if BOUNDARY.match(content2):
+                break
+            parts.append(content2)
+        decl = re.sub(r'\s+', ' ', ' '.join(x.strip() for x in parts)).strip()
+        # conclusion = text after the final top-level ':'
+        tm = re.search(r':\s*([A-Za-z0-9_.\s]+)$', decl)
+        if tm and tm.group(1).strip() == 'True':
+            hits.append('%s:%d: %s' % (path, lineno, decl[:110]))
+
 for h in hits:
     print(h)
 PYEOF
-)"
+# shellcheck disable=SC2086
+VACUOUS="$(strip_comments_py ${VACUOUS_FILES} | ${FV_PYTHON3} "${VACUOUS_PY}")" \
+  || { err "(e) INTERNAL: vacuous-axiom scan failed — refusing to report PASS"; exit 2; }
+
 if [ -n "${VACUOUS//[[:space:]]/}" ]; then
   err ""
   err "(e) FAIL: axiom(s) whose TYPE is \`True\` — these assert NOTHING:"
