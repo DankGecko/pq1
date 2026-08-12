@@ -1,0 +1,45 @@
+# COMMITTED FORS+C GRINDING-MARGIN FIGURES.  Added 2026-08-11.
+#
+# READ THIS BEFORE QUOTING ANY NUMBER BELOW.  These are NOT theorems, NOT a
+# security level, and NOT carried by any EasyCrypt result.  They are the output
+# of a heuristic generic-adversary computation, pinned here only so that the
+# project's most-quoted figure stops being an unreproducible comment.
+#
+# WHY IT EXISTS.  cdrafts-split/FORS_C10.ec:89-91 cites "~28.1 bits vs ~130.6
+# bits, ~102 bits lost" as the reason the black-box route to plain ITSR is a
+# dead end -- and then says the script producing those numbers lives in a
+# DIFFERENT repository and "is NOT in this checkout".  So the single number the
+# ITSRC10 decision rests on was, until now, enforced by nothing here.  Two
+# independent adversarial reviews (2026-08-10) both named this as the weakest
+# receipt in the repo, in a project whose founding line is "a result nothing
+# enforces is not a receipt".  tools/forsc_grinding_margin.py is now vendored
+# BYTE-IDENTICAL from PQSigner_OS contracts/verification/scripts/, and PHASE 4
+# of cert_gate_split.sh recomputes these values on every run.
+#
+# WHAT THE NUMBERS ARE NOT, stated as flatly as the script's own header does:
+#   * 130.6 is a per-candidate WORK FACTOR, not a security level.  The script
+#     itself (line ~98) says the real advantage is (q_h + 1) * B, and NO q_h cap
+#     is asserted anywhere -- FORS_C10.ec:114-119 states that because the game
+#     has no query bound, "no concrete bit-level bound is STATABLE for this game
+#     as such".  The adv_log2_qh* rows below are the honest reading, and note
+#     what they say: at q_h = 2^128 the bound is 2^-2.6, i.e. almost nothing.
+#   * These figures cannot be carried by the EasyCrypt ITSRC10 game as currently
+#     axiomatized.  `mco` is an abstract op and the adversary has no query
+#     bound, so there is a legal model in which the game is won with probability
+#     1.  Closing that needs a ROM / query-budget game and a coupling theorem --
+#     it is NOT "mechanise this arithmetic".
+#   * Pinning them changes NO EasyCrypt result and discharges NO assumption.
+#     A5-ITSR remains cited-tcb.  This is evidence hygiene, nothing more.
+#
+# The gate compares the recomputed values to these EXACTLY (string match on the
+# script's own printed precision).  A drift means the model or its parameters
+# moved and must be re-baselined deliberately, like every other manifest here.
+#
+# key	value
+forsc_work_bits	130.6
+plain_fors_bits	128.5
+blackbox_itsr_bits	28.1
+bits_lost	102.4
+adv_log2_qh64	-66.6
+adv_log2_qh96	-34.6
+adv_log2_qh128	-2.6

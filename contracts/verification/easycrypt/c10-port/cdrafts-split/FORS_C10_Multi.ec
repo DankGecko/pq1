@@ -55,8 +55,19 @@
    probability: the NAMED, NONSTANDARD `ITSRC10` ASSUMPTION.  It is NOT bounded
    here and MUST NOT be -- the FORS_C10.ec header documents that the black-box
    route to MM45's uniform-key ITSR loses ~102 bits and the direct DarkSide route
-   needs a concentration inequality EasyCrypt lacks.  That is OPEN and stays
-   open.  The REAL content proved here is the multi->single REDUCTION
+   is unmechanized.  That is OPEN and stays open.
+   [CORRECTED 2026-08-11 (GPT-5.6 adversarial review).  This read "the direct
+   DarkSide route needs a concentration inequality EasyCrypt lacks".  That was
+   the 2026-07 plan and it is no longer the committed route: the union bound
+   landed as cover_some_le (DarkSide.ec:236) by pure finite subadditivity with NO
+   concentration inequality, and the load argument is now the RAW-MOMENT route
+   (mixture_le_moment), which avoids concentration by construction.  EasyCrypt
+   still lacks concentration inequalities -- that part was never wrong -- but it
+   is no longer what blocks this.  What blocks it now: the 12th raw binomial
+   moment (needs Stirling / falling-factorial infrastructure absent from stdlib),
+   the numeric evaluation, and above all the ROM / query-budget game.  On that
+   last one see FORS_C10.ec: `mco` is a pure op with no query bound, so no
+   parameter-independent bound is provable for ITSRC10 as axiomatized.]  The REAL content proved here is the multi->single REDUCTION
    `R_ITSRC10_MFORSC10` + its hop `ITSRC10_hop_M` (the C10 analogue of the
    paper's `ITSRC_hop_M`) + the covered/!covered split.  This file turns NO open
    assumption into a proven-looking bound; the ITSRC10 term is carried verbatim.

@@ -1,8 +1,16 @@
 # C10 (SPHINCS+C) EUF-CMA — certified EasyCrypt artifact
 
-Snapshot of the `c10-eufcma-port` research workspace, taken at its commit
-`16fe480` (2026-08-05, "run 26"), at which **both certification gates are
-GREEN**.
+Snapshot of the `c10-eufcma-port` research workspace, **re-taken 2026-08-12 at
+its commit `0c825ed`**, at which the SPLIT gate is **GREEN — 208 OK, 0 FAIL**
+(`INPUTS_SHA256 eb589caf...`, toolchain r2026.02, 25 prover configurations,
+receipt in `scratch/gate_run.out`).
+
+> **Previous snapshot line, kept for history:** taken at `16fe480`
+> (2026-08-05, "run 26"), at which both certification gates were GREEN.
+> **Scope note on this re-snapshot:** the receipt above is for the **split**
+> gate, which is the certified closure (32 files). The **fork** tree is synced
+> for completeness but its gate was NOT re-run for this snapshot — do not read
+> "GREEN" as covering it.
 
 This directory supersedes the older `../drafts/*.ec` snapshot, which is an
 earlier stage of the same work and is retained only as history.
@@ -100,3 +108,56 @@ this project's own work.
 
 The upstream MM45 clone and the source papers are deliberately **not**
 redistributed here; `PROVENANCE.md` records how to obtain them.
+
+
+---
+
+## UPDATE 2026-08-12 — what changed since the `16fe480` snapshot
+
+Additive note, per this repo's docs convention. The sections above still describe
+the artifact; these are the deltas a reader must know before quoting it.
+
+**New certified results.**
+* `cdrafts-split/GprocChargedQWired.ec` (closure member #32) —
+  `EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED`, the first statement here that is
+  **N2-free AND Q-wired at once**: the universal grind premise
+  `exists c, predC (ThC ps ad m c)` is replaced by an explicit charged summand,
+  and the unreduced tree term by three named SM-DT hardness advantages. It
+  entered the closure at **zero assumption cost** (census `added=0 removed=0`,
+  ledger unchanged at 242).
+* `cdrafts-split/DarkSide.ec` + `DarkSideC10.ec` — the FORS+C coverage
+  combinatorics, promoted and cloned at C10's `t`.
+* `cdrafts-split/GprocQBound.ec` / `GprocQWired.ec` — `Q = T1+T2+T3` bounded and
+  wired into the deployed quotation surface.
+
+**A result that CLOSES a question by refutation.**
+`scratch/_countermodel.ec` proves, over a **legal** clone of the abstract theory,
+`Pr[ITSRC10(...)] = 1`. Therefore **no parameter-independent bound on ITSRC10 is
+provable for that game as axiomatized.** This says NOTHING about the deployed
+instance (which fixes `mco` at a concrete op); it is not an attack. Negative
+control alongside it.
+
+**A finding that should stop a plausible-looking research direction.**
+`experiments/tcollres-leg/FINDING-def11-is-unsound-at-c10.md` — the CiC
+Definition-11 (T-COLL-RES) hop is **UNSOUND at deployed C10**: Def 11 samples
+`rho` uniformly per attempt, C10 deterministically enumerates a minimal counter
+over a public map, so effective `|R| = 1` and the assumption is FALSE (~2^72.3
+birthday, below the project's own 96-bit floor). **The deployed wallet is not
+affected** — C10's WOTS layer never encodes an adversary-chosen value. This is a
+proof-technique limitation, not a vulnerability. `experiments/` is included in
+this snapshot specifically so this finding travels with the artifact.
+
+**Still open, stated plainly.**
+* Two `admit`s in the cone, both pinned in `cert-baseline-split.tsv` and both
+  verified **non-load-bearing** for the headline: `FORS_C_TreePort.ec:1511`
+  (a leaf nothing requires) and `base-c10-split/WOTS_TW_ES.ec:1513` (feeds a
+  theorem the capstone never applies).
+* `Pr[M.F.ITSRC10 ..]` and `Pr[M_EUF_GCMA_WOTSTWESNPRF ..]` are carried
+  unreduced. Reducing the latter must NOT be done by applying the existing WOTS
+  theorem — that consumes the `:1513` admit and would make it load-bearing.
+* Residual Q2b (pinning `encode_msgWOTS` to the deployed digit map) is open;
+  see `scratch/scope_q2b_VERDICT.md`. It is fidelity, not a security term.
+
+**Scoping verdicts** worth reading before picking up this work:
+`scratch/scope_fextractop_VERDICT.md`, `scratch/scope_q2b_VERDICT.md`,
+`scratch/wots_leg_state_2026_08_12.md`, `scratch/review_2026_08_11_VERDICT.md`.

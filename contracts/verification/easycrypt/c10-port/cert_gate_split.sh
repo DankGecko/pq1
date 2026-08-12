@@ -30,7 +30,25 @@ TMPD=$(mktemp -d) || { echo 'FAIL mktemp'; exit 1; }
 trap 'rm -rf "$TMPD"' EXIT
 # Expected inventory sizes, COMMITTED. A guard that recomputes its expectation
 # from the file it is checking cannot detect truncation of that file.
-EXPECT_PINS=87
+EXPECT_PINS=111
+# COMMITTED WATCHED-ROW COUNT (2026-08-10).  This replaced a `-ge 3` floor when
+# T1/T2/T3 were PROMOTED into closure-c10-split.txt: a floor cannot express
+# "there are deliberately none left", so retiring the last watched row would
+# have read as manifest truncation and failed the gate.  An exact committed
+# count is strictly STRONGER than the floor it replaces -- it catches an
+# unexpected ADDITION as well as a truncation -- and it keeps the anti-fail-open
+# intent in a number that has to be moved on purpose.
+# Editing this script is the cheapest possible way to weaken the gate, and
+# PHASE 2b/2c canary the census tool, not this guard.  So the replacement was
+# tested before being committed -- but state the test HONESTLY: it was an
+# ISOLATED-LOGIC test of these two lines against doctored row counts, NOT a
+# full gate run with a bogus manifest row.  Results: 0 rows -> passes; 1 row ->
+# fires; 3 rows -> fires, which is exactly the case the old `-ge 3` floor would
+# have let through.  What that does NOT cover is the integration -- that
+# `w_run` is still incremented as this phase's loop expects.  A full run with a
+# deliberately re-added row is the check that would close that, and it has not
+# been done.
+EXPECT_WATCHED=0
 fail=0
 
 # TREE IDENTITY AND TOOLCHAIN, in the receipt itself.  A green receipt that does
@@ -67,7 +85,7 @@ for n in WOTS_TW_ES FL_SL_XMSS_MT_ES FORS_ES SPHINCS_PLUS; do ROOTS_ID="$ROOTS_I
 # proof, and PHASE 2b/2c only canary two specific behaviours of it.
 INPUTS_ID=$( { CERT_CONE_DIRS="base-c10-split,cdrafts-split" python3 tools/cert_cone.py $ROOTS_ID 2>/dev/null \
     | sed -n 's/^#   //p' | sort -u | while read -r f; do [ -f "$f" ] && sha256sum "$f"; done
-  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
+  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
 echo "### INPUTS_SHA256 $INPUTS_ID"
 # AND NOW COMPARE IT.  This line was printed and checked by nothing: an identity
 # receipt that no run can fail on is decoration.  The expected value lives in
@@ -193,6 +211,186 @@ else
   fail=$((fail+1))
 fi
 
+echo "### PHASE 1e — BOTH DRIVERS (compile AND cli)"
+# Added 2026-08-08.  A second driver over the same sources: it catches files
+# that end mid-proof, elaboration differences, and any genuine disagreement.
+#
+# RUN cli WITH -iterate, AND THAT IS THE WHOLE POINT OF THIS COMMENT.
+# `easycrypt compile` iterates the smt call by default; `easycrypt cli` does
+# NOT.  Without the flag this phase compares two different smt regimes and
+# reports the difference as if it were a defect -- which is exactly what the
+# first version of it did, going RED on four files (XmssmtCC_All, FxChain,
+# and the watched _t2/_t3) and prompting a claim that their proofs were
+# "closing on smt luck".  THAT CLAIM WAS WRONG.  Diagnosed to a 41-line repro:
+# compile OK / cli 1 diagnostic, and `cli -iterate` -> 0.  Ruled out first,
+# each by measurement, NOT by argument: timeout (identical at default and
+# -timeout 30), prover parallelism (identical at -max-provers 1/2/4/8), and
+# theory scoping (wrapping the input in `theory .. end` changed nothing).
+# With -iterate all four files go to 0 diagnostics.
+# So this phase is a REAL cross-check but a much weaker one than first
+# advertised, and its honest value is driver agreement -- not a second opinion
+# on whether the proofs hold.
+# WHY NO OTHER PHASE SEES THIS.  The file compiles; the lemma is saved, so
+# PHASE 1b's grep passes; its statement digest is unchanged, so PHASE 1c passes;
+# the census shows no admit and no axiom, so PHASE 2 passes; and an admit sweep
+# reports 0 either way.  A step that closes under one driver's budget and not
+# the other is not closed, and nothing here could tell.
+# THE VERDICT CANNOT COME FROM THE EXIT STATUS.  `easycrypt cli` exits 0 even on
+# a file whose proof cannot be saved -- measured, not assumed.  Its diagnostics
+# are exactly the lines matching ^<tty>:, and a clean file emits none
+# (FORS_ES.ec: 0 diagnostics over 2191 commands).
+# AND THE ZERO MUST BE EARNED, not obtained by the run never happening: a
+# mistyped include or a dead binary also yields zero matches, which would read
+# as OK.  So each run must also show it PROCESSED the file, via its per-command
+# prompts; a file that emits fewer than 5 is treated as not run.  This is the
+# same fail-open shape as the empty-input defects in the identity and prover
+# lines above, and it is guarded the same way -- check the value, not the absence.
+# SERIAL BY CONSTRUCTION.  These runs are budget-sensitive; a concurrent compile
+# in this tree has already produced one phantom failure whose reported site was
+# 450 lines from the only edit.  Do not parallelise this phase.
+# COST: roughly doubles the prover work of PHASE 1 (FORS_ES.ec alone is ~7 min).
+cli_bad=0
+cli_run=0
+cli_one() { # $1 = label, $2..= easycrypt cli args, stdin = the file
+  local lbl="$1"; shift
+  local out d pr
+  out=$(easycrypt cli -iterate "$@" 2>&1 | tr '\r' '\n')
+  d=$(printf '%s\n' "$out" | grep -c '^<tty>:' || true)
+  pr=$(printf '%s\n' "$out" | grep -c '^\[[0-9]*|' || true)
+  cli_run=$((cli_run+1))
+  if [ "$pr" -lt 5 ]; then
+    echo "FAIL $lbl (cli): only $pr commands processed -- the run did not happen"
+    fail=$((fail+1)); cli_bad=$((cli_bad+1)); return
+  fi
+  if [ "$d" -eq 0 ]; then
+    echo "OK   $lbl (cli, $pr cmds)"
+  else
+    echo "FAIL $lbl (cli): $d diagnostic(s) -- compile accepted what cli rejects"
+    printf '%s\n' "$out" | grep '^<tty>:' | head -2 | sed 's/^/       /'
+    fail=$((fail+1)); cli_bad=$((cli_bad+1))
+  fi
+}
+for n in WOTS_TW_ES FL_SL_XMSS_MT_ES FORS_ES SPHINCS_PLUS; do
+  cli_one "base/$n" -I $B < $B/$n.ec
+done
+while read -r n || [ -n "$n" ]; do
+  case "$n" in ''|\#*) continue;; esac
+  cli_one "$n" $INC < $D/$n.ec
+done < $CLOSURE
+echo "### CLI_FILES_RUN=$cli_run CLI_DISAGREEMENTS=$cli_bad"
+# Same truncation guard PHASE 1 carries: a closure file that shrank to nothing
+# would run zero cli checks and still reach GREEN.
+cli_exp=$(( $(grep -cve '^[[:space:]]*$' -e '^#' $CLOSURE) + 4 ))
+[ "$cli_run" -eq "$cli_exp" ] || { echo "FAIL cli phase ran $cli_run of $cli_exp files"; fail=$((fail+1)); }
+
+# The open question that stood here is CLOSED: the four PHASE 1e failures were
+# the -iterate default difference, not defects.  See the PHASE 1e header.
+# Worth keeping as a lesson: the failures were deterministic, timeout-invariant
+# and parallelism-invariant, and every one sat on an smt call -- a signature
+# that reads as "fragile proofs" and was in fact "mis-specified gate".  Adding
+# a hint made the step pass under both drivers, which looked like confirmation
+# of the wrong diagnosis; it was really just supplying what the non-iterated
+# call could not find for itself.
+
+echo "### PHASE 1f — WATCHED FILES (T1/T2/T3 branch proofs; NOT certified)"
+# Added 2026-08-08.  Nothing gated these at all.  T2 and T3 have been at
+# admit=0 for weeks and T1 at 1, entirely on the strength of ad-hoc runs -- and
+# a result nothing enforces is not a receipt, which is the sentence this whole
+# script exists because of.  They import FxChain, RtopCSoundness, GprocFORSC10
+# and GprocVI, so a change to any certified file can break them with nothing
+# going red.  The cli defect that motivated PHASE 1e was in exactly these files.
+#
+# THEY ARE WATCHED, NOT CERTIFIED, and the distinction is load-bearing: they are
+# absent from $CLOSURE, required by nothing, and contribute no row to the cone
+# census.  T1 CARRIES AN ADMIT BY DESIGN.  This phase asserts only that each
+# file still holds what cert-watched-split.tsv records it as holding.
+#
+# THE MANIFEST IS IN THE IDENTITY HASH; THE WATCHED SOURCES ARE NOT.  The
+# expectation must not drift silently, but these files are work in progress and
+# hashing them would force an identity re-baseline on every edit -- which would
+# train the operator to re-baseline without reading, and that is worse than not
+# hashing them.  Their integrity is asserted by the counts and digests below.
+w_run=0; w_bad=0
+: > "$TMPD/require_watched.ec"
+while IFS=$'\t' read -r wf wa wx ws wres || [ -n "${wf:-}" ]; do
+  case "${wf:-}" in ''|\#*) continue;; esac
+  w_run=$((w_run+1))
+  if [ ! -f "$wf" ]; then
+    echo "FAIL watched $wf: missing"; fail=$((fail+1)); w_bad=$((w_bad+1)); continue
+  fi
+  # (1) compiles
+  if ! easycrypt compile $INC -I scratch "$wf" >/dev/null 2>&1; then
+    echo "FAIL watched $wf: does not compile"; fail=$((fail+1)); w_bad=$((w_bad+1)); continue
+  fi
+  # (2) BOTH drivers -- the reason PHASE 1e exists, applied where the defect was.
+  # Count via the delta in $fail: cli_one bumps cli_bad, and a first version of
+  # this phase therefore printed WATCHED_FAILURES=0 while $fail was 2.  A
+  # summary line that disagrees with the verdict is how a gate gets misread.
+  f_before=$fail
+  cli_one "watched $wf" $INC -I scratch < "$wf"
+  w_bad=$((w_bad + fail - f_before))
+  # (3) admit/axiom/sorry counts EXACTLY as recorded.  sweep.py strips comments
+  # and uses word boundaries; it exits nonzero on unbalanced comments, which is
+  # itself a corruption signal.
+  if ! sw=$(python3 scratch/sweep.py "$wf" 2>&1); then
+    echo "FAIL watched $wf: sweep refused ($sw)"; fail=$((fail+1)); w_bad=$((w_bad+1)); continue
+  fi
+  got_a=$(printf '%s' "$sw" | sed -n 's/.*admit=\([0-9]*\).*/\1/p')
+  got_x=$(printf '%s' "$sw" | sed -n 's/.*axiom=\([0-9]*\).*/\1/p')
+  got_s=$(printf '%s' "$sw" | sed -n 's/.*sorry=\([0-9]*\).*/\1/p')
+  if [ -z "${got_a:-}" ] || [ -z "${got_x:-}" ] || [ -z "${got_s:-}" ]; then
+    echo "FAIL watched $wf: could not parse sweep output ($sw)"; fail=$((fail+1)); w_bad=$((w_bad+1)); continue
+  fi
+  if [ "$got_a" = "$wa" ] && [ "$got_x" = "$wx" ] && [ "$got_s" = "$ws" ]; then
+    echo "OK   watched $wf counts admit=$got_a axiom=$got_x sorry=$got_s"
+  else
+    echo "FAIL watched $wf counts: got admit=$got_a axiom=$got_x sorry=$got_s, expected admit=$wa axiom=$wx sorry=$ws"
+    echo "     EXACT match by design -- fewer admits is progress and still fails;"
+    echo "     update cert-watched-split.tsv in the same commit as the proof"
+    fail=$((fail+1)); w_bad=$((w_bad+1))
+  fi
+  # (4) statement digests -- names alone are not enough, same argument as PHASE 1c
+  n_dig=0
+  IFS=',' read -ra wpairs <<< "$wres"
+  for pair in "${wpairs[@]}"; do
+    [ -n "$pair" ] || continue
+    nm=${pair%%=*}; want=${pair#*=}
+    n_dig=$((n_dig+1))
+    got=$(python3 tools/stmt_digest.py "$wf::$nm" 2>/dev/null | awk -F'\t' '{print $2}')
+    if [ -z "${got:-}" ]; then
+      echo "FAIL watched $wf::$nm: no digest -- the result is not there"; fail=$((fail+1)); w_bad=$((w_bad+1))
+    elif [ "$got" != "$want" ]; then
+      echo "FAIL watched $wf::$nm digest: committed $want, computed $got"; fail=$((fail+1)); w_bad=$((w_bad+1))
+    else
+      echo "OK   watched $wf::$nm digest"
+    fi
+  done
+  [ "$n_dig" -ge 1 ] || { echo "FAIL watched $wf: manifest row pins no result"; fail=$((fail+1)); w_bad=$((w_bad+1)); }
+  # Requirability probe.  A file ENDING in an open proof compiles SILENTLY and
+  # its lemma is not saved -- the defect PHASE 1d exists for, and neither the
+  # digest check nor cli catches it (cli only complains when `qed.` is present).
+  # Copied to a valid theory name because EasyCrypt derives the theory name from
+  # the filename and these begin with an underscore.
+  wbase=$(basename "$wf" .ec | tr -c 'A-Za-z0-9' '_')
+  cp "$wf" "$TMPD/W$wbase.ec"
+  echo "require import W$wbase." >> "$TMPD/require_watched.ec"
+done < cert-watched-split.tsv
+if [ "$w_run" -gt 0 ]; then
+  if easycrypt compile $INC -I scratch -I "$TMPD" "$TMPD/require_watched.ec" >/dev/null 2>&1; then
+    echo "OK   all watched files are requirable"
+  else
+    echo "FAIL a watched file cannot be REQUIRED -- a proof is probably left open at EOF"
+    easycrypt compile $INC -I scratch -I "$TMPD" "$TMPD/require_watched.ec" 2>&1 | tr '\r' '\n' | grep -a '^\[critical\]' | head -2 | sed 's/^/       /'
+    fail=$((fail+1))
+  fi
+fi
+echo "### WATCHED_FILES_RUN=$w_run WATCHED_FAILURES=$w_bad"
+# Same fail-open guard the controls and closure phases carry: a truncated
+# manifest runs zero checks and still reaches GREEN.
+w_exp=$(grep -cve '^[[:space:]]*$' -e '^#' cert-watched-split.tsv)
+[ "$w_run" -eq "$w_exp" ] || { echo "FAIL watched phase ran $w_run of $w_exp rows"; fail=$((fail+1)); }
+[ "$w_run" -eq "$EXPECT_WATCHED" ] || { echo "FAIL watched manifest: ran $w_run rows, committed expectation is $EXPECT_WATCHED"; fail=$((fail+1)); }
+
 echo "### PHASE 1b — NAMED RESULTS EXIST AS LEMMAS (not axioms)"
 # Added 2026-08-01.  Adversarial review observed the gate certified FILENAMES:
 # replacing a capstone with `axiom EUFCMA_..._GROUNDED : <same statement>.`
@@ -229,6 +427,20 @@ check_lemma "$D/C10DeployedCapstone.ec"     EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_
 check_lemma "$D/C10DeployedCapstone.ec"     EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_PINNED_ENCODER
 check_lemma "$D/C10DeployedCapstone.ec"     EUFCMA_SPHINCS_PLUS_C10_CONTENTFUL_AT_DEPLOYED_ENCODER
 check_lemma "$D/SphincsC10CapstoneCharged.ec" EUFCMA_SPHINCS_PLUS_C10_CHARGED
+# 2026-08-11: the Q-WIRED deployed pair.  The canonical one to QUOTE is the
+# encoder-pinned QWIRED lemma -- its tree term is three NAMED SM-DT hardness
+# advantages rather than the unreduced Q the GROUNDED-derived pair above still
+# carries.  Those older lemmas STAY, exactly as Tier 0 Step 2 kept its
+# predecessor: not repaired, superseded for quotation.  Listing the new ones here
+# means a rename or an axiom-ification is caught by name, not only by digest.
+check_lemma "$D/GprocQWired.ec"             EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_QWIRED
+check_lemma "$D/GprocQWired.ec"             EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_PINNED_ENCODER_QWIRED
+# 2026-08-12: the CHARGED + Q-WIRED composition.  This is the strongest
+# deployed-shape statement the closure supports -- N2-free (the universal grind
+# premise is gone, replaced by an explicit charged summand) AND Q-wired (the
+# tree term is three named SM-DT advantages).  Before it, quoting forced a
+# choice between those two improvements.
+check_lemma "$D/GprocChargedQWired.ec"      EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED
 
 echo "### PHASE 1c — STATEMENT DIGESTS (names are not enough)"
 # Added 2026-08-01 (adversarial review, run 4).  The gate pinned NAMES and never
@@ -444,11 +656,117 @@ echo "controls executed (unique)=$n_ctl expected>=5"
 # computed ONCE, before a compile phase that runs for the better part of an
 # hour, and never rechecked.  An edit made after the hash and reverted before
 # the census compiles altered sources under a green receipt.  This does not
+
+# ===========================================================================
+echo "### PHASE 4 — FORS+C GRINDING MARGIN (heuristic figures, NOT a theorem)"
+# WHY THIS PHASE EXISTS.  cdrafts-split/FORS_C10.ec:89-91 justifies calling the
+# black-box route to plain ITSR a dead end by citing "~28.1 vs ~130.6 bits,
+# ~102 bits lost" -- and states in the same breath that the script producing
+# those numbers is NOT in this checkout.  The project's most-quoted figure was
+# therefore enforced by nothing, in a repo whose founding line is "a result
+# nothing enforces is not a receipt".  Two independent adversarial reviews
+# (2026-08-10) both flagged it as the weakest receipt here.
+# WHAT IT DOES NOT DO: it certifies NOTHING.  These are heuristic
+# generic-adversary estimates that no EasyCrypt result carries, and 130.6 is a
+# per-candidate WORK FACTOR, not a security level -- see the header of
+# cert-margin-split.tsv and the adv_log2_qh128 = -2.6 row, which is the honest
+# reading.  This phase only makes the numbers RECOMPUTABLE and pinned.
+if [ -f tools/forsc_grinding_margin.py ] && [ -f cert-margin-split.tsv ]; then
+  m_out=$(python3 tools/forsc_grinding_margin.py 2>&1); m_rc=$?
+  if [ "$m_rc" -ne 0 ]; then
+    echo "FAIL margin script exited $m_rc"; fail=$((fail+1))
+  else
+    # TWO DISTINCT CHECKS -- and the difference is the whole point.  The first
+    # version of this phase counted the four `[guardrail N] .. : OK` lines and
+    # called them "the script's self-tests".  THAT WAS FALSE, and it was a false
+    # claim about a CONTROL, which is the worst place to be sloppy: those four
+    # lines are the HAPPY PATH of a normal run.  The script's actual negative
+    # controls live behind `--self-test` (forsc_grinding_margin.py:275).
+    # Caught by GPT-5.6 adversarial review 2026-08-11.  Both are checked now.
+    #
+    # RETRACTION, same day, second GPT-5.6 pass -- READ THIS BEFORE TRUSTING THE
+    # LINE ABOVE.  This comment used to continue: "...and prove the guardrails
+    # CAN FIRE -- shrink the removed tree, raise the usage cap, widen the mixture
+    # window.  A gate that never runs them cannot tell a live guardrail from one
+    # that has been neutered to print OK unconditionally."  The second sentence
+    # is true but misleads, because RUNNING them does not tell either.
+    # `self_test()` takes an EARLY, SEPARATE path: it recomputes `ratio` and
+    # `T_LAST < T` itself and NEVER executes normal guardrails 1-3 (lines
+    # 342-378).  Neuter those three blocks to print `OK` unconditionally with no
+    # `failures.append` and this phase still passes in full.
+    # WHAT THIS PHASE ACTUALLY ENFORCES, stated without inflation:
+    #   * the seven margin NUMBERS, string-matched against cert-margin-split.tsv;
+    #   * that the script still emits 4 guardrail lines at OK on the happy path;
+    #   * that the MODEL inverts when the removed tree is shrunk (--self-test).
+    # It does NOT enforce that guard blocks 1-3 are live branch logic.  That gap
+    # is OPEN and NAMED (owner decision 2026-08-11: doc-retraction only -- the
+    # fix requires editing the vendored script, which would break the
+    # byte-identity cert-margin-split.tsv asserts; correct fix is upstream-first
+    # in PQSigner_OS, then re-vendor and re-pin).
+    g_ok=$(printf '%s\n' "$m_out" | grep -c '^\[guardrail [0-9]*\] .*: OK')
+    if [ "$g_ok" -lt 4 ]; then
+      echo "FAIL margin script printed only $g_ok/4 guardrail lines at OK"
+      fail=$((fail+1))
+    else
+      echo "OK   margin guardrails 4/4 (happy path)"
+    fi
+    st_out=$(python3 tools/forsc_grinding_margin.py --self-test 2>&1); st_rc=$?
+    st_ok=$(printf '%s\n' "$st_out" | grep -c '^  ok: ')
+    if [ "$st_rc" -ne 0 ]; then
+      echo "FAIL margin --self-test exited $st_rc -- a guardrail did NOT fire when it must"
+      printf '%s\n' "$st_out" | grep -a 'self-test FAIL' | sed 's/^/       /'
+      fail=$((fail+1))
+    elif ! printf '%s\n' "$st_out" | grep -q '^=== self-test PASS ==='; then
+      echo "FAIL margin --self-test did not report PASS"; fail=$((fail+1))
+    elif [ "$st_ok" -lt 3 ]; then
+      echo "FAIL margin --self-test ran only $st_ok/3 negative controls"; fail=$((fail+1))
+    else
+      echo "OK   margin negative controls 3/3 (guardrails demonstrably fire)"
+    fi
+    get() { printf '%s\n' "$m_out" | sed -n "$1" | head -1; }
+    m_forsc=$(get 's/.*FORS+C work factor (binom. mixture): *\([0-9.]*\) bits.*/\1/p')
+    m_plain=$(get 's/.*plain FORS, same method *: *\([0-9.]*\) bits.*/\1/p')
+    m_black=$(get 's/.*generic reduction to plain ITSR *: *\([0-9.]*\) bits.*/\1/p')
+    m_lost=$(get  's/.*cost of going black-box *: *\([0-9.]*\) bits LOST.*/\1/p')
+    m_q64=$(get   's/.*q_h = 2^64 *-> *Pr\[win\] <= 2^\(-*[0-9.]*\).*/\1/p')
+    m_q96=$(get   's/.*q_h = 2^96 *-> *Pr\[win\] <= 2^\(-*[0-9.]*\).*/\1/p')
+    m_q128=$(get  's/.*q_h = 2^128 *-> *Pr\[win\] <= 2^\(-*[0-9.]*\).*/\1/p')
+    m_bad=0; m_run=0
+    check_m() { # $1 key  $2 computed
+      want=$(awk -F'\t' -v k="$1" '!/^#/ && $1==k{print $2}' cert-margin-split.tsv)
+      m_run=$((m_run+1))
+      if [ -z "${want:-}" ]; then
+        echo "FAIL margin key $1 missing from cert-margin-split.tsv"; fail=$((fail+1)); m_bad=$((m_bad+1))
+      elif [ -z "${2:-}" ]; then
+        echo "FAIL margin key $1 NOT PARSED from script output (format drift?)"; fail=$((fail+1)); m_bad=$((m_bad+1))
+      elif [ "$want" != "$2" ]; then
+        echo "FAIL margin $1: committed $want, computed $2"; fail=$((fail+1)); m_bad=$((m_bad+1))
+      fi
+    }
+    check_m forsc_work_bits     "$m_forsc"
+    check_m plain_fors_bits     "$m_plain"
+    check_m blackbox_itsr_bits  "$m_black"
+    check_m bits_lost           "$m_lost"
+    check_m adv_log2_qh64       "$m_q64"
+    check_m adv_log2_qh96       "$m_q96"
+    check_m adv_log2_qh128      "$m_q128"
+    # Fail-open guard, same shape as the other phases: a manifest that lost its
+    # rows would run zero comparisons and still reach GREEN.
+    m_exp=$(grep -cve '^[[:space:]]*$' -e '^#' cert-margin-split.tsv)
+    [ "$m_run" -eq "$m_exp" ] || { echo "FAIL margin phase ran $m_run of $m_exp rows"; fail=$((fail+1)); }
+    [ "$m_exp" -eq 7 ] || { echo "FAIL margin manifest truncated (expected 7 rows, found $m_exp)"; fail=$((fail+1)); }
+    [ "$m_bad" -eq 0 ] && echo "OK   margin figures match the committed manifest (7/7)"
+  fi
+else
+  echo "FAIL margin inputs missing (tools/forsc_grinding_margin.py / cert-margin-split.tsv)"
+  fail=$((fail+1))
+fi
+
 # close a determined TOCTOU race, but it does mean any edit that PERSISTS
 # past the compile is caught, and it costs one second.
 INPUTS_ID_END=$( { CERT_CONE_DIRS="base-c10-split,cdrafts-split" python3 tools/cert_cone.py $ROOTS_ID 2>/dev/null \
     | sed -n 's/^#   //p' | sort -u | while read -r f; do [ -f "$f" ] && sha256sum "$f"; done
-  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
+  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
 if [ "$INPUTS_ID_END" != "$INPUTS_ID" ]; then
   echo "FAIL inputs CHANGED DURING THE RUN: start $INPUTS_ID, end $INPUTS_ID_END"
   fail=$((fail+1))

@@ -1,0 +1,196 @@
+(* ===========================================================================
+   THE CHARGED, Q-WIRED CAPSTONE.
+
+   WHAT THIS IS.  The composition of the two independent improvements the port
+   already had but had never combined:
+
+     * SphincsC10CapstoneCharged.ec:78  EUFCMA_SPHINCS_PLUS_C10_CHARGED
+         -- N2-FREE.  The universal premise `exists c, predC (ThC ps ad m c)`
+            (capstone premise N2) is GONE from that statement; the grind can fail,
+            and the failure is CHARGED as an explicit summand
+            `Pr[GAME1_INT(..) : res /\ gfail_of ..]` (its +C subst #3).
+     * GprocQBound.ec:62  gproc_Q_bound
+         -- replaces the unreduced Q = Pr[EUF_CMA_Gproc_I .. res /\ !covered]
+            with THREE NAMED hardness advantages (one SM-DT-OpenPRE, two
+            SM-DT-TCR-C).
+
+   CHARGED carries the Q term as a PREMISE over three forall-bound reals
+   (`mtree_openpre mtree_trh mtree_trco`), exactly as EUFCMA_SPHINCS_PLUS_C10
+   does.  So the composition is the same five-line move GprocQWired.ec:67 makes
+   on the GROUNDED capstone -- instantiate the three reals at the named terms and
+   discharge the premise with gproc_Q_bound.
+
+   WHY IT IS WORTH A FILE.  Before this, the port forced a choice: quote the
+   CHARGED capstone and carry an unreduced Q, or quote the QWIRED capstone and
+   carry the universal N2 premise.  Neither dominated.  This lemma has both
+   improvements at once and is therefore the strongest deployed-shape statement
+   the closure supports.
+
+   WHAT IT DOES **NOT** BUY, stated as flatly as its siblings do.
+     * Nothing numeric improves.  `Pr[M.F.ITSRC10 ..]` is still carried UNREDUCED
+       and remains the honest headline term; scratch/_countermodel.ec proves no
+       parameter-independent bound on it is provable as that game is axiomatized.
+     * The WOTS-TW game `Pr[M_EUF_GCMA_WOTSTWESNPRF ..]` is still carried as an
+       unreduced GAME probability.  Reducing it is the separate collision
+       campaign, and it must NOT be done by applying the existing WOTS theorem,
+       which consumes the admit at base-c10-split/WOTS_TW_ES.ec:1513 and would
+       make a presently non-load-bearing admit LOAD-BEARING.
+     * It activates NEITHER of the closure's two admits.
+     * The grind-failure summand is an AVAILABILITY charge, not a security loss;
+       see experiments/tcollres-leg/FINDING-n2-is-independent.md section 5.  It is
+       carried here because CHARGED carries it, and carrying it is what buys the
+       removal of N2.
+
+   PLACEMENT.  A NEW file, not an edit to SphincsC10CapstoneCharged.ec or
+   GprocQWired.ec.  Same reason GprocQWired gave: this NARROWS F (it adds the nine
+   Q-leg separations gproc_Q_bound needs) AND replaces an exact premise with an
+   upper bound, so mutating a published theorem name would hide both changes
+   behind an unchanged name.  The repo's precedent is parallel-supersede
+   (cert_gate_split.sh:425-426).  Dependency runs FORWARD along closure order
+   (SphincsC10CapstoneCharged #21, GprocQBound #28 -> here).
+   =========================================================================== *)
+require import AllCore List Distr StdBigop StdOrder IntDiv.
+require import SPHINCS_PLUS XmssmtCC_All RtopCSoundness FxChain GprocFORSC10 GprocVI.
+require WOTS_C_Real WOTS_C_Scheme XMSSMT_C_Scheme WOTS_C_Interactive.
+require FORS_C10 FORS_C10_Multi DigitalSignatures.
+require import BitEncoding. import BS2Int BitChunking.
+require import GFailCharged XmssmtCCCharged SphincsC10CapstoneCharged.
+require import GprocT1Opre GprocT2Trh GprocT3Trco GprocQBound.
+require import GprocQWired.   (* reuse its WitnessF for the anti-vacuity check *)
+
+import FSSLXMTWES.
+import FSSLXMTWES.WTWES.
+import WOTS_C_Real.
+import WOTS_C_Scheme.
+import EmsgWOTS.
+import XMSSMT_C_Scheme.
+import WOTS_C_Interactive.
+
+lemma EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED
+  (F <: Adv_EUFCMA_C{ -R_int_STCRC, -R_int_WOTSTW,
+             -O_MEUFGCMA_WOTSC_Default, -O_MEUFGCMA_WOTSTWESNPRF,
+             -STCRC_WC.O_STCRC_Default, -FC.O_THFC_Default, -O_THFC_MA, -G0_INT,
+             -R_MEUFGCMAWOTSC_EUFNAGCMA_C, -EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_C,
+             -O_MEUFGCMA_WOTSC_V, -R_SMDTTCRCPKCO_C, -R_SMDTTCRCTRH_C,
+             -FSSLXMTWES.PKCOC_TCR.O_SMDTTCR_Default, -FSSLXMTWES.PKCOC.O_THFC_Default,
+             -FSSLXMTWES.TRHC_TCR.O_SMDTTCR_Default, -FSSLXMTWES.TRHC.O_THFC_Default,
+             -R_top,
+             -DSSC.Stateless.O_CMA_Default, -O_CMA_SPHINCSPLUSTWC_FS,
+             -SKG_PRF.O_PRF_Default, -EUF_CMA_SPHINCSPLUSTWC_NPRFNPRF_V,
+             -R_top_C, -EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_RV,
+             -R_fors_p, -O_CMA_Gproc, -O_CMA_Gproc_I, -R_ITSRC10_Gproc,
+             -EUF_CMA_Gproc_I, -M.F.O_ITSRC10_Default,
+             (* the nine Q-leg separations gproc_Q_bound needs -- identical to the
+                block GprocQWired.ec carries, and a deliberate NARROWING of F. *)
+             -EUF_CMA_Gproc_V, -R_OPRE_Gproc, -R_TRH_Gproc, -R_TRCO_Gproc,
+             -FTWES.F_OpenPRE.O_SMDTOpenPRE_Default,
+             -FTWES.TRHC_TCR.O_SMDTTCR_Default, -FTWES.TRHC.O_THFC_Default,
+             -FTWES.TRCOC_TCR.O_SMDTTCR_Default, -FTWES.TRCOC.O_THFC_Default })
+  (mkg_adv : real)
+  &m :
+    c <= p_tgts =>
+    0%r <= mkg_adv =>
+    (forall (p : pseed) (a : adrs) (x : dgstblock) (cc : cntr),
+       encode_msgWOTS_C p a x cc = encode_msgWOTS (ThC p a x cc)) =>
+    dfC0 <> 8 * n =>
+    dfC0 <> 8 * n * len =>
+    dfC0 <> 8 * n * 2 =>
+    dfC0 <> 8 * n * k =>
+    Pr[EUFCMA_C10(F).main() @ &m : res]
+      <= `|  Pr[SKG_PRF.PRF(R_SKGPRF_EUFCMA_C(F), SKG_PRF.O_PRF_Default).main(false) @ &m : res]
+           - Pr[SKG_PRF.PRF(R_SKGPRF_EUFCMA_C(F), SKG_PRF.O_PRF_Default).main(true) @ &m : res] |
+       + mkg_adv
+       + ( Pr[M.F.ITSRC10(R_ITSRC10_Gproc(R_fors_p(F)),
+                          M.F.O_ITSRC10_Default).main() @ &m : res]
+           + ( Pr[FTWES.F_OpenPRE.SM_DT_OpenPRE(R_OPRE_Gproc(R_fors_p(F)),
+                    FTWES.F_OpenPRE.O_SMDTOpenPRE_Default).main() @ &m : res]
+             + Pr[FTWES.TRHC_TCR.SM_DT_TCR_C(R_TRH_Gproc(R_fors_p(F)),
+                    FTWES.TRHC_TCR.O_SMDTTCR_Default,
+                    FTWES.TRHC.O_THFC_Default).main() @ &m : res]
+             + Pr[FTWES.TRCOC_TCR.SM_DT_TCR_C(R_TRCO_Gproc(R_fors_p(F)),
+                    FTWES.TRCOC_TCR.O_SMDTTCR_Default,
+                    FTWES.TRCOC.O_THFC_Default).main() @ &m : res] ) )
+       + ( Pr[M_EUF_GCMA_WOTSTWESNPRF(R_int_WOTSTW(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(F))),
+                                      O_MEUFGCMA_WOTSTWESNPRF, FC.O_THFC_Default).main() @ &m : res]
+           + Pr[S_TCR_C_Int_MA(R_int_STCRC(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(F))),
+                               STCRC_WC.O_STCRC_Default).main() @ &m : res]
+           + Pr[FSSLXMTWES.PKCOC_TCR.SM_DT_TCR_C(R_SMDTTCRCPKCO_C(R_top_C(F)),
+                  FSSLXMTWES.PKCOC_TCR.O_SMDTTCR_Default,
+                  FSSLXMTWES.PKCOC.O_THFC_Default).main() @ &m : res]
+           + Pr[FSSLXMTWES.TRHC_TCR.SM_DT_TCR_C(R_SMDTTCRCTRH_C(R_top_C(F)),
+                  FSSLXMTWES.TRHC_TCR.O_SMDTTCR_Default,
+                  FSSLXMTWES.TRHC.O_THFC_Default).main() @ &m : res]
+           + Pr[GAME1_INT(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(F)),
+                          O_MEUFGCMA_WOTSC_Default, FC.O_THFC_Default).main() @ &m :
+                  res /\ gfail_of O_MEUFGCMA_WOTSC_Default.ps
+                                  O_MEUFGCMA_WOTSC_Default.qs] ).
+proof.
+move=> hc hmkg hencb hdf8n hdflen hdf2 hdfnk.
+have h := EUFCMA_SPHINCS_PLUS_C10_CHARGED F mkg_adv
+            Pr[FTWES.F_OpenPRE.SM_DT_OpenPRE(R_OPRE_Gproc(R_fors_p(F)),
+                 FTWES.F_OpenPRE.O_SMDTOpenPRE_Default).main() @ &m : res]
+            Pr[FTWES.TRHC_TCR.SM_DT_TCR_C(R_TRH_Gproc(R_fors_p(F)),
+                 FTWES.TRHC_TCR.O_SMDTTCR_Default,
+                 FTWES.TRHC.O_THFC_Default).main() @ &m : res]
+            Pr[FTWES.TRCOC_TCR.SM_DT_TCR_C(R_TRCO_Gproc(R_fors_p(F)),
+                 FTWES.TRCOC_TCR.O_SMDTTCR_Default,
+                 FTWES.TRCOC.O_THFC_Default).main() @ &m : res]
+            &m hc hmkg hencb hdf8n hdflen hdf2 hdfnk _.
++ by apply (gproc_Q_bound (R_fors_p(F)) &m).
+by smt().
+qed.
+
+(* ---------------------------------------------------------------------------
+   ANTI-VACUITY.  The statement above NARROWS F by the nine Q-leg separations on
+   top of CHARGED's already-long list.  A module-restriction set that no module
+   satisfies would make the lemma vacuously true, so exhibit an inhabitant:
+   GprocQWired.ec's `WitnessF`, which is STATEFUL and CALLS its oracle (it is not
+   the degenerate do-nothing forger).  If any separation in the union were
+   self-contradictory, the instantiation below would fail to typecheck.
+
+   HONEST SCOPE, and it is the same caveat GprocQWired.ec:171-196 records for its
+   own witness: this establishes MODULE-RESTRICTION SATISFIABILITY, not
+   cryptographic non-vacuity.  `WitnessF` returns the message it just signed, so
+   EUF-CMA freshness fails and its LHS success probability is ZERO.  It proves the
+   hypothesis set is inhabited; it does not prove the bound is tight or the RHS
+   non-trivial.  (Point made by GPT-5.6 adversarial review, 2026-08-11.)         *)
+lemma charged_qwired_at_witness (mkg_adv : real) &m :
+    c <= p_tgts =>
+    0%r <= mkg_adv =>
+    (forall (p : pseed) (a : adrs) (x : dgstblock) (cc : cntr),
+       encode_msgWOTS_C p a x cc = encode_msgWOTS (ThC p a x cc)) =>
+    dfC0 <> 8 * n =>
+    dfC0 <> 8 * n * len =>
+    dfC0 <> 8 * n * 2 =>
+    dfC0 <> 8 * n * k =>
+    Pr[EUFCMA_C10(WitnessF).main() @ &m : res]
+      <= `|  Pr[SKG_PRF.PRF(R_SKGPRF_EUFCMA_C(WitnessF), SKG_PRF.O_PRF_Default).main(false) @ &m : res]
+           - Pr[SKG_PRF.PRF(R_SKGPRF_EUFCMA_C(WitnessF), SKG_PRF.O_PRF_Default).main(true) @ &m : res] |
+       + mkg_adv
+       + ( Pr[M.F.ITSRC10(R_ITSRC10_Gproc(R_fors_p(WitnessF)),
+                          M.F.O_ITSRC10_Default).main() @ &m : res]
+           + ( Pr[FTWES.F_OpenPRE.SM_DT_OpenPRE(R_OPRE_Gproc(R_fors_p(WitnessF)),
+                    FTWES.F_OpenPRE.O_SMDTOpenPRE_Default).main() @ &m : res]
+             + Pr[FTWES.TRHC_TCR.SM_DT_TCR_C(R_TRH_Gproc(R_fors_p(WitnessF)),
+                    FTWES.TRHC_TCR.O_SMDTTCR_Default,
+                    FTWES.TRHC.O_THFC_Default).main() @ &m : res]
+             + Pr[FTWES.TRCOC_TCR.SM_DT_TCR_C(R_TRCO_Gproc(R_fors_p(WitnessF)),
+                    FTWES.TRCOC_TCR.O_SMDTTCR_Default,
+                    FTWES.TRCOC.O_THFC_Default).main() @ &m : res] ) )
+       + ( Pr[M_EUF_GCMA_WOTSTWESNPRF(R_int_WOTSTW(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(WitnessF))),
+                                      O_MEUFGCMA_WOTSTWESNPRF, FC.O_THFC_Default).main() @ &m : res]
+           + Pr[S_TCR_C_Int_MA(R_int_STCRC(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(WitnessF))),
+                               STCRC_WC.O_STCRC_Default).main() @ &m : res]
+           + Pr[FSSLXMTWES.PKCOC_TCR.SM_DT_TCR_C(R_SMDTTCRCPKCO_C(R_top_C(WitnessF)),
+                  FSSLXMTWES.PKCOC_TCR.O_SMDTTCR_Default,
+                  FSSLXMTWES.PKCOC.O_THFC_Default).main() @ &m : res]
+           + Pr[FSSLXMTWES.TRHC_TCR.SM_DT_TCR_C(R_SMDTTCRCTRH_C(R_top_C(WitnessF)),
+                  FSSLXMTWES.TRHC_TCR.O_SMDTTCR_Default,
+                  FSSLXMTWES.TRHC.O_THFC_Default).main() @ &m : res]
+           + Pr[GAME1_INT(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(WitnessF)),
+                          O_MEUFGCMA_WOTSC_Default, FC.O_THFC_Default).main() @ &m :
+                  res /\ gfail_of O_MEUFGCMA_WOTSC_Default.ps
+                                  O_MEUFGCMA_WOTSC_Default.qs] ).
+proof.
+by apply (EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED WitnessF mkg_adv &m).
+qed.

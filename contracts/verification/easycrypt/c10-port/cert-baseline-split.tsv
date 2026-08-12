@@ -1291,3 +1291,48 @@ cdrafts-split/XmssmtCC_All.ec	module:56b8ab614858	R_top_OC	# line 9916
 cdrafts-split/XmssmtCC_All.ec	module:1404b4722204	O_CMA	# line 9918
 cdrafts-split/XmssmtCC_All.ec	module:db55adac56dc	F_leak	# line 9937
 cdrafts-split/XmssmtCC_All.ec	module:083f75b2c62f	F_triv	# line 10009
+# 2026-08-10.  16 rows ADDED by the PROMOTION of T1/T2/T3 into the closure
+#   (cdrafts-split/GprocT1Opre|GprocT2Trh|GprocT3Trco|GprocQBound.ec).  ALL 16 are
+#   module:/operand:/clone-discharge: MEANING-carriers -- there is NOT ONE new
+#   admit, axiom or declare-axiom row.  That is the precise sense in which the
+#   promotion grounds the Q bound without growing the assumption set: the three
+#   RHS terms are still hardness assumptions, they are merely NAMED now.
+cdrafts-split/GprocT1Opre.ec	operand:efa13d91c0ca	EI_OPRE.t	# line 284
+cdrafts-split/GprocT1Opre.ec	operand:4c4666a82f97	EI_OPRE.c	# line 284
+cdrafts-split/GprocT1Opre.ec	operand:4c4666a82f97	EI_OPRE.step	# line 284
+cdrafts-split/GprocT1Opre.ec	clone-discharge:star|realize:c_gt0,step_gt0	EI_OPRE	# line 284
+cdrafts-split/GprocT1Opre.ec	module:374a264de6a3	R_OPRE_Gproc	# line 122
+cdrafts-split/GprocT1Opre.ec	module:1c05fefe6313	O_CMA	# line 133
+cdrafts-split/GprocT1Opre.ec	module:b416f909ea4b	O_OPRE_LoopBody	# line 293
+cdrafts-split/GprocT1Opre.ec	module:3c1bd5a75aa5	O_OPRE_CL	# line 318
+cdrafts-split/GprocT1Opre.ec	module:2978ce801e6c	O_OPRE_LoopBodyNest1	# line 365
+cdrafts-split/GprocT1Opre.ec	module:0b9c65bdbbcf	O_OPRE_CL2	# line 388
+cdrafts-split/GprocT1Opre.ec	module:1632c3d9e6b7	O_OPRE_LoopBodyNest2	# line 444
+cdrafts-split/GprocT1Opre.ec	module:9c8cea7ca7a4	O_OPRE_CL3	# line 469
+cdrafts-split/GprocT1Opre.ec	module:29ffcc5edab9	O_OPRE_ILN	# line 531
+cdrafts-split/GprocT1Opre.ec	module:c60ed29332ed	SampGame	# line 1144
+cdrafts-split/GprocT2Trh.ec	module:bcad9d5cc571	R_TRH_Gproc	# line 49
+cdrafts-split/GprocT3Trco.ec	module:cdad86973966	R_TRCO_Gproc	# line 28
+# 2026-08-11.  +1 row: the WitnessF adversary in GprocQWired.ec.  MEANING-class
+#   (module:), not ledger -- and this time say it precisely, because the
+#   2026-08-10 promotion note got exactly this wrong: one of ITS 16 rows was a
+#   ledger-class clone-discharge (ledger 239 -> 240), which that note called a
+#   meaning-carrier.  See the correction there.
+cdrafts-split/GprocQWired.ec	module:a32add79d02c	WitnessF	# line 197
+# 2026-08-11 (second).  +1 row from PROMOTING cdrafts-split/DarkSide.ec into the
+#   closure.  It is a LEDGER-class row -- refined-const -- and saying so up front
+#   this time, because the 2026-08-10 promotion note got exactly this wrong.
+#   The assumption is ge1_t: `const t : { int | 1 <= t }`, a FORS tree has at
+#   least one leaf.  LEDGER 240 -> 241.  It is benign and trivially true at C10
+#   (t = 2^11 = 2048), but it is an assumption row and is counted as one.
+cdrafts-split/DarkSide.ec	refined-const:038162b8e18e	ge1_t	# line 82
+# 2026-08-11 (third).  +2 rows from cdrafts-split/DarkSideC10.ec, which CLONES
+#   the DarkSide theory at SPHINCS_PLUS.t.  ONE OF THE TWO IS LEDGER-CLASS and
+#   that is stated before the run, not discovered after it:
+#     clone-discharge:star|realize:ge1_t  DS_C10   <- LEDGER (241 -> 242)
+#     operand:...                         DS_C10.t <- bindings
+#   The clone-discharge row REALIZES its obligation (ge1_t, from the proven
+#   ge2_t at SPHINCS_PLUS.ec:180), so no axiom is installed -- but it is counted
+#   in the ledger by cert_gate_split.sh:503 and is reported as such.
+cdrafts-split/DarkSideC10.ec	operand:42a30d8df381	DS_C10.t	# line 32
+cdrafts-split/DarkSideC10.ec	clone-discharge:star|realize:ge1_t	DS_C10	# line 32

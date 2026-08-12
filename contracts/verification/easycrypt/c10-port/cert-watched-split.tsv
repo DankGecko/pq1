@@ -1,0 +1,81 @@
+# WATCHED, NOT CERTIFIED.  These files hold the Q = T1 + T2 + T3 branch proofs.
+# They are NOT in closure-c10-split.txt, are required by nothing, and are NOT
+# part of the certified artifact; PHASE 1f asserts only that they keep holding
+# what they are recorded here as holding.
+#
+# Added 2026-08-08.  Until now nothing gated them at all: T2 and T3 have been
+# at admit=0 for weeks with no mechanism to notice if an edit to FxChain,
+# RtopCSoundness or GprocVI broke them, and the defect that motivated the cli
+# phase (tws_uniq passing `compile` but failing `cli`) lived in exactly these
+# files.
+#
+# 2026-08-10 (second).  ALL THREE ROWS RETIRED -- T1/T2/T3 ARE NOW IN THE
+# CLOSURE.  scratch/_t1.ec, _t2.ec and _t3.ec were copied to
+# cdrafts-split/GprocT1Opre.ec, GprocT2Trh.ec and GprocT3Trco.ec (VERBATIM --
+# byte-identical, no proof edits), a fourth file GprocQBound.ec was added with
+# the composition `gproc_Q_bound`, and all four were added to
+# closure-c10-split.txt.  They are therefore no longer "watched, not certified":
+# PHASE 1/1d/1e now compile them as TARGETS, require them, and run them under
+# BOTH drivers, and PHASE 1b/1c pin their statements in
+# cert-statements-split.tsv -- strictly MORE coverage than this manifest gave.
+# Leaving a watched row for a file that is now in the closure would be a false
+# statement in a gate manifest, so the rows are gone rather than duplicated.
+# The `-ge 3` anti-truncation floor could not express "deliberately none left",
+# so it became the committed EXPECT_WATCHED=0 constant in cert_gate_split.sh --
+# strictly stronger (it also catches an unexpected addition).
+# THE SCRATCH ORIGINALS STAY, untracked-by-the-gate, as the development copies;
+# the closure copies are the authority.
+#
+# `admits` IS AN EXACT MATCH, not a ceiling.  1 -> 2 is a regression and must
+# fail; 1 -> 0 is progress and must ALSO fail, because the expectation is then
+# stale and a stale expectation is how a gate stops meaning anything.  Update
+# this file in the same commit as the proof.
+#
+# 2026-08-10.  _t1.ec 1 -> 0 admits: T1 IS CLOSED.  t1_opre_bound's win
+# condition (T1-T5) is discharged, so the whole T1 branch of Q = T1 + T2 + T3 is
+# admit-free, as T2 and T3 already were.  ALL THREE PINNED DIGESTS ARE
+# UNCHANGED -- t1_opre_bound proves exactly the statement it was pinned to
+# prove on 2026-08-08 while its proof was still an admit, which is what pinning
+# it was for.
+# The five targets went in as ONE pure lemma, t1_win, stated over plain values
+# rather than inline under the pRHL `skip`: inside t1_opre_bound an iteration
+# costs ~4-5 min, stated separately it costs 14 s, and the pRHL side then
+# reduces to a single `apply` on hypotheses it already had by framing.  Two
+# must-fail controls were graded by FAILURE REASON, not exit status: dropping
+# the `!covered` premise fails at find_fresh's premise, dropping the tws size
+# fails at T4's `rewrite .. hsztws`.  t1_win is deliberately NOT pinned here --
+# it is a helper, like find_fresh and tws_uniq, and a drift in it cannot go
+# unnoticed because t1_opre_bound would stop compiling.
+#
+# 2026-08-08 (later).  _t1.ec 1 -> 2 admits, DELIBERATE: Eqv_OCMA_sign, the
+# oracle equivalence for the forge call, is now STATED and its proof deferred.
+# Stating it is the check that the invariant typechecks against BOTH oracles --
+# every global it names must exist on the side it names it on, with the right
+# type -- which is the last plumbing that can be wrong for free.  Its digest is
+# pinned here so the statement cannot drift while the proof is written.
+# This is the exact-match rule doing its job: the count moved, so the manifest
+# had to move with it, in the same commit.
+#
+# 2026-08-09 (third).  Eqv_OCMA_sign DIGEST MOVES ON PURPOSE, 3d9e3a2e -> b4fc971e:
+# its POST now restates the PRE conjunct for conjunct.  `call (: I)` against an
+# abstract adversary needs the oracle equiv in the shape `={arg} /\ I ==>
+# ={res} /\ I`, and the first version DROPPED the leavess and xs
+# characterisations from the post -- so the forge call in t1_opre_bound could
+# not have used it.  The sign call touches neither leavess, xs nor sks, so they
+# survive it; the exit gained two `exact`s and nothing else.  Admit count
+# unchanged at 1.
+#
+# 2026-08-09 (second).  _t1.ec 2 -> 1 admit: Eqv_OCMA_sign IS FULLY PROVED --
+# entry, body and exit.  The remaining admit is t1_opre_bound itself.
+# The proof STRENGTHENED the `while` invariant with the lidxs <-> os coverage
+# relation; a cli dump showed the exit obligation quantifies over the final
+# `os` while the old invariant never mentioned it, i.e. that goal was not hard
+# but UNPROVABLE.  Statement digests still unchanged.
+#
+# 2026-08-09.  _t1.ec 3 -> 2 admits: Eqv_OCMA_sign's LOOP BODY is discharged.
+# The Eqv_OCMA_sign digest is deliberately UNCHANGED -- the proof added two
+# bound conjuncts to the `while` invariant, which is proof-internal, so the
+# statement did not drift while the proof was written.  That is what pinning it
+# was for.  The remaining admit is the loop's entry/exit.
+#
+# file	admits	axioms	sorries	results (name=statement-digest, comma-separated)

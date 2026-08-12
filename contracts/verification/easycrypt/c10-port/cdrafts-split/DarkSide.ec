@@ -29,14 +29,61 @@
      ds_ge_1t : DS gam >= 1/t for gam >= 1      (the engine of "FORS+C <= FORS")
      ds_0     : DS 0 = 0                        (nothing revealed => never covered)
 
-   NOT proven here (the next milestones, deliberately not admitted):
-     * the k-fold product over independent trees:  DS^(k-1) * (1/t)
-     * the binomial mixture over a fresh candidate's instance load
-     * the (q_h + 1) union bound over the adversary's hash queries
+   UPDATE 2026-08-11 — TWO OF THE THREE MILESTONES BELOW ARE NOW PROVEN, and
+   this header had gone stale claiming otherwise.  Caught by adversarial review
+   (Kimi K3 and GPT-5.6 independently) while costing the ITSRC10 routes; the
+   original text is kept beneath so the history stays readable.
+
+     PROVEN NOW
+       * cover_all_pr  (:204) — the k-fold product over independent trees.
+       * cover_some_le (:236) — the union bound over the adversary's candidate
+         leaf-vectors, i.e. the (q_h + 1)-style factor.  Pure finite
+         subadditivity over cover_all_pr; no concentration inequality needed.
+       * ds_le_linear  (:285) — DS gam <= gam/t.  Not on the original list at
+         all, so it was under-claimed rather than over-claimed.
+
+     STILL OPEN — and this one is the hard half, so do not read the above as
+     "the combinatorial core is done":
+       * the binomial mixture over a fresh candidate's instance load
+         (G ~ Bin(qs, 1/2^18)).  The remark at :234 says the same thing at the
+         point of use.  EasyCrypt's stdlib has no concentration inequalities, so
+         this is hand-built.
+
+   WHAT THE WHOLE FILE IS AND IS NOT, since two reviewers had to reconstruct it:
+   this is the PURE COMBINATORIAL core of the direct ("DarkSide") FORS+C
+   argument.  Even completed it does NOT discharge the ITSRC10 assumption.  Two
+   further pieces stand between here and that: a concrete numeric instantiation,
+   and the ROM / query-budget game plus a coupling theorem — the ITSRC10 game as
+   currently axiomatized has an abstract `mco` and no query bound, so there is a
+   legal model in which it is won with probability 1.  "Mechanise this
+   arithmetic" is NOT the remaining work.
+
+   [STALE — SUPERSEDED 2026-08-11, kept for history.  The paragraph below was
+   true when written and was made false by the promotion commit LATER THE SAME
+   DAY; the staleness was caught by Kimi K3 adversarial review, not by a gate.
+   CURRENT STATE: DarkSide.ec is closure member #30 of closure-c10-split.txt.
+   It is compiled by PHASE 1, require-checked by PHASE 1d, run under both drivers
+   by PHASE 1e, censused by PHASE 2, and NINE of its lemmas are statement-digest
+   pinned in cert-statements-split.tsv (ds_ge_1t, forsc_le_fors, cover_all_pr,
+   cover_some_le, ds_le_linear, mixture_le_moment, mixture_le_moment_finite_ex,
+   plus the two c10_* in DarkSideC10.ec).  An axiom-ification would trip PHASE 2;
+   a weakened statement would trip PHASE 1c.]
+   | AND NOTHING GATES THIS FILE.  DarkSide.ec is required by no closure member and
+   | is absent from closure-c10-split.txt, so it is outside the certified cone and
+   | outside the identity hash: it compiles admit-free today, but no gate run would
+   | notice if that stopped being true.  Promoting it is a prerequisite for the
+   | hybrid route, not an afterthought.
+
+   ORIGINAL TEXT, now partly stale — kept deliberately:
+   | NOT proven here (the next milestones, deliberately not admitted):
+   |   * the k-fold product over independent trees:  DS^(k-1) * (1/t)
+   |   * the binomial mixture over a fresh candidate's instance load
+   |   * the (q_h + 1) union bound over the adversary's hash queries
    ========================================================================== *)
 
 require import AllCore List FSet Distr DList DInterval StdBigop StdOrder.
 require import RealExp.
+require import Finite.
 import RField RealOrder.
 import Bigreal Bigreal.BRM.
 
@@ -295,6 +342,60 @@ have hexp : (1%r - 1%r/t%r) ^ n * (1%r - 1%r/t%r)
 move: ih; rewrite /DS => ih.
 rewrite hexp fromintD.
 smt().
+qed.
+
+(* ==========================================================================
+   THE MIXTURE STEP -- (A) OF THE REMAINING MILESTONE.
+
+   `ds_le_linear` is the HANDLE (this file's word for it, :317).  This lemma is
+   the USE of that handle: it discharges the mixture over instance load down to
+   a RAW MOMENT, for an ARBITRARY finitely-supported distribution on the
+   non-negative integers.
+
+     E_G[ DS(G)^m ]  <=  E_G[ (G/t)^m ]
+
+   WHAT IT IS NOT.  It does NOT evaluate that moment, and it says nothing about
+   the binomial in particular -- the instantiation G ~ Bin(qs, 1/N) and its 12th
+   moment are the SEPARATE remaining piece.  Naming it `mixture_le_moment` and
+   not anything with "binomial" or "bound" in it is deliberate.
+
+   WHY `is_finite (support dG)` RATHER THAN `hasE`.  It is the premise a caller
+   can actually discharge: any binomial has finite support, and `hasE_finite`
+   then supplies BOTH summability obligations internally.  Stating it with a bare
+   `hasE` would have been a true theorem whose premise no caller could obviously
+   meet -- see mixture_le_moment_finite_ex below, which discharges it at a
+   concrete distribution rather than asserting it is dischargeable. *)
+lemma mixture_le_moment (dG : int distr) (m : int) :
+     0 < m
+  => is_finite (support dG)
+  => (forall g, g \in dG => 0 <= g)
+  => E dG (fun g => DS g ^ m) <= E dG (fun g => (g%r / t%r) ^ m).
+proof.
+move=> hm hfin hsupp.
+apply (in_ler_exp _ _ _ (hasE_finite _ _ hfin) (hasE_finite _ _ hfin)).
+move=> g hg /=.
+have hg0 : 0 <= g by apply hsupp.
+have hd  : 0%r <= DS g <= 1%r by apply ds_bnd.
+have hlin : DS g <= g%r / t%r by apply ds_le_linear.
+have hge : 0%r <= g%r / t%r by smt(ge1_t).
+by apply ler_pexp; smt().
+qed.
+
+(* THE PREMISE IS DISCHARGEABLE -- shown, not asserted.  A lemma whose hypothesis
+   no caller can meet is a theorem about nothing; this session already produced
+   one of those (a capstone with no consumer) and the lesson is to supply the
+   witness in the same commit.  `dinter 0 n` is finitely supported and
+   non-negative, so both premises fall out and the mixture bound applies. *)
+lemma mixture_le_moment_finite_ex (n m : int) :
+     0 < m
+  => 0 <= n
+  => E (dinter 0 n) (fun g => DS g ^ m)
+     <= E (dinter 0 n) (fun g => (g%r / t%r) ^ m).
+proof.
+move=> hm hn.
+apply mixture_le_moment => //.
++ by apply finite_dinter.
++ by move=> g; rewrite supp_dinter /#.
 qed.
 
 end DarkSide.

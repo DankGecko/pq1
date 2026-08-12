@@ -86,9 +86,20 @@
    But it is QUANTITATIVELY USELESS: it registers ~t = 2^11 targets per query, so
    at C10's 2^16 per-chain cap the reduction's game has 2^27 registered targets.
    The bound is ~28.1 bits, versus ~130.6 bits for FORS+C by the direct argument:
-   ~102 BITS LOST.  Recomputed by `make -C contracts/verification verify-forsc-margin`
-   in the PQSigner_OS repo (script: contracts/verification/scripts/forsc_grinding_margin.py;
-   it is NOT in this checkout -- this repo is deliberately standalone).
+   ~102 BITS LOST.  Recomputed by PHASE 4 of cert_gate_split.sh on every gate run,
+   from tools/forsc_grinding_margin.py (vendored byte-identical from PQSigner_OS
+   contracts/verification/scripts/), and string-matched against the seven pinned
+   rows of cert-margin-split.tsv.
+   [The preceding sentence replaces, 2026-08-11: "Recomputed by `make -C
+   contracts/verification verify-forsc-margin` in the PQSigner_OS repo (script:
+   contracts/verification/scripts/forsc_grinding_margin.py; it is NOT in this
+   checkout -- this repo is deliberately standalone)."  That went stale the same
+   day it was relied upon, when the script was vendored here; caught by Kimi K3
+   adversarial review, not by a gate.  READ cert-margin-split.tsv's header before
+   quoting any number above: these are heuristic generic-adversary estimates that
+   NO EasyCrypt result carries, 130.6 is a per-candidate WORK FACTOR and not a
+   security level, and PHASE 4 does NOT verify that the script's guard blocks 1-3
+   are live branch logic -- see the retraction in cert-identity.tsv.]
 
    (Those figures were themselves corrected on 2026-07-10: the first version of the
    script used a high-probability MAX per-instance load, which is not a cryptographic

@@ -83,6 +83,446 @@
 #   This is a PREREQUISITE for T3 (MM45 proves its TRH/TRCO branches over _VI,
 #   not _V), not a bound.  Q remains unbounded.
 #
+# 2026-08-08.  split 837da057... -> 091c5dbc...  Machinery-only re-baseline:
+#   cert_gate_split.sh gains PHASE 1e, which runs `easycrypt cli` over the four
+#   base targets and every closure file and requires ZERO ^<tty>: diagnostics.
+#   Reason: the two drivers disagree.  `tws_uniq` (scratch/_uniq.ec) passed
+#   `easycrypt compile` four times and failed under `cli` with "cannot prove
+#   goal (strict)" on the byte-identical file -- two steps closing on smt luck,
+#   one discharging three side conditions for `u` and failing on the
+#   identically-shaped ones for `v`.  No other phase can see this: the file
+#   compiles, the lemma is saved, the statement digest is unchanged, the census
+#   shows no admit, and an admit sweep reports 0.
+#   NO CERTIFIED SOURCE CHANGED in this re-baseline -- the delta is the gate
+#   script alone, which is inside the hashed set by design.
+#   Phase behaviour verified on four cases before adoption: clean file OK;
+#   incomplete proof FAIL with its diagnostic; bogus include FAIL; and
+#   easycrypt-not-on-PATH FAIL via the per-command prompt floor -- that last is
+#   the fail-open the floor exists for, since a run that never happens also
+#   emits zero diagnostics.
+#   Cost: roughly doubles PHASE 1's prover work (FORS_ES.ec alone ~7 min).
+#
+# 2026-08-08 (second).  split 091c5dbc... -> ee902c82395aa7fd83547627a66af55c.  Machinery-only again:
+#   cert_gate_split.sh gains PHASE 1f, and cert-watched-split.tsv +
+#   scratch/sweep.py join the hashed machinery set.
+#   PHASE 1f gates scratch/_t1.ec, _t2.ec, _t3.ec -- the Q = T1 + T2 + T3
+#   branch proofs -- which nothing gated before: T2 and T3 had been at admit=0
+#   for weeks with no mechanism to notice a break, and the cli defect that
+#   motivated PHASE 1e lived in exactly these files.  They are WATCHED, NOT
+#   CERTIFIED: absent from the closure, required by nothing, no census row, and
+#   T1 carries an admit by design.
+#   The MANIFEST is hashed; the WATCHED SOURCES are not.  Hashing work in
+#   progress would force a re-baseline on every edit, which trains the operator
+#   to re-baseline without reading -- worse than not hashing them.  Their
+#   integrity is asserted by exact counts plus statement digests instead.
+#   NO CERTIFIED SOURCE CHANGED.
+#
+# 2026-08-08 (third).  split ee902c82... -> 95756d06403aa6b0e752084db8d5750c.  CORRECTION, machinery only.
+#   PHASE 1e now runs `easycrypt cli -iterate`.  The four failures the previous
+#   entry recorded as an open question were NOT defects: `compile` iterates the
+#   smt call by default and `cli` does not, so the phase was comparing two smt
+#   regimes.  Diagnosed to a 41-line repro (compile OK / cli 1 diagnostic /
+#   `cli -iterate` 0), after ruling out timeout, prover parallelism and theory
+#   scoping BY MEASUREMENT.  All four files go to 0 diagnostics with -iterate.
+#   The claim that tws_uniq had been "closing on smt luck" is withdrawn; its
+#   grounding is kept because supplying a named fact beats relying on axiom
+#   selection, but it fixed no defect and nothing was ever unsound.
+#   NO CERTIFIED SOURCE CHANGED.
+#
+# 2026-08-08 (fourth).  split 95756d06... -> 5e33c0861979d804f0ae03a9326df261.  MANIFEST ONLY:
+#   cert-watched-split.tsv records _t1.ec at 2 admits (was 1), because
+#   Eqv_OCMA_sign -- the oracle equivalence for the forge call -- is now stated
+#   with its proof deferred, and its statement digest is pinned.
+#   The 95756d06 run was GREEN (28 cli files, 0 disagreements; 3 watched, 0
+#   failures), so this re-baseline moves off a verified receipt.
+#   NO CERTIFIED SOURCE CHANGED; no gate machinery changed.
+#
+# 2026-08-08 (fifth).  split 5e33c086... -> 9ed1c93a5477907a69a41ceeb577feb0.  MANIFEST ONLY:
+#   _t1.ec 2 -> 3 admits.  Eqv_OCMA_sign's LOOP now typechecks and its `while`
+#   applies -- the two sign loops align -- leaving the body and the entry/exit
+#   admitted.  Statement digests unchanged (3d9e3a2e... etc).
+#   NO CERTIFIED SOURCE, NO GATE MACHINERY CHANGED.
+#
+# 2026-08-09.  split 9ed1c93a... -> 4d616074049f35b7bee39767ca2596f0.  MANIFEST ONLY:
+#   _t1.ec 3 -> 2 admits.  Eqv_OCMA_sign's LOOP BODY is discharged; only the
+#   entry/exit remains.  Statement digests unchanged (3d9e3a2e... etc) -- the
+#   proof added two bound conjuncts to the `while` invariant, which is
+#   proof-internal, so pinning the statement while writing the proof worked as
+#   intended.
+#   Two must-fail controls RUN SERIALLY (the parallel-load lesson) and graded by
+#   FAILURE REASON, not by exit status:
+#     A  leaves-window index perturbed by +1  -> fails IN the hresult block,
+#        "[by]: cannot close goals".
+#     B  `tidx{2} < nr_trees 0` deleted from the invariant with the peel depth
+#        HELD FIXED (replaced by `tidx{2} <= tidx{2}`, same conjunction shape,
+#        so no intro pattern shifts) -> fails at the end of hchar, "cannot prove
+#        goal (strict)".  B is the one that matters: it shows the added bound is
+#        load-bearing rather than decoration.
+#   NO CERTIFIED SOURCE, NO GATE MACHINERY CHANGED.
+#
+# 2026-08-09 (second).  split 4d616074... -> 956c9acfd4ddd7398890f113855a4a28.  MANIFEST ONLY:
+#   _t1.ec 2 -> 1 admit.  Eqv_OCMA_sign IS FULLY PROVED -- entry, body and
+#   exit.  The single remaining admit is t1_opre_bound itself.  Statement
+#   digests unchanged (3d9e3a2e... etc): the proof strengthened the `while`
+#   invariant with the lidxs <-> os coverage relation, which is proof-internal.
+#   WHY THE INVARIANT HAD TO GROW, since "prove the entry and exit" sounds like
+#   it should not touch the body: a cli dump showed the exit obligation reads
+#   `forall sig_L os_R sigFORSTW_R, ... => <post mentioning os_R>` while the
+#   invariant never mentioned `os`.  That goal is not hard, it is UNPROVABLE --
+#   its conclusion constrains a variable its hypotheses do not name.  So the
+#   coverage relation moved into the invariant and all three parts were proved
+#   against the new one.
+#   Two must-fail controls, SERIAL, graded by FAILURE REASON:
+#     C  invariant tail off by one (drop (n+1) for drop n) -> fails in the BODY
+#        at the cov_step rewrite, "nothing to rewrite".
+#     D  `idxs.`2 < k` deleted from the coverage ranges with the conjunction
+#        shape HELD FIXED (becomes `idxs.`2 <= idxs.`2`) -> fails in the ENTRY
+#        at flat_inj, "the given proof-term proves 0 <= idxs.`2 < k, it does
+#        not apply to the goal".
+#   C and D fail in DIFFERENT halves, which is the point: they show the body's
+#   list bookkeeping and the entry's index inversion are each load-bearing, and
+#   neither is closing for the other's reason.
+#   NO CERTIFIED SOURCE, NO GATE MACHINERY CHANGED.
+#
+# 2026-08-09 (third).  split 956c9acf... -> 5cb564d13db1f92b6d47313ec757a9ab.  MANIFEST ONLY:
+#   Eqv_OCMA_sign's statement digest moves 3d9e3a2e -> b4fc971e, DELIBERATELY.
+#   Its post now restates its pre conjunct for conjunct: `call (: I)` against an
+#   abstract adversary needs `={arg} /\ I ==> ={res} /\ I`, and the first
+#   version dropped the leavess and xs characterisations from the post, so
+#   t1_opre_bound's forge call could not have used it.  Caught by trying to use
+#   the lemma, not by review -- which is the argument for landing the consumer.
+#   The sign call writes neither leavess, xs nor sks; the exit gained two
+#   `exact`s.  Admit count unchanged at 1.
+#   Between this and the previous entry, the heaviest smt step inside
+#   t1_opre_bound was GROUNDED (83653f5) -- watched source, outside the hashed
+#   set, so it moved no identity; it is what took the gate from RED to GREEN.
+#   NO CERTIFIED SOURCE, NO GATE MACHINERY CHANGED.
+#
+# 2026-08-10.  split 5cb564d1... -> 6d3c200eda6474194875caf8dc640097.  MANIFEST ONLY:
+#   cert-watched-split.tsv records scratch/_t1.ec at 1 -> 0 admits, because
+#   t1_opre_bound's win condition (T1-T5) is now DISCHARGED.  The T1 branch of
+#   Q = T1 + T2 + T3 is admit-free, as T2 and T3 already were.
+#   NO CERTIFIED SOURCE, NO GATE MACHINERY CHANGED.  The watched sources are
+#   deliberately outside the hashed set (see the header of that manifest), so
+#   the ~200 lines of new proof in scratch/_t1.ec move no identity by
+#   themselves; what moves it is the recorded expectation about them, which is
+#   exactly the property that makes the count an assertion rather than a note.
+#   All three pinned statement digests are UNCHANGED -- 035f68ac / 1666e835 /
+#   b4fc971e -- so nothing was proved by weakening what was claimed.
+#   The new helper t1_win leans only on GprocVI, FxChain and GprocFORSC10, all
+#   three IN closure-c10-split.txt and all three at admit=0 axiom=0 sorry=0
+#   (checked, not assumed -- the file's own note about pkfromsig_cf is that
+#   reaching for an uncertified lemma would pull it into the cone).
+#
+# 2026-08-10 (second).  split 6d3c200e... -> ed5ddead0a28bdc0f462af81e53c7ef7.
+#   THE BIGGEST DELIBERATE MOVE THIS FILE HAS RECORDED: T1/T2/T3 ARE PROMOTED
+#   INTO THE CERTIFIED CLOSURE, so this re-baseline covers CERTIFIED SOURCE and
+#   GATE MACHINERY, not just a manifest.  Four things moved:
+#   (1) closure-c10-split.txt 24 -> 28: GprocT1Opre, GprocT2Trh, GprocT3Trco
+#       (VERBATIM copies of scratch/_t1,_t2,_t3.ec -- no proof edits) and the new
+#       GprocQBound.ec, which composes them into `gproc_Q_bound`.
+#   (2) cert-statements-split.tsv 87 -> 95 pins; EXPECT_PINS moved with it.  The
+#       seven relocated digests are BYTE-IDENTICAL to the watched ones
+#       (035f68ac/1666e835/b4fc971e/ceea05ba/0a691522/d154db53/76a240c0), which
+#       is the check that relocation changed nothing but location.
+#   (3) cert-baseline-split.tsv +16 census rows, ALL module:/operand:/
+#       clone-discharge:.  ZERO new admit/axiom/declare-axiom rows -- promotion
+#       grounds the Q bound without growing the assumption set.
+#   (4) cert_gate_split.sh: the watched phase's `-ge 3` anti-truncation FLOOR
+#       became the committed EXPECT_WATCHED=0.  A floor cannot say "deliberately
+#       none left".  The replacement is strictly stronger (it also fires on an
+#       unexpected addition) and was tested in isolation at 0/1/3 rows; the
+#       integration case is honestly NOT covered -- see the note at the guard.
+#   cert-watched-split.tsv keeps its header and history but has ZERO data rows:
+#   the three files are covered by PHASE 1/1b/1c/1d/1e as closure TARGETS now,
+#   which is strictly more than the watched phase gave them.
+#   WHAT THIS DOES NOT DO: it does not discharge the capstone's H-TREE-MULTI
+#   premise.  SphincsC10CapstoneWired.ec:566 carries exactly `gproc_Q_bound`'s
+#   statement at R_fors_p(F), and its mtree_* reals ARE instantiable binders --
+#   but F is not declared disjoint from 9 of the 11 modules the composition
+#   needs, so it does not typecheck there.  Wiring it requires narrowing a
+#   headline theorem's hypothesis and is left as a deliberate decision.
+#
+# 2026-08-10 (third).  split ed5ddead... -> 084506685293796aaad5168edd0cfa67.
+#   THE Q LEG IS WIRED INTO THE CAPSTONE.  New closure member GprocQWired.ec
+#   (closure 28 -> 29, pins 95 -> 96, EXPECT_PINS with it).  Census delta ZERO --
+#   the file declares one lemma and no module/op, so it adds no baseline row and
+#   no assumption.
+#   WHAT MOVED, IN CONTENT: EUFCMA_SPHINCS_PLUS_C10_GROUNDED discharges the
+#   H-TREE-MULTI premise by instantiating the tree reals at Q ITSELF, so its RHS
+#   carries Q = Pr[EUF_CMA_Gproc_I(R_fors_p(F)) : res /\ !covered] unreduced --
+#   and that file says so in terms ("nothing here bounds it below 1, and if
+#   Q = 1 this bound is as uninformative as the free-real version was").
+#   EUFCMA_SPHINCS_PLUS_C10_QWIRED instantiates the SAME parametric capstone at
+#   the three branch advantages instead, discharging the premise via
+#   gproc_Q_bound -- by a REDUCTION rather than by reflexivity.  Q is replaced by
+#   one SM_DT_OpenPRE and two SM_DT_TCR_C terms.
+#   NOTHING IN SphincsC10CapstoneWired.ec IS EDITED: QWIRED derives from the
+#   parametric lemma, so every pinned digest in that file is unmoved and the
+#   GROUNDED lemma remains available beside it.
+#   THE PRICE, STATED: F carries nine more separations, so QWIRED applies to
+#   strictly fewer forgers than GROUNDED.  That narrowing is NECESSARY, not
+#   decorative -- removing even one (-EUF_CMA_Gproc_V) makes the proof fail with
+#   "the module R_fors_p(F) is not allowed to use the module(s) F".  And it does
+#   NOT make the bound numerically meaningful: Pr[M.F.ITSRC10 ..] is still
+#   carried unreduced and remains the honest headline term.
+#
+# 2026-08-11.  split 08450668... -> 42d12f2c959fb7f0dde179e30989e33f.
+#   TWO CHANGES, both from the 2026-08-10 adversarial review (GPT-5.6 + Kimi K3,
+#   run independently; they converged on the state being sound and diverged on
+#   what to do next, which is where the value was).
+#
+#   (1) QWIRED ANTI-VACUITY, COMMITTED AND GATED.  EUFCMA_SPHINCS_PLUS_C10_QWIRED
+#   adds NINE module separations to the forger F; every separation narrows the
+#   theorem, and an unsatisfiable set would make it vacuous -- proved, gated,
+#   GREEN, and about nothing.  Both reviewers judged the set inhabited and found
+#   no F <-> R(F) circularity (EasyCrypt restrictions are negative, one-directional
+#   accessibility constraints).  Both ALSO said an uncommitted argument has zero
+#   certification value, which was fair: the witness existed only as an untracked
+#   scratch probe.  It is now `WitnessF` + `qwired_at_witness` in GprocQWired.ec,
+#   pinned (EXPECT_PINS 96 -> 97).  The witness is STATEFUL and calls its oracle
+#   -- a stateless module satisfies any {-X} vacuously and would witness nothing.
+#   The lemma states the REAL instantiated bound, not `true`, so the pin protects
+#   something: weakening its RHS to 0%r makes the apply stop matching (checked).
+#   Census +1 row, module: (MEANING), no ledger movement.
+#
+#   (2) PHASE 4 -- THE GRINDING MARGIN IS NOW RECOMPUTED, NOT QUOTED.
+#   FORS_C10.ec:89-91 justifies the "black-box route is a dead end" verdict with
+#   "~28.1 vs ~130.6 bits, ~102 lost" and says in the same breath that the script
+#   is NOT in this checkout.  Both reviewers named that the weakest receipt in the
+#   repo.  tools/forsc_grinding_margin.py is vendored BYTE-IDENTICAL from
+#   PQSigner_OS, cert-margin-split.tsv pins seven figures, and PHASE 4 recomputes
+#   and compares them every run; both new files join the hashed machinery set.
+#   Controls run before commit, each failing for its own reason: corrupt a value
+#   -> "committed X, computed Y"; drop a row -> truncation guard fires; change the
+#   script's output format -> "NOT PARSED (format drift?)" rather than a silent
+#   pass.
+#   CORRECTED 2026-08-11 (same day, GPT-5.6 adversarial review): the line here
+#   first said the phase "asserts the script's own 4 guardrail self-tests
+#   actually ran".  THAT WAS FALSE -- and it was a false claim about a CONTROL,
+#   which is the worst place for one.  The four `[guardrail N] .. : OK` lines are
+#   the HAPPY PATH of a normal run; the script's real negative controls live
+#   behind `--self-test` (forsc_grinding_margin.py:275) and the phase never
+#   invoked them.  It does now, and requires exit 0, the PASS line, and all 3
+#   controls present.  Two further controls were run on THAT check: making self-test exit 1
+#   -> "a guardrail did NOT fire when it must"; deleting one control's line ->
+#   "ran only 2/3 negative controls".  The first attempt at the second control
+#   was itself VACUOUS (my pattern missed an f-string, so the file was unchanged
+#   and it "passed"); it was diagnosed and redone rather than accepted.
+#   RETRACTED 2026-08-11 (later the same day, GPT-5.6 adversarial review, second
+#   pass; VERIFIED against source before retracting).  The sentence removed above
+#   claimed that invoking `--self-test` means "a guardrail neutered to print OK
+#   unconditionally is caught".  THAT IS FALSE.  `self_test()`
+#   (forsc_grinding_margin.py:275) takes an EARLY, SEPARATE path: it recomputes
+#   `ratio = p_forsc(1)/p_plain_fors(1)` and `T_LAST < T` ITSELF, and never
+#   executes normal guardrails 1-3 at lines 342-378.  So replacing those three
+#   guard blocks with unconditional `print(... : OK)` and no `failures.append`
+#   would still pass (i) the happy-path 4/4 count, (ii) `--self-test`, and (iii)
+#   all seven pinned numbers.  What `--self-test` DOES prove is that the
+#   underlying arithmetic inverts when the removed tree is shrunk -- a real
+#   control over the MODEL, not over the guard blocks.  The seven pinned values
+#   and the happy-path count are what actually constrain those blocks, and they
+#   constrain the NUMBERS, not the branch logic.
+#   THIS IS THE THIRD FALSE CLAIM I HAVE MADE ABOUT PHASE 4's CONTROLS in one
+#   day (first: "the 4 OK lines are self-tests"; second: a vacuous negative
+#   control on the fix; third: this).  The pattern is asserting what a control
+#   covers from what it was WRITTEN to cover, without reading the path it takes.
+#   NOT FIXED, DELIBERATELY -- owner decision 2026-08-11, doc-retraction only.
+#   Making `--self-test` exercise guards 1-3 requires editing
+#   tools/forsc_grinding_margin.py, which would BREAK the byte-identity with
+#   PQSigner_OS asserted in cert-margin-split.tsv's header -- turning a "not
+#   frozen" provenance gap into an actively false provenance claim.  The correct
+#   fix is upstream-first (fix in PQSigner_OS, re-vendor, re-pin), which is a
+#   two-repo change and is NOT done here.  The gap is left OPEN and NAMED.
+#   RELATED, unfixed and named: the gate pins only the LOCAL copy of the script.
+#   Byte-identity with PQSigner_OS is true at this revision (md5 verified both
+#   ways) but is a present-tense fact, not an invariant -- no upstream commit or
+#   blob is pinned.
+#   THIS CERTIFIES NOTHING.  The figures are heuristic generic-adversary
+#   estimates that no EasyCrypt result carries; 130.6 is a per-candidate WORK
+#   FACTOR, not a security level, and the pinned adv_log2_qh128 = -2.6 row is the
+#   honest reading at a large query budget.  A5-ITSR remains cited-tcb.
+#
+#   CORRECTION TO THE 2026-08-10 ENTRY ABOVE, which this file should not carry
+#   uncorrected: that entry said the promotion's 16 rows were "ALL module:/
+#   operand:/clone-discharge:" and concluded "ZERO new admit/axiom rows -- the
+#   promotion grounds the Q bound without growing the assumption set".  The
+#   admit/axiom half is true.  The conclusion as phrased is NOT: cert_gate_split.sh
+#   :503 counts clone-discharge IN THE LEDGER, and the receipts show LEDGER
+#   239 -> 240.  The row is EI_OPRE (GprocT1Opre.ec:284), a `proof *` clone of the
+#   standard library's ExactIter with BOTH obligations realized `by trivial`, so
+#   no axiom was installed and the substance survives -- but "the assumption set
+#   did not grow" was the gate's own vocabulary used wrongly, and in this repo
+#   that is the defect, not a nitpick.  Caught by Kimi K3, confirmed against the
+#   receipts.
+#
+# 2026-08-11 (second).  split 13ddbe2a... -> 16381ec3fbac29139601ec4c460ed1a0.
+#   THE Q LEG REACHES THE DEPLOYED LEVEL -- by PARALLEL-AND-PROMOTE, not in place.
+#   Adversarial review 2026-08-11 (GPT-5.6 + Kimi K3, independent) found that
+#   EUFCMA_SPHINCS_PLUS_C10_QWIRED had NO CONSUMER: the deployed chain still
+#   applied GROUNDED, so the shipped headline carried the unreduced Q that
+#   gproc_Q_bound exists to replace.  Calling the deployed result "Q-wired" would
+#   have been false.  The two reviewers AGREED on that and SPLIT on the fix, which
+#   is where the value was: Kimi argued in-place (no consumers, no doc quotes);
+#   GPT-5.6 argued that QWIRED is not a same-domain strengthening -- it NARROWS F
+#   by nine separations AND replaces an exact Q with an upper bound that may be
+#   larger -- so mutating a published name would hide both changes at once.
+#   GPT-5.6's mechanism was taken, and it matches this repo's own precedent
+#   (Tier 0 Step 2: "The older lemma stays -- it is not repaired, it is superseded
+#   for quotation").
+#   ADDED, all in GprocQWired.ec so the dependency runs FORWARD along closure
+#   order (C10DeployedInstance #22, C10DeployedCapstone #23 -> GprocQWired #29;
+#   editing the deployed file instead would have forced a closure reorder):
+#     EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_QWIRED
+#     EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_PINNED_ENCODER_QWIRED  <- CANONICAL
+#     deployed_qwired_at_witness   (Kimi's addition: the anti-vacuity receipt
+#       belongs at the level people quote, not one layer down; stated as the REAL
+#       instantiated bound, not `true`, after I first wrote it the weak way)
+#   VERIFIED: the three new statements carry Q-terms=0 and three named SM-DT
+#   advantages; the legacy pair still carry Q and their digests are UNMOVED
+#   (5bd600cb, 0458787f).  EXPECT_PINS 97 -> 100; both new deployed lemmas also
+#   added to PHASE 1b's by-name lemma checks.  Census delta ZERO.
+#   WHAT IS STILL NOT BOUGHT: nothing numeric.  Pr[M.F.ITSRC10 ..] is unreduced
+#   and remains the honest headline term; cert-margin-split.tsv's pinned
+#   adv_log2_qh128 = -2.6 is what that means at a large query budget.
+#   DOWNSTREAM, NOT DONE ON PURPOSE: PQSigner_OS carries a vendored snapshot at
+#   contracts/verification/easycrypt/c10-port/, pinned at commit 16fe480
+#   (2026-08-05, "run 26"), whose README headlines GROUNDED and unreduced Q.
+#   GPT-5.6 flagged it as needing sync.  It does NOT contain GprocQWired.ec or
+#   even the T1/T2/T3 promotion, so its README is ACCURATE FOR ITS SNAPSHOT and
+#   editing it would introduce a false claim.  The correct action is a deliberate
+#   re-snapshot in that repo; recorded here as a follow-up, not smuggled in.
+#
+# 2026-08-11 (third).  split 16381ec3... -> 4dbffae7ff5013ba1cff25e0be430d14.
+#   cdrafts-split/DarkSide.ec PROMOTED INTO THE CLOSURE (closure 29 -> 30, pins
+#   100 -> 105).  It is the pure combinatorial core of the direct ("DarkSide")
+#   FORS+C argument, it has been admit-free for some time, and until now NOTHING
+#   GATED IT -- required by no closure member, absent from the closure list, out
+#   of the identity hash.  Its proofs could have broken silently.  Promotion is
+#   also the prerequisite for the hybrid ITSRC10 route both reviewers converged on.
+#   LEDGER 240 -> 241, AND THAT IS SAID UP FRONT because the 2026-08-10 promotion
+#   note got precisely this wrong.  The one added census row is LEDGER-class
+#   (refined-const), not a meaning-carrier: it is ge1_t, `const t : { int | 1 <= t }`
+#   -- a FORS tree has at least one leaf.  Benign, trivially true at C10
+#   (t = 2^11 = 2048), and counted as an assumption anyway, which is the point.
+#   PINNED: ds_ge_1t (the engine of "FORS+C <= FORS"), forsc_le_fors, and the
+#   three milestones cover_all_pr / cover_some_le / ds_le_linear.
+#   WHAT THIS DOES NOT DO, so the closure count is not misread: DarkSide is an
+#   ABSTRACT theory that NOTHING CLONES.  Its `t` is abstract, so these lemmas
+#   hold for all t >= 1 -- stronger, but not yet connected to C10's t = 2048.
+#   That connection is part of the "concrete numeric instantiation" still missing,
+#   alongside the binomial mixture and the ROM/query-budget coupling.  Promoting
+#   the file gates the PROOFS; it discharges nothing and bounds nothing.
+#
+# 2026-08-11 (fourth).  split 4dbffae7... -> 011968debcdde4b514e27a55c510a090.
+#   cdrafts-split/DarkSideC10.ec ADDED (closure 30 -> 31, pins 105 -> 107):
+#   the DarkSide theory CLONED AT SPHINCS_PLUS.t.
+#   WHY IT MATTERS.  DarkSide is an ABSTRACT theory and NOTHING CLONED IT, so
+#   every lemma in it held "for all t >= 1" and was connected to the C10
+#   development by nothing.  Promoting it yesterday gated its proofs; this clone
+#   is what makes them say something HERE.  `t <- SPHINCS_PLUS.t` is the same t
+#   the whole development uses (const t = 2 ^ a, SPHINCS_PLUS.ec:65; a = 11 at
+#   C10, so 2048).  Deliberately NOT the literal 2048 -- cloning at the numeral
+#   would give arithmetic about a number, cloning at the scheme's own t gives
+#   facts about the scheme.
+#   LEDGER 241 -> 242, DECLARED BEFORE THE RUN rather than found after it.  Of the
+#   two added rows one is ledger-class: clone-discharge:star|realize:ge1_t.  It
+#   REALIZES its obligation from the proven ge2_t (SPHINCS_PLUS.ec:180) -- control:
+#   replacing that realize with `trivial` fails with "[by]: cannot close goals",
+#   so the discharge is load-bearing -- and no axiom is installed.  It is counted
+#   in the ledger anyway, per cert_gate_split.sh:503, and reported as counted.
+#   The other row is operand:.. DS_C10.t (bindings).
+#   WHAT IT DOES NOT BUY: nothing quantitative, and nothing about ITSRC10.  Three
+#   pieces still stand between here and a tight FORS+C bound -- the binomial
+#   mixture over a fresh candidate's instance load, the numeric evaluation at the
+#   deployed usage cap, and the ROM / query-budget game plus a coupling theorem.
+#   The last is the hard one: the ITSRC10 game as axiomatized has an abstract
+#   `mco` and no query bound, so a legal model wins it with probability 1.
+#
+# 2026-08-11 (fifth).  split 011968de... -> 06faaed72493301055e496347e721cb8.
+#   THE MIXTURE STEP IS PROVEN -- part (A) of the last combinatorial milestone.
+#   cdrafts-split/DarkSide.ec gains mixture_le_moment: for ANY finitely-supported
+#   distribution on the non-negative integers,
+#       E_G[ DS(G)^m ]  <=  E_G[ (G/t)^m ]
+#   i.e. the mixture over instance load is discharged down to a RAW MOMENT.
+#   `ds_le_linear` is what this file calls the HANDLE (:317); this lemma is the
+#   USE of that handle -- a distinction worth keeping, since the description had
+#   already drifted a step once today.
+#   MACHINERY: in_ler_exp (support-restricted monotonicity of expectation,
+#   Distr.ec:3201) + hasE_finite + ds_le_linear + ds_bnd + ler_pexp.  The premise
+#   is `is_finite (support dG)` rather than a bare `hasE` DELIBERATELY: it is the
+#   one a caller can discharge, and hasE_finite then supplies both summability
+#   obligations internally.
+#   AND IT IS SHOWN DISCHARGEABLE, NOT ASSERTED: mixture_le_moment_finite_ex
+#   instantiates the whole thing at dinter 0 n.  A lemma whose hypothesis no
+#   caller can meet is a theorem about nothing, and this session already produced
+#   one of those (a capstone with no consumer); the witness ships in the same
+#   commit.  Control: halving the majorant makes the in_ler_exp application stop
+#   matching ("the given proof-term proves:"), so the bound is load-bearing.
+#   WHAT REMAINS -- and (A) must not be read as more than it is.  This does NOT
+#   evaluate the moment and says NOTHING about the binomial.  Part (B), the
+#   instantiation G ~ Bin(qs, 1/N) and its 12th raw moment, is untouched.
+#   CORRECTION 2026-08-11 (same day; GPT-5.6 and Kimi K3 found it independently):
+#   this entry FIRST said "EasyCrypt has no binomial distribution in its
+#   distributions/ theories at all, so both the distribution and its moments
+#   would be hand-built".  THAT IS FALSE.  The gate's own toolchain (r2026.02,
+#   in-container) has Distr.ec:2774 `mbin`, :2795 `dbin`, :2797 `dbin1E` (the
+#   exact PMF), :2801 `ll_dbin`, :2809 `supp_dbin`.  How I got it wrong is the
+#   useful part: I grepped for dbin, GOT A HIT IN Distr.ec, and dismissed it,
+#   then asserted absence from the FILENAME listing of distributions/ rather than
+#   from contents -- evidence against the hypothesis, discarded without following
+#   it.  Worse, DarkSide.ec:319 -- in the very file I was editing -- already
+#   writes `E_{G~dbin(1/N, qs)}[...]`, so the name was in front of me.
+#   CONSEQUENCES, since this changed the scoping materially: the prerequisite I
+#   called the main risk is already done.  `supp_dbin` gives finite support, which
+#   discharges mixture_le_moment's premise for the binomial directly, so (A)
+#   composes with dbin immediately.  What IS still absent from stdlib: Stirling
+#   numbers, a dlist-count-to-dbin coupling lemma, and concentration inequalities
+#   (the "no concentration inequalities" statement in DarkSide.ec's header stands).
+#   Beyond (B) the numeric
+#   evaluation and the ROM/query-budget coupling still stand between here and any
+#   ITSRC10 result.  Census delta ZERO; pins 107 -> 109.
+#
+# RE-BASELINE 2026-08-11 (third today): split 06faaed7... -> f14321e8...
+#   CAUSE, and it is entirely comment text: the countermodel/retraction commit
+#   edited four cone members (DarkSide.ec, FORS_C10.ec, FORS_C10_Multi.ec,
+#   GprocQBound.ec) and cert_gate_split.sh, all of which are inside the hashed
+#   set.  NOTHING SEMANTIC MOVED, and the run proves it rather than asserting it:
+#   CLOSURE_COMPILED=31/31, PHASE 1c statement digests unchanged, PHASE 2 census
+#   delta ZERO (no new admit/axiom/clone-discharge/refined-const of any class),
+#   PHASE 2b/2c canaries caught, PHASE 3 controls at declared polarity+reason,
+#   PHASE 4 margin 7/7 with negative controls 3/3.  The ONLY failure in the run
+#   was this drift line.  Receipt: 202 OK / 1 FAIL, toolchain r2026.02, 25
+#   prover configurations, in-container.
+#   PREDICTED BEFORE THE RUN, and the prediction is the point: I called digests
+#   unchanged, census delta zero, and INPUTS_SHA256 moving.  All three held.
+#   ONE PART OF THAT PREDICTION WAS WRONG and is recorded because the error class
+#   matters: I also claimed the split/fork rows were "documentary -- not read by
+#   any script".  FALSE.  cert_gate_split.sh:94 awk-reads the `split` row and
+#   compares it to the computed INPUTS_ID.  I had grepped the scripts for the
+#   HASH VALUE rather than for the MECHANISM, and concluded absence from a search
+#   for the wrong token -- the same error that produced the `dbin` retraction
+#   higher up this file.  Twice in one day, same shape.
+# RE-BASELINE 2026-08-12: split f14321e8... -> eb589caf...
+#   CAUSE: the CHARGED + Q-WIRED composition landed as closure member #32,
+#   cdrafts-split/GprocChargedQWired.ec (EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED
+#   + charged_qwired_at_witness), plus its two statement pins, its check_lemma
+#   line, EXPECT_PINS 109 -> 111, and the closure-list row.  Every one of those
+#   files is inside the hashed set, so the identity had to move.
+#   WHAT THE RUN PROVES, rather than what I asserted: CLOSURE_COMPILED=32/32,
+#   statements pinned=111/111, and -- the important row --
+#   `cone: keys now=1099 baseline=1099 | ROWS now=1179 baseline=1179 |
+#   added=0 removed=0`.  A NEW CLOSURE ROOT ADDED ZERO CENSUS ROWS, because
+#   everything it consumes was already in the cone: it is pure composition of
+#   EUFCMA_SPHINCS_PLUS_C10_CHARGED with gproc_Q_bound.  ledger stays 242.
+#   Receipt: 207 OK / 1 FAIL (this drift line only), r2026.02, 25 provers.
+#   PREDICTION SCORECARD, recorded because I lost it.  Before the run I predicted
+#   census additions NONZERO ("a new closure ROOT contributes its own rows") and
+#   said explicitly that I expected GPT-5.6's "expected PHASE-2 census delta zero"
+#   to be WRONG.  GPT-5.6 WAS RIGHT AND I WAS WRONG.  My model of the census was
+#   file-based; it is CONE-based, so a root whose dependencies are already
+#   covered contributes nothing.  Second prediction of the day I lost to the same
+#   reviewer -- the first was that the split/fork rows were "documentary".
 # tree	hash
-split	837da05755a881bedc898d39eeec0185
+split	eb589cafe306046da0a5d7ba0820c7e9
 fork	7ab20d2ab0ba2c1f3942408a193b4836

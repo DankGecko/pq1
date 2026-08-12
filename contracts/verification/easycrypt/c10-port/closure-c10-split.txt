@@ -22,3 +22,11 @@ SphincsC10CapstoneCharged
 C10DeployedInstance
 C10DeployedCapstone
 C10SpecControls
+GprocT1Opre
+GprocT2Trh
+GprocT3Trco
+GprocQBound
+GprocQWired
+DarkSide
+DarkSideC10
+GprocChargedQWired
