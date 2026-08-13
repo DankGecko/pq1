@@ -250,3 +250,54 @@ model-level object the deployment gives nobody the ability to build.
 Not yet mechanised: the `Pr[..] = 1%r` packaging (oracle losslessness plus WOTS
 correctness for the honest query). Each win conjunct was checked at source
 individually; what is missing is assembly, not argument.
+
+### UPDATE 2026-08-13 (later) — `Pr[BadEnc] = 1` is now MECHANISED
+
+The correction above said the `Pr[..] = 1%r` packaging was "not yet mechanised".
+**It now is**, admit-free, in `experiments/wots-badenc/base/BadEncCountermodel.ec`:
+
+```
+lemma badenc_is_one &m :
+     P cm => cm <> cm' => encode_msgWOTS cm = encode_msgWOTS cm'
+  => Pr[Game4_WOTSTWES_BadEnc(A_coll).main() @ &m
+         : res /\ BadEncFlag.badenc] = 1%r.
+```
+
+Compiles `RC=0`, ledger class 0. Backed by **four must-fail controls**
+(`controls/Ctl{A,B,C,D}.ec`, driven by `runctl.sh`), each failing at a distinct
+site: A/B/C each replace ONE hypothesis by `true` — intro arity unchanged, so the
+control deletes information rather than breaking syntax — and D mutates the
+conclusion to `= 0%r`.
+
+**What made it tractable:** rather than a cross-procedure loop invariant relating
+the oracle's accumulator to `verify`'s, both loops are pinned to one functional
+characterisation `pkfs_fun`, so WOTS correctness for the honest query becomes
+syntactic. `altx_query_computes_fun` is the oracle half; `verify_replay_valid` is
+stated parameter-free so the game-level call needs no `exists*`.
+
+**Three limits, stated because they bound what this result means:**
+
+1. **It is CONDITIONAL and that is not closed.** `cm`, `cm'` remain free ops and
+   the colliding pair is a HYPOTHESIS. The content is *"if an encoding collision
+   on the constant-sum surface exists, the term is 1"* — not an unconditional 1.
+   Exhibiting a **deployed-geometry** pair is still residual **Q2b**.
+   Satisfiability was checked so the statement is not vacuous: `encode_msgWOTS`
+   is free (`:624`), no top-level axiom of the fork constrains it, and a constant
+   encoder models all three hypotheses.
+2. **"Axiom-free" means none were ADDED.** The proof is relative to the ambient
+   declared parameters (`ge2_len`, `ge1_c`, lossless `dpseed`/`ddgstblock`). It
+   never unfolds `cf`, so it does not use `ch0`/`chS`, and it sits outside
+   `section Proof_M_EUF_GCMA_WOTS_TW_ES_NPRF`, so the section-local
+   `declare axiom`s are out of scope — `A_coll`'s losslessness is **proved**.
+3. Only **concrete-oracle** losslessness of `A_coll` is proved. Instantiating the
+   full exported charged inequality at `A_coll` would additionally want general
+   `A_coll(O,OC)` losslessness. Not needed here; not done.
+
+So the position is now mechanised end to end: **there is no bound on the BadEnc
+term at the WOTS-TW layer, because it is 1.** The bound must live at +C, and will
+require a named hardness assumption on `encode o ThC`. This countermodel is what
+makes that assumption unavoidable rather than lazy.
+
+**Unchanged:** not an attack. C10's WOTS layer never encodes an adversary-chosen
+value (`sphincs-c10/src/fors.rs:265-268`); `A_coll` is a model-level object the
+deployment gives nobody the ability to build.
