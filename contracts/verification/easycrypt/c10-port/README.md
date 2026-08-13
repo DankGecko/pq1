@@ -301,3 +301,60 @@ makes that assumption unavoidable rather than lazy.
 **Unchanged:** not an attack. C10's WOTS layer never encodes an adversary-chosen
 value (`sphincs-c10/src/fors.rs:265-268`); `A_coll` is a model-level object the
 deployment gives nobody the ability to build.
+
+### CORRECTION 2026-08-13 (third) — "seed-withholding is the lever" is REFUTED
+
+Every `UPDATE`/`CORRECTION` above says the BadEnc bound "must live one layer up,
+at +C, where seed-withholding finally applies". **The seed-withholding part is
+wrong**, and it is wrong in a way that would have produced an unsound assumption.
+Both external reviewers found it independently and I verified it at source:
+
+* `WOTS_TW_ES.ec:2526` — `proc choose() : unit { O.query, OC.query }`: the
+  adversary **may query the collection oracle during `choose`**.
+* `O_THFC_Default.init(ps)` runs **before** `A.choose()` — `OC` is keyed with the
+  real `ps` throughout.
+
+So withholding the *value* of `ps` blocks only oracle-free **offline** computation,
+which is irrelevant to a collision the adversary can obtain by querying. GPT-5.6:
+*"a useful target-selection timing condition, not a hardness proof."*
+
+**Why it matters beyond wording:** writing the +C assumption while believing
+withholding is the protection yields a game whose `choose` has no `OC` — which
+**under-models the real adversary**. That is a silent soundness gap, not a typo.
+The real levers are per-index freshness, `dist_wgpidxs`, and `ThC`-mediation.
+
+### Two further corrections to statements above
+
+1. **"Only the specific deployed adversary."** Wrong. `R_int_WOTSTW` is defined
+   for *every* `Adv_MEUFGCMA_WOTSC` (`WOTS_C_Interactive.ec:1753`), so a +C
+   theorem can be **uniform over all admissible +C adversaries**, not merely at
+   `R_top_C(F)` — a stronger statement than the one claimed above.
+2. **"Quantitatively vacuous."** Overstated. `Pr[G] <= terms + Pr[bad]` is the
+   Bellare–Rogaway shape and is never `< 1` for all `A`; the defect is the absence
+   of a bad-event bound **at the quotation site**, not in the theorem. Likewise the
+   countermodel proves probability 1 *conditional on a gated pair it does not
+   construct* — the precise claim is that **the generic theory cannot supply a
+   nontrivial bound**.
+
+### The number, and what it means for expectations
+
+`|C_T| = [x^205]((1-x^8)/(1-x))^43 = 2^114.0941`; surface fraction `2^-14.906`;
+model-level birthday cost `~2^71.95` ThC evaluations. This **reproduces this
+repo's own** `experiments/tcollres-leg/FINDING-def11-is-unsound-at-c10.md:50`
+(`2^114.094`, `~2^72.3`) — convergent confirmation from an independent model, not
+a new defect. Consequence: at `(len=43, w=8, target_sum=205)` this term is
+**~2^-72-class wherever it is placed and however it is named**. Moving it does not
+make it small.
+
+**Deployed classification unchanged, and this is not an attack:** C10's WOTS layer
+never encodes an adversary-chosen value (`sphincs-c10/src/fors.rs:265-268`). The
+model grants a freely chosen message; the deployment does not.
+
+### Agreed next unit
+
+Move the paid term to the +C layer as `T-COLL-RES-ENUM(encode o ThC)` — whose
+discriminator is `d <> d'` (the repo's own **B2** branch,
+`experiments/tcollres-leg/Extraction.ec:66-76`), which must **not** require
+`c' = grindC` (verify recomputes from the *supplied* counter) and must **keep
+`OC` live during `pick`** — *and* carry the `2^71.95` figure to the headline
+rather than seeking a placement that hides it.
