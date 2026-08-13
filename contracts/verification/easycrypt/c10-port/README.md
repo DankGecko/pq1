@@ -216,3 +216,37 @@ isolated "seed-withholding" step. There is no such step — the admitted goal is
 universal statement about a free op with no `ps` in it, so no probabilistic
 argument at any layer can prove it. See
 `scratch/FINDING-seed-withholding-has-no-isolated-step.md`.
+
+### CORRECTION 2026-08-13 (same day) — the charge is a STRUCTURE, not a small number
+
+The `UPDATE` above is accurate on every point except its implied quantity, and
+the omission matters enough to fix in place rather than leave to be discovered.
+
+**The BadEnc term is 1 at the WOTS-TW layer.**
+`experiments/wots-badenc/base/BadEncCountermodel.ec` (compiles, 0 admits,
+0 axioms) proves the load-bearing half: `verify_encode_transfer` shows
+verification reads the message ONLY through its codeword
+(`pkWOTS_from_sigWOTS` computes `em <- encode_msgWOTS m` at `:2341` and its loop
+touches `em` alone), so under an encoding collision a signature for `cm` *is
+already* a signature for `cm'`. The explicit adversary `A_coll` — one query,
+forge by REPLAY, never touch `OC` — therefore satisfies every win conjunct.
+
+**So the charged theorem, while TRUE, is quantitatively VACUOUS at a generic
+`Adv_MEUFGCMA_WOTSTWESNPRF`: its right-hand side is >= 1.**
+`cd/GprocQWiredWotsCharged.ec` inherits this. Nothing above is retracted — the
+admit really is gone, the closure really does build, the reduction really is
+sound — but it buys an **honest structure**, not a smaller bound.
+
+That is the exact formal content of "MM45's WOTS-TW theorem is false at deployed
+C10 geometry". The bound has to live one layer **up**, at +C, where the WOTS
+message is `ThC ps ad x c` and the adversary cannot choose it freely — and it
+will require a **named hardness assumption on `encode o ThC`**, not a proof. The
+countermodel is what makes that assumption unavoidable rather than lazy.
+
+**Still not an attack, and unchanged:** C10's WOTS layer never encodes an
+adversary-chosen value (`sphincs-c10/src/fors.rs:265-268`). `A_coll` is a
+model-level object the deployment gives nobody the ability to build.
+
+Not yet mechanised: the `Pr[..] = 1%r` packaging (oracle losslessness plus WOTS
+correctness for the honest query). Each win conjunct was checked at source
+individually; what is missing is assembly, not argument.

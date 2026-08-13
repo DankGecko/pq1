@@ -8,3 +8,4 @@ cd/*
 *.out
 *.eco
 !cd/GprocQWiredWotsCharged.ec
+!base/BadEncCountermodel.ec
