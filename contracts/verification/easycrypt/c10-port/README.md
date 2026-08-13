@@ -161,3 +161,58 @@ this snapshot specifically so this finding travels with the artifact.
 **Scoping verdicts** worth reading before picking up this work:
 `scratch/scope_fextractop_VERDICT.md`, `scratch/scope_q2b_VERDICT.md`,
 `scratch/wots_leg_state_2026_08_12.md`, `scratch/review_2026_08_11_VERDICT.md`.
+
+---
+
+## UPDATE 2026-08-13 — the WOTS admit is REFUTABLE, and a charged replacement exists
+
+Everything in this section lives in `experiments/wots-badenc/` and
+`scratch/wots_admit_is_injectivity.ec`. **None of it is certified.** The gate was
+re-run after this work with `INPUTS_SHA256` **byte-identical**
+(`eb589cafe306046da0a5d7ba0820c7e9`, 208 OK / 0 FAIL, receipt in
+`scratch/RECEIPT-gate-2026-08-13.md`), which is the measurement that this work
+sits entirely outside the certified surface. Treat it as a **proposal**.
+
+**The `:1513` admit is not merely unproven — its statement is FALSE at deployed
+geometry.** `scratch/wots_admit_is_injectivity.ec` (0 admits, 0 axioms, gated
+under both drivers with four graded negative controls) proves the open goal is
+*equivalent* to injectivity of `encode_msgWOTS` on the constant-sum surface, and
+that at C10's parameters `2^(8*n_m) = w^len * 2^127` — the encoder is
+`2^127`-to-one. A single surface collision refutes **the whole five-hypothesis
+lemma**, not just its subgoal, because `is_chwcoll` (`:763`) and `is_chwpre`
+(`:808`) share the conjunct `BaseW.val em'.[i] < BaseW.val em.[i]`, which under a
+collision is `x < x`.
+
+**Consequence that reverses an assumed ordering: Q2b cannot be wired before the
+admit is removed.** Pinning `encode_msgWOTS` to the deployed digit map would make
+the base file *inconsistent-if-completed*. Checked that this is not already live:
+`GprocQWired`'s `hencb` is the encode **bridge**, not the identification, so the
+current artifact is consistent.
+
+**The replacement, and it costs nothing.** `admit_free_caller_split` derives
+`encode m = encode m' \/ has_chwpre ...` from the already-complete
+`nhchwcoll_hchwpre` (`:1476`). The left disjunct is the `BadEnc` event. In
+`experiments/wots-badenc/base/` the admit is gone and the WOTS-TW bound carries
+an explicit charge instead; `experiments/wots-badenc/cd/` threads it through the
+closure (**all 32 closure files build**), and
+`cd/GprocQWiredWotsCharged.ec` reduces the previously-raw
+`Pr[M_EUF_GCMA_WOTSTWESNPRF ..]` summand — **soundly, for the first time** —
+with an anti-vacuity witness whose must-fail control is `runctlw.sh`.
+
+**This supersedes the bullet above** that says reducing that summand "must NOT be
+done by applying the existing WOTS theorem". That warning was correct while the
+admit stood. The correct statement now: it must not be done by applying the
+**pre-charge** theorem; the charged one is admit-free.
+
+**Still open, and it is research rather than plumbing:** bounding
+`Pr[Game4_WOTSTWES_BadEnc(..) : res /\ BadEncFlag.badenc]`. This is where +C
+seed-withholding finally applies (one layer up the messages are `ThC ps ad x c`,
+so `encode o ThC ps ad .` is seed-keyed) — and where a **type-level** collision
+must not be mistaken for a **reachable** `ThC`/SHA-256 one. Two losslessness
+obligations are also carried as premises rather than discharged.
+
+**Retracted here:** the previous session's recommendation to spend a day on an
+isolated "seed-withholding" step. There is no such step — the admitted goal is a
+universal statement about a free op with no `ps` in it, so no probabilistic
+argument at any layer can prove it. See
+`scratch/FINDING-seed-withholding-has-no-isolated-step.md`.

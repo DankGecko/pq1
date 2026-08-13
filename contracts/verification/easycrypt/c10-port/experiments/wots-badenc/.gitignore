@@ -1,0 +1,10 @@
+# Only the EDITED files are tracked; setup.sh restores the verbatim copies.
+base/*
+probe/*
+cd/*
+!base/WOTS_TW_ES.ec
+!probe/WOTS_TW_ES.ec
+!cd/XmssmtCC_All.ec
+*.out
+*.eco
+!cd/GprocQWiredWotsCharged.ec
