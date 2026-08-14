@@ -423,3 +423,53 @@ adversary-chosen value (`sphincs-c10/src/fors.rs:265-268`).
 byte-identical** (`INPUTS_SHA256 eb589cafe306046da0a5d7ba0820c7e9`, receipts in
 `scratch/RECEIPT-gate-2026-08-1{3,3b,4}.md`). This whole development is a
 **proposal**; promoting it would be a deliberate decision to move that hash.
+
+### CONCLUSION 2026-08-14 — `Pr[T_COLL_RES_ENUM]` cannot be usefully bounded
+
+The obvious next question after moving the charge is "how big is the new term?".
+**There is no bound to find**, and the reason is a **parameter fact**, not a proof
+gap. Full argument in `scratch/FINDING-tcollres-cannot-be-bounded.md`.
+
+`T_COLL_RES_ENUM` is a hardness **assumption**. Reducing it to a standard THF
+assumption is closed off: the **B2** branch — distinct digests, equal codewords —
+is exactly what S-TCR(+C) does not cover, which is why the game exists at all, so
+a reduction would be circular. The only quantitative statement available is the
+cost of the best generic attack:
+
+```
+|C_T| = [x^205]((1-x^8)/(1-x))^43 = 2^114.0941
+surface fraction = 2^-14.9059
+birthday        ~ 2^71.95 ThC evaluations   (memoryless, van Oorschot–Wiener)
+```
+
+**No proof can bound an advantage below its best generic attack**, so this term is
+~2^-72-class at deployed parameters and no placement, naming, or extra hypothesis
+changes it. Reproduced independently twice — by an external model from source
+alone, and by this repo's own
+`experiments/tcollres-leg/FINDING-def11-is-unsound-at-c10.md:50`.
+
+**Stated carefully.** `tools/forsc_grinding_margin.py:143` sets
+`WORK_FLOOR_BITS = 96`, so this leg sits ~24 bits below it. That is a statement
+about **the WOTS leg's proof term** — not a claim that the product has 72-bit
+security. This repo's own finding warns that two different "96"s exist here
+(`:128-129`); do not conflate them.
+
+**Not an attack, and not a false assumption.** C10's WOTS layer never encodes an
+adversary-chosen value (`sphincs-c10/src/fors.rs:265-268`): the birthday adversary
+needs a freely chosen message, which the **model** grants and the **deployment**
+does not. And the assumption is not false — it simply cannot be assumed above its
+generic attack.
+
+**What the WOTS track therefore bought:** the obstruction is now *located*. The
+`:1513` admit is gone; its replacement charge is provably 1 at the WOTS-TW layer,
+so it could never have been bounded there; it is moved uniformly over all +C
+adversaries to a named assumption at the keyed-digest layer; and that
+assumption's generic attack is computed exactly. **The obstruction is
+`(len=43, w=8, target_sum=205)` — a parameter choice, not a missing lemma.**
+
+**The only honest next units:** machine-check the count (nothing in EasyCrypt
+states `2^114.0941` today — feasibility unmeasured); carry the figure to the
+headline in the `forsc_grinding_margin.py` genre; and a **parameter conversation,
+which is an owner decision** — changing `(len, w, target_sum)` changes
+`sig = 4008`, the on-chain verifier, and every KAT. Do not spend further effort
+trying to prove a bound on this term.
