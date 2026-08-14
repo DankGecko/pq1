@@ -166,3 +166,36 @@ They are not in conflict. **GPT decides placement; Kimi decides expectations.**
 So the next unit is **both**: build the +C game so the statement is uniform, and
 carry the 2^71.95 number to the headline honestly rather than hunting for a
 placement that hides it.
+
+---
+
+## 6. CORRECTION TO MY OWN VERIFICATION — `Extraction.ec` is STALE, and I said "VERIFIED"
+
+I cited `experiments/tcollres-leg/Extraction.ec:66-76` as establishing the B1/B2
+split and marked it **VERIFIED**. I verified the *prose*. I did not check that the
+file **compiles against current source**. It does not:
+
+```
+easycrypt compile -I base-c10-split -I cdrafts-split -I experiments/tcollres-leg \
+  experiments/tcollres-leg/Extraction.ec
+[critical] Extraction.ec:51  no matching operator, named `encode_msgWOTS_C'
+__RC=1
+```
+
+`coll_splits_by_level` declares `(m m' : msgWOTS)` and applies `ThC ps ad m c`,
+but current `ThC` takes `m : dgstblock` (`WOTS_C_Real.ec:214`). The file predates
+the message-type split — **the same staleness that killed
+`RESULT-premise-reduction.md`**, and the sixth `experiments/` file to go stale.
+
+**The concept survives; the lemma does not.** B1 (equal `ThC` digests → existing
+S-TCR(+C)) versus B2 (distinct digests, equal codewords → `T_COLL_RES_ENUM`) is
+still the right split, and `T_COLL_RES_ENUM`'s `dg <> dg'` discriminator is still
+right. But the split must be **restated against current types** before any
+reduction can consume it. Do not `require Extraction.ec`.
+
+**The lesson is about my own rule.** "Verify their load-bearing citations" was
+applied at the wrong depth: I confirmed the citation *says* what the reviewer
+claimed, not that it is *live*. For a repo with six known-stale experiment files,
+"the text is there" and "the lemma holds in this tree" are different facts, and
+only the second one can be built on. Compile-test cited lemmas from
+`experiments/` before consuming them.

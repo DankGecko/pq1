@@ -1,0 +1,74 @@
+[17|check]>
+Current goal
+
+Type variables: <none>
+
+&m: {}
+le_c_ptgts: c <= p_tgts
+------------------------------------------------------------------------
+pre = (glob A){1} = (glob A){2}
+
+    Game4_WOTSTWES_BadEnc(R_int_WOTSTW(A)).main ~ T_COLL_RES_ENUM(R_TCOLL(A),
+                                                    O_TCollEnum_Default, FC.
+                                                    O_THFC_Default).main 
+
+post = res{1} /\ BadEncFlag.badenc{1} => res{2}
+[18|check]>
+Current goal
+
+Type variables: <none>
+
+&m: {}
+le_c_ptgts: c <= p_tgts
+------------------------------------------------------------------------
+&1 (left ) : {is_valid, is_fresh, dist_wgpidxs, hchwcoll : bool,
+             i, nrqs : int, ps : pseed, ad : adrs, adlO, adlOC : adrs list,
+             em, em' : emsgWOTS, m, m' : msgWOTS, sig, sig' : sigWOTS,
+             pk : pkWOTS}
+&2 (right) : {i, nrts : int, m, m' : dgstblock, ps : pseed, ad : adrs,
+             e, e' : emsgWOTS, dg, dg' : msgWOTS, ctr, ctr' : cntr}
+
+pre = (glob A){1} = (glob A){2}
+
+ps <$ dpseed                                ( 1)  ps <$ dpseed                      
+O_MEUFGCMA_WOTSTWESNPRF.init(ps)            ( 2)  FC.O_THFC_Default.init(ps)        
+FC.O_THFC_Default.init(ps)                  ( 3)  O_TCollEnum_Default.init(ps)      
+Game4_WOTSTWES_BadEnc(R_int_WOTSTW(A)).     ( 4)  T_COLL_RES_ENUM(R_TCOLL(A),       
+  A.choose()                                (  )    O_TCollEnum_Default, FC.        
+                                            (  )    O_THFC_Default).B.pick()        
+(i, m', sig') <@                            ( 5)  (i, m', ctr') <@                  
+  Game4_WOTSTWES_BadEnc(                    (  )    T_COLL_RES_ENUM(R_TCOLL(A),     
+    R_int_WOTSTW(A)).A.forge(ps)            (  )      O_TCollEnum_Default, FC.      
+                                            (  )      O_THFC_Default).B.find(ps)    
+(ad, m, pk, sig) <@                         ( 6)  (ad, m, ctr, dg, e) <@            
+  O_MEUFGCMA_WOTSTWESNPRF.get(i)            (  )    O_TCollEnum_Default.get(i)      
+is_valid <@                                 ( 7)  nrts <@                           
+  WOTS_TW_ES.verify((pk, ps, ad), m',       (  )    O_TCollEnum_Default.nr_targets()
+    sig')                                   (  )                                    
+is_fresh <- m' <> m                         ( 8)  dg' <- ThC ps ad m' ctr'          
+nrqs <@                                     ( 9)  e' <- encode_msgWOTS dg'          
+  O_MEUFGCMA_WOTSTWESNPRF.nr_queries()      (  )                                    
+dist_wgpidxs <@                             (10)                                    
+  O_MEUFGCMA_WOTSTWESNPRF.dist_addresses()  (  )                                    
+adlO <@                                     (11)                                    
+  O_MEUFGCMA_WOTSTWESNPRF.get_addresses()   (  )                                    
+adlOC <@ FC.O_THFC_Default.get_tweaks()     (12)                                    
+em <- encode_msgWOTS m                      (13)                                    
+em' <- encode_msgWOTS m'                    (14)                                    
+BadEncFlag.badenc <- em = em'               (15)                                    
+hchwcoll <-                                 (16)                                    
+  has_chwcoll ps ad em em' sig sig'         (  )                                    
+
+post =
+  (0 <= nrqs{1} <=
+   StdBigop.Bigint.BIA.bigi predT
+     (fun (d' : int) => FSSLXMTWES.nr_nodes_ht d' 0) 0 d /\
+   0 <= i{1} < nrqs{1} /\
+   is_valid{1} /\
+   is_fresh{1} /\
+   dist_wgpidxs{1} /\
+   disj_wgpidxs adlO{1} adlOC{1} /\ !hchwcoll{1} /\ P m{1} /\ P m'{1}) /\
+  BadEncFlag.badenc{1} =>
+  0 <= i{2} < nrts{2} /\
+  nrts{2} <= p_tgts /\ dg{2} <> dg'{2} /\ P dg{2} /\ P dg'{2} /\ e{2} = e'{2}
+[19|check]>

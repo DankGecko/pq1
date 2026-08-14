@@ -358,3 +358,68 @@ discriminator is `d <> d'` (the repo's own **B2** branch,
 `c' = grindC` (verify recomputes from the *supplied* counter) and must **keep
 `OC` live during `pick`** — *and* carry the `2^71.95` figure to the headline
 rather than seeking a placement that hides it.
+
+### UPDATE 2026-08-14 — the charge is MOVED to +C. It is still not bounded.
+
+The WOTS leg is now complete **as a structure**. In order:
+
+1. MM45's `WOTS_TW_ES.ec:1513` admit is **false** at deployed geometry — refuted,
+   not merely unproven (`scratch/wots_admit_is_injectivity.ec`).
+2. Replaced by an admit-free BadEnc charge; closure rethreaded, **32/32** building.
+3. That charge is **provably 1 where it sat**
+   (`experiments/wots-badenc/base/BadEncCountermodel.ec`, `badenc_is_one`,
+   admit-free, four must-fail controls).
+4. So it was **moved**. `experiments/wots-badenc/red/BadEncStep4.ec`:
+
+```
+c <= p_tgts =>
+Pr[Game4_WOTSTWES_BadEnc(R_int_WOTSTW(A)).main() @ &m : res /\ BadEncFlag.badenc]
+  <= Pr[T_COLL_RES_ENUM(R_TCOLL(A), O_TCollEnum_Default, FC.O_THFC_Default).main() @ &m : res]
+```
+
+uniform over **every** `A : Adv_MEUFGCMA_WOTSC` — not one instantiation — because
+`R_int_WOTSTW` is generic (`WOTS_C_Interactive.ec:1753`).
+
+**The simulation is perfect, and the one real divergence is provably invisible
+rather than argued away:** the `FC.O_THFC_Default.tws` transcript differs, but
+`get_tweaks` is not in `Adv_MEUFGCMA_WOTSC.choose`'s allowed set
+(`WOTS_C_Scheme.ec:142`) and `OC.query` never reads `tws`. It is deliberately
+absent from every invariant and deliberately **not** given a control — a control
+on an invisible divergence compiles green and means nothing.
+
+**Fifteen must-fail controls** across the three files, all `RC=1`, none producing
+a `.eco`. One (`S4CtlG`) is a *necessity control on a proof step*, flagged as such:
+the other step-4 controls all fail **inside** `s4_transfer`, so if the closing
+`smt()` could discharge the residual without that lemma, they would say nothing
+about the bound. It cannot.
+
+**A structural correction found during the build:** the two-term shape
+(B1 → S-TCR(+C), B2 → T_COLL) is **wrong at this boundary**. Under
+`R_int_WOTSTW`, `forge` returns a `ThC` value (`:1813`), so Game 4's
+`is_fresh <- m' <> m` already *is* `dg <> dg'` — the B2 condition. A B1 run makes
+`res` false, so charging B1 would add a term that cannot occur, i.e. a weakening.
+B1 is charged one layer up, where `WOTS_C_Interactive` already does
+`Pr[mu_split (G0_INT.coll)] -> S_TCR_C_Int`. *(Not to be conflated with
+`B2_is_empty`, the encoder-bridge question, which is wide open — it is the reason
+`T_COLL_RES_ENUM` exists at all.)*
+
+### WHAT IS STILL NOT TRUE
+
+* **Nothing bounds `Pr[T_COLL_RES_ENUM]`.** The term went from provably-1 at the
+  wrong layer to an **unbounded assumption at the right layer**. That is the
+  entire delta. It is a structure, not a number.
+* `T_COLL_RES_ENUM` carries **no disjointness conjunct**, so its win set is larger
+  than the S-TCR(+C) template's and the assumption is correspondingly **stronger**.
+* At `(len=43, w=8, target_sum=205)` the expectation remains **~2^-72-class**
+  (`|C_T| = 2^114.0941`, birthday `~2^71.95`) — a **parameter** property that no
+  placement or naming changes.
+* `c <= p_tgts` is a premise, not free — though not a new demand:
+  `WOTS_C_Interactive.ec:1350` already states it and `interactive_hop1` carries it.
+
+**Still not an attack, unchanged:** C10's WOTS layer never encodes an
+adversary-chosen value (`sphincs-c10/src/fors.rs:265-268`).
+
+**Still outside the certified surface.** The gate has now run **three times
+byte-identical** (`INPUTS_SHA256 eb589cafe306046da0a5d7ba0820c7e9`, receipts in
+`scratch/RECEIPT-gate-2026-08-1{3,3b,4}.md`). This whole development is a
+**proposal**; promoting it would be a deliberate decision to move that hash.
