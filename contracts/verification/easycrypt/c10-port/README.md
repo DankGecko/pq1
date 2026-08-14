@@ -473,3 +473,61 @@ headline in the `forsc_grinding_margin.py` genre; and a **parameter conversation
 which is an owner decision** — changing `(len, w, target_sum)` changes
 `sig = 4008`, the on-chain verifier, and every KAT. Do not spend further effort
 trying to prove a bound on this term.
+
+### UPDATE 2026-08-14 (later) — the surface count is now a THEOREM
+
+The `CONCLUSION` above rests on `|C_T| = 2^114.0941`, which until now existed only
+as Python plus prose. It is now machine-checked, admit-free, in
+`experiments/wots-badenc/count/`:
+
+```
+lemma c10_surface_count :
+  count_ds 43 8 205 = 22169393903687611906220091621190388.
+```
+
+plus the security-relevant integer corollaries `2^114 < count < 2^115` and
+`count * 2^14 < 8^43 < count * 2^15` (i.e. `2^-15 < p < 2^-14`, stated over
+integers, no reals).
+
+**Feasibility was the open question and the answer is yes** — EasyCrypt evaluates
+the 43-step reduction in **41 s**. `iota_`/`iteri` are axiomatised so `simplify`
+cannot touch them, and `smt()` on `2^114 = <literal>` fails after 27 s; but
+*structural* list recursion over int literals does reduce, so `VecDP.ec` restates
+the DP in an accumulator-free sliding-window orientation and `CountDS.ec` proves
+the bridge. Measured scaling: 10 steps 0.58 s, 20 → 3.3 s, 30 → 11.9 s, 43 → 41.1 s.
+
+**`count_ds` is a genuine recursion**, `iter n (cstep b) (fun t => b2i (t = 0)) s`
+— the constant appears only in lemma statements, never in a definition. Eight
+controls; the two perturbations (`205 → 204`, `43 → 42`) each fail **at their own
+`ctl_*` lemma rather than at the kernel lemma above it**, so the perturbed
+reduction genuinely ran and only the unperturbed constant was rejected. The
+constant is independently cross-checked four ways (DP, inclusion–exclusion, direct
+polynomial multiplication, and the complement symmetry
+`count(43,8,205) = count(43,8,96)` — the last also checked inside EasyCrypt).
+
+**Reusable trap, recorded:** the reduction is asymmetric. A true 43-step equation
+reduces in 41 s; a false one at the same scale exhausts the stack (435 s under
+unlimited stack). Any `trivial`-invoking tactic (`by`, `//`, `smt`) on a goal
+still holding the unreduced term re-runs the whole 41 s reduction, and `apply`
+did not terminate in 120 s. **`c10_surface_count` is rewrite-only.**
+
+### THE BOUNDARY — this counts DIGIT VECTORS, not codewords
+
+Stated because the distinction is exactly the one that has bitten this repo
+before. The theorem is over `int` lists with entries in `[0,8)`; connecting it to
+`emsgWOTS` is **not done**, and five specific blockers stand in the way:
+
+1. `WOTS_TW_ES.ec:74` `const len : {int | 2 <= len}` is not linked to `c10_len = 43`;
+2. `val_w : 4 <= w` is not linked to `c10_w = 8`, and `BaseW.val` is not shown to
+   range bijectively over `[0,8)`;
+3. `WOTS_TW_ES.ec:647` **defines** `target_sum = digitsum (encode_msgWOTS tgt_witness)`,
+   not 205 — and `C10DeployedGeometry.ec:101-104` explicitly declines the claim
+   that the deployed encoder reaches 205;
+4. there is no `emsgWOTS <-> int list` bijection (needs FinType/`Alphabet.enum`
+   plumbing plus `digitsum = sumz`);
+5. surface ≠ fibre: `|C_T|` counts codewords, while `T_COLL_RES_ENUM`'s B2 branch
+   is about *messages* colliding through `encode_msgWOTS`.
+
+**The number is now a theorem; its identification with the codeword surface is
+still prose.** Likewise `~2^71.95` remains unmechanised — it needs `sqrt` over
+reals; what is mechanised are the two integer facts it is computed from.
