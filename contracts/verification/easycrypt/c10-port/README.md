@@ -531,3 +531,92 @@ before. The theorem is over `int` lists with entries in `[0,8)`; connecting it t
 **The number is now a theorem; its identification with the codeword surface is
 still prose.** Likewise `~2^71.95` remains unmechanised — it needs `sqrt` over
 reals; what is mechanised are the two integer facts it is computed from.
+
+---
+
+## CORRECTION 2026-08-14 (final) — BOTH claims above were wrong, in opposite directions
+
+Two external reviewers, asked independently with C10's parameters frozen,
+**converged on refuting a premise this README has repeated all along** and
+**diverged on the number** — and the divergence is where the information was.
+Everything below verified at source. Full write-up:
+`scratch/FINDING-both-my-claims-were-wrong.md`.
+
+### (1) "The deployment never lets the adversary choose the WOTS message" is FALSE
+
+This sentence carries the *"not an attack"* classification above, and it is
+inherited from `experiments/tcollres-leg/FINDING-def11-is-unsound-at-c10.md`,
+which reasoned that `compute_fors_pk` takes no message argument.
+
+`compute_fors_pk` takes no *message* argument — but **its `roots` argument is
+attacker-supplied at verification.** In `sphincs-c10/src/hypertree.rs`:
+
+```
+fors_secrets ← read from the signature        (attacker-supplied)
+auth_paths   ← read from the signature        (attacker-supplied)
+fors_roots   ← reconstruct_fors_root(...)
+fors_pk      ← compute_fors_pk(seed, ht_idx, fors_roots)
+current_node ← fors_pk                        ← THE WOTS MESSAGE
+wots_pk      ← pk_from_sig(..., &current_node, &wots_sigma, count)
+```
+
+Nothing validates those secrets before `fors_pk` is formed, and `count` is also
+read from the signature. The honest-*signer* statement is true
+(`fors.rs:265-268`) and **does not transfer to the verifier** — and the forgery
+game is about the verifier. So "WOTS messages are key-determined" is not merely
+unproven, it is **provably false at source**.
+
+### (2) But "cannot be usefully bounded, ~2^-72" is ALSO wrong — too PESSIMISTIC
+
+`2^71.95 = 2^57.05 × 2^14.906`, and the second factor is the cost of landing one
+sample on the constant-sum surface — which **the oracle pays**
+(`ctr <- grindC ps ad m`), not the adversary. So it is **2^57 oracle queries**,
+not 2^72 of adversary work.
+
+And a free offline birthday **does not win**: the win condition reads
+`(ad,m,ctr,dg,e) <@ O.get(i)` with `0 <= i < nrts`, so **one side of the collision
+must be a RECORDED entry**. Colliding two of your own samples wins nothing. It is
+a *target search*.
+
+| side | cost |
+|---|---|
+| query | advantage `q_s² · 2^-114.09`; at the deployed cap `q_s = 2^16` → **2^-82** |
+| offline | `2^114.09 / n_ad`; multi-target amplification **dies on address-keying** |
+
+`R` is derived from `sk_seed` (`fors.rs:94-131`), so honest signings cannot be
+steered onto one address; even adversary-favourable `n_ad = 2^16` gives **2^98**.
+
+**So the leg's honest ceiling is ~2^98–2^114 work, or 2^-82 at the deployed query
+cap — at or ABOVE the 96-bit work floor, not 24 bits below it.** The
+`CONCLUSION` section's *"there is no bound to find; do not spend further effort"*
+is **RETRACTED**: it priced an attack the query budget forbids.
+
+### The leg is fine — but for the OPPOSITE reason to the one given above
+
+The constraint is not on the *message* side (that freedom is real). It is on the
+**target** side: the collision must involve an honestly-signed, address-bound
+entry, and those are capped and scattered.
+
+### THE ACTION ITEM — `p_tgts` is unpinned
+
+The entire `2^-82` rests on instantiating `p_tgts` at the deployed usage cap.
+**VERIFIED:** `cdrafts-split/WOTS_C_Real.ec:340` —
+`const p_tgts : { int | 0 <= p_tgts } as ge0_ptgts` — it is abstract, exactly like
+`target_sum`. **Quoting 2^-82 without pinning it would be unfounded.** Target shape,
+parameters frozen:
+
+```
+for q_s <= 2^16 signing queries and q_h hash queries,
+  Adv_T-COLL-RES-ENUM  <=  (q_s^2 + q_h * n_ad_max) * 2^-114.09
+```
+
+with `2^-114.09` already machine-checked (`experiments/wots-badenc/count/`).
+
+### Limits — this is NOT a clean bill of health
+
+The `q_s²` and `2^114.09 / n_ad` figures are **generic-model arithmetic, not
+theorems** — the same epistemic class as the ITSR margin table. `n_ad_max` is
+established nowhere; "honest signings scatter" is an argument about `grind_r`, not
+a proved bound. The `ThC`-width question (128 vs 129) sits underneath this term and
+shifts the constant. The honest summary is that **the leg's ceiling is set by the
+target budget, and that budget has never been pinned.**
