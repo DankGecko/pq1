@@ -620,3 +620,52 @@ established nowhere; "honest signings scatter" is an argument about `grind_r`, n
 a proved bound. The `ThC`-width question (128 vs 129) sits underneath this term and
 shifts the constant. The honest summary is that **the leg's ceiling is set by the
 target budget, and that budget has never been pinned.**
+
+### UPDATE 2026-08-15 — `p_tgts` pinned; and the `2^-82` figure is STILL not quotable
+
+`experiments/ptgts-pin/`. The correction above named pinning `p_tgts` as the action
+item that would make `2^-82` quotable. **That was wrong**, and the pinning work is
+what shows why.
+
+**`c = 262656 = 2^18 + 2^9`, unconditionally.** The hypertree geometry is already
+axiomatised in `base-c10-split/SPHINCS_PLUS.ec` (`hp_val : h' = 9`, `d_val : d = 2`),
+so no hypothesis is needed. Confirmed against `sphincs-c10/src/params.rs`
+(H=18, D=2, SUBTREE_H=9) and `hypertree.rs:23`. `p_tgts` is pinned at `262656`, the
+**least** admissible value, and `c <= p_tgts` is discharged in a capstone whose
+statement is machine-diffed against `cdrafts-split/C10DeployedCapstone.ec:280-394`
+by a self-tested script. Twelve controls; off-by-one **brackets the pin from both
+sides** (`262657` passes, `262655` fails).
+
+**Why `2^-82` is still not quotable:**
+
+* it needs `q_s = 2^16` **signing** queries — that is `MAX_SLOT_USES`, an on-chain
+  **deployment policy** bound, and **nothing in the model expresses it**;
+* `p_tgts` caps S-TCR **targets**; the model's query cap is `c`, which is larger.
+  Substituting gives **`c² · 2^-114.09 = 2^-78.09`**, not `2^-82`;
+* pinning `p_tgts := 2^16` is wrong twice — `65536 < 262656` fails the premise
+  (proved: `c10_usage_cap_is_not_admissible_as_p_tgts`), and it would cap the
+  reduction's targets *below what it places*, making the S-TCR win condition FALSE.
+
+Also corrected: the two caps are **~2 bits apart, not ~4**
+(`c/q_s = 4.0078 → 2.0028` bits). The `4.006` figure is the **squared** gap —
+right for a `q_s²`-shaped term, wrong as a statement about the caps themselves.
+
+**The premise is TRADED, not eliminated:** `c <= p_tgts` becomes
+`p_tgts = c10_p_tgts`. Making it unconditional requires
+`op p_tgts : int = 262656` in `cdrafts-split/WOTS_C_Real.ec`, which moves
+`INPUTS_SHA256` and needs a `cert-identity.tsv` re-baseline — deliberately out of
+scope here.
+
+### A separate finding surfaced by the pin: `WOTS_C_Multi` is outside the certified perimeter
+
+**VERIFIED:** `WOTS_C_Multi` appears in **neither** `closure-c10-split.txt` **nor**
+any of the four `cert-*.tsv`. No certified run compiles it. The bridging step
+"one target per committed query" — which is what gives `c <= p_tgts` its *shape* —
+lives at `WOTS_C_Multi.ec:490-494`. So that premise's **justification** sits on a
+file the gate never builds, even though its **satisfaction** is now pinned. Same
+defect class as the stale `experiments/` files, but inside the premise structure of
+the deployed statement.
+
+**What `2^-82` would still need:** an argument that the term counts *signing
+queries* rather than hypertree instances, and the `2^16` policy bound imported into
+the model. Neither exists.

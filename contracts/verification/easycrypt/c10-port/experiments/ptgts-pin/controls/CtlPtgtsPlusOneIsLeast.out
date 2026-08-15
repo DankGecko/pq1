@@ -1,0 +1,5 @@
+[-] [0006] 56.8% (-1.0B / [frag -1.0B])[\] [0007] 61.6% (-1.0B / [frag -1.0B])[|] [0008] 66.2% (-1.0B / [frag -1.0B])[/] [0009] 70.3% (-1.0B / [frag -1.0B])[-] [0010] 75.9% (-1.0B / [frag -1.0B])[\] [0013] 89.8% (-1.0B / [frag -1.0B])[|] [0013] 90.9% (-1.0B / [frag -1.0B])[/] [0013] 99.2% (-1.0B / [frag -1.0B])                                                                                                      [critical] [experiments/ptgts-pin/controls/CtlPtgtsPlusOneIsLeast.ec: line 13 (54-55)] cannot prove goal (strict)
+[-] [0013] 99.2% (-1.0B / [frag -1.0B])[\] [0013] 99.2% (-1.0B / [frag -1.0B])
+__RC=1
+__WALL_MS=36172
+__ECO=NO

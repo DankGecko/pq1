@@ -1,0 +1,5 @@
+[-] [0005] 51.8% (-1.0B / [frag -1.0B])[\] [0006] 57.0% (-1.0B / [frag -1.0B])[|] [0007] 62.1% (-1.0B / [frag -1.0B])[/] [0008] 66.6% (-1.0B / [frag -1.0B])[-] [0009] 72.2% (-1.0B / [frag -1.0B])[\] [0012] 87.9% (-1.0B / [frag -1.0B])[|] [0012] 89.2% (-1.0B / [frag -1.0B])[/] [0012] 99.1% (-1.0B / [frag -1.0B])                                                                                                      [critical] [experiments/ptgts-pin/controls/CtlPtgtsMinusOne.ec: line 12 (7-61)] [by]: cannot close goals
+[-] [0012] 99.1% (-1.0B / [frag -1.0B])[\] [0012] 99.1% (-1.0B / [frag -1.0B])
+__RC=1
+__WALL_MS=1553
+__ECO=NO

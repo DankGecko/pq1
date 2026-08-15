@@ -1,0 +1,5 @@
+[-] [0007] 65.5% (-1.0B / [frag -1.0B])[\] [0008] 70.2% (-1.0B / [frag -1.0B])[|] [0009] 74.8% (-1.0B / [frag -1.0B])[/] [0010] 78.9% (-1.0B / [frag -1.0B])[-] [0012] 86.9% (-1.0B / [frag -1.0B])[\] [0012] 88.1% (-1.0B / [frag -1.0B])[|] [0012] 99.2% (-1.0B / [frag -1.0B])                                                                                                      [critical] [experiments/ptgts-pin/controls/CtlPinDerivesFalse.ec: line 12 (7-74)] cannot prove goal (strict)
+[/] [0012] 99.2% (-1.0B / [frag -1.0B])[-] [0012] 99.2% (-1.0B / [frag -1.0B])
+__RC=1
+__WALL_MS=40280
+__ECO=NO
