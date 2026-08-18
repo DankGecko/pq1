@@ -4,6 +4,7 @@ WOTS_C_Real
 WOTS_C_Scheme
 XMSSMT_C_Scheme
 WOTS_C_Reduction
+WOTS_C_Multi
 WOTS_C_Interactive
 XmssmtCC_All
 RtopCSoundness

@@ -387,6 +387,48 @@ module (R_bridge_WOTSTW (A : Adv_MnaCMA_WOTSC) : Adv_MEUFGCMA_WOTSTWESNPRF)
    `all_valid_map_val`).  No `admit`, `sorry`, or `axiom`; the reduction module
    stays concrete/admit-free.  The whole leg is now a compiled conditional theorem
    under the two flagged embedding hypotheses.
+
+   *** STATUS CORRECTED 2026-08-18 -- THIS FILE DOES NOT CURRENTLY COMPILE. ***
+
+   The 2026-07-08 status above is NOT the current one and must not be quoted.
+   Measured at r2026.02, in the ec-grind container:
+
+       easycrypt compile -I base-c10-split -I cdrafts-split <this file>
+       [critical] [... cannot prove goal (strict)]   __RC=1, no .eco produced
+
+   It is NOT a prover-budget artefact.  Re-run with `-timeout 120
+   -max-provers 8` it fails at the SAME TACTIC with the SAME error after 2592 s
+   of wall time.  READ THE TWO RECEIPTS WITH THEIR FILE STATE ATTACHED: they
+   print DIFFERENT line numbers -- 659 for the extended run, taken BEFORE this
+   note existed, and 693 for a later default run taken AFTER it.  The delta is
+   exactly this note's own length.  Same tactic, same error, same step.  It
+   sits INSIDE `D1_bridge_WOTSTW`'s own proof: it is the terminal
+
+       by rewrite hoq; do ! split; smt().
+
+   of the `disj_wgpidxs` bookkeeping step.  ANCHORED ON THE TACTIC, NOT A LINE
+   NUMBER -- adding this very note shifted the reported line from 659 to 693, and
+   a stale line reference is the defect class this file is being corrected for.
+
+   "ZERO admits" ABOVE REMAINS TRUE, and the distinction matters: there is no
+   `admit`, `sorry` or `axiom` in this file.  It does not ADMIT the goal, it FAILS
+   TO CLOSE it.  What is false above is "PROVED IN FULL" and "now a compiled
+   conditional theorem".
+
+   LIKELY CAUSE -- INDICATED, NOT DEMONSTRATED.  This file was last touched by
+   fe2b22f (2026-08-01), "route (D) retypes in the NON-CERTIFIED bridge/multi
+   side-files", the same day route (D) widened `msgWOTS` to the 256-bit
+   `mdgstblock` (ea1087f).  The retype restored TYPE-correctness; nothing
+   re-checked PROVABILITY, because this file is outside `closure-c10-split.txt`
+   and the gate has never built it.  `WOTS_C_Multi.ec` went through the same
+   retype in the same commit and DOES compile.  A pre-split checkout was not
+   reconstructed, so this is the indicated cause and not a proven one.
+
+   Nor is the goal shown to be FALSE: `smt` failing is not a refutation.
+
+   DO NOT ADD THIS FILE TO THE CLOSURE until that step is repaired -- gating a red
+   file turns the gate red by construction.  Nothing certified depends on it: no
+   closure member requires it, and the gate is GREEN without it.
    ========================================================================== *)
 lemma D1_bridge_WOTSTW
   (A <: Adv_MnaCMA_WOTSC{-R_multi_WOTSTW, -R_bridge_WOTSTW, -G0_MULTI,

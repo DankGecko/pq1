@@ -523,6 +523,95 @@
 #   file-based; it is CONE-based, so a root whose dependencies are already
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
+#
+# 2026-08-18.  split eb589cafe306046da0a5d7ba0820c7e9 -> 45b788a6a623c698531c06c05a5c0e2b.
+#   A FILE ENTERS THE CERTIFIED CLOSURE: cdrafts-split/WOTS_C_Multi.ec, Thm D.1
+#   (multi-instance WOTS+C d-EU-naCMA).  closure-c10-split.txt 32 -> 33,
+#   CONE_FILES 43 -> 44.  This is a deliberate change to the certified tree.
+#   WHY.  `c <= p_tgts` is a premise carried by 11 of the closure members, in 48
+#   places.  The lemma that justifies its SHAPE -- D1_reduce, "the reduction
+#   places one S-TCR(+C) target per committed query" -- lived in a file that was
+#   in NEITHER closure-c10-split.txt NOR any cert-*.tsv.  The gate had never
+#   built it.  A premise whose justification nothing enforces is the sentence
+#   this script exists because of.
+#
+#   WHY THE ASSUMPTION SET IS UNTOUCHED -- the fact that makes this defensible,
+#   and it was verified BEFORE the re-baseline, not discovered after it:
+#     cone: keys 1099 -> 1113 | ROWS 1179 -> 1193 | added=14 removed=0
+#     ledger      242 -> 242   <- UNCHANGED; this is the number that matters
+#     parameters  217 -> 217
+#     bindings    345 -> 345
+#     meaning     375 -> 389
+#   All 14 added rows are MEANING-class (12 module:, 2 module-type:).  Not one
+#   admit, axiom, declare-axiom, refined-const, clone-discharge, op-annotation
+#   or clone-obligation row enters the cone.  The file's own ledger is zero
+#   (scratch/sweep.py: admit=0 axiom=0 sorry=0, comment-stripped and
+#   word-boundary; FORS_C_TreePort.ec reports 1 as a positive control).  The 14
+#   rows are exhaustively the file's own declarations: 8 top-level plus 6 inner
+#   `module AA = A(OC)`.
+#
+#   PREDICTION SCORECARD.  The brief predicted "13 rows ... and five AA".  It is
+#   14, with SIX AA -- one per game/reduction module, and there are six of those.
+#   The miscount was in the ENUMERATION, not in the class, and the ledger
+#   invariance that was made the acceptance condition held exactly.  Recorded
+#   because this file grades predictions rather than quietly correcting them.
+#
+#   COMMENT-ONLY SOURCE CHANGE, MECHANICALLY VERIFIED.  Four stale sites in
+#   WOTS_C_Multi.ec were corrected; no proof, statement or declaration moved.
+#   Checked by stripping comments from HEAD's copy and from the new copy with
+#   the gate's own comment-stripper and diffing: EMPTY.  Confirmed independently
+#   by the census -- the 14 added rows are BYTE-IDENTICAL before and after the
+#   comment edits, so no module body digest moved (the failure mode that would
+#   have shown up as an added+removed pair, both fatal).
+#
+#   AND THE BRIEF'S FACTUAL PREMISE FOR THAT FIX WAS ITSELF FALSE.  Read this,
+#   because a correction that installs a NEW false claim is worse than the stale
+#   one it replaces.  The brief -- and scratch/FINDING-c-le-ptgts-justification-
+#   is-ungated.md:64, which marks it "VERIFIED" -- says `D1_bridge_WOTSTW` "does
+#   not exist" and instructs the header to say the FC <-> STCRC_WC.Col
+#   reconciliation is "DEFERRED AND UNSTATED".  BOTH ARE WRONG.  `lemma
+#   D1_bridge_WOTSTW` is at cdrafts-split/WOTS_C_Bridge.ec:391 -- the SAME
+#   directory -- with `D1_MEUFNACMA_WOTSC_MM45` at :677, specialised as
+#   `D1_MEUFNACMA_WOTSC_MM45_embthfc` at WOTS_C_EmbDischarge.ec:174 and consumed
+#   at SPHINCS_C.ec:252.  The name was searched for INSIDE WOTS_C_Multi.ec and
+#   its absence THERE was reported as absence from the repo.  Absence concluded
+#   from the wrong scope -- the same error class this file already records twice
+#   (the `dbin` retraction, and the "split/fork rows are documentary"
+#   retraction).  The instructed sentence was NOT written.
+#
+#   WHAT THE HEADER SAYS INSTEAD IS MEASURED.  In the gate's own container
+#   (r2026.02, same include path, same session in which WOTS_C_Multi.ec compiled
+#   RC=0): `easycrypt compile cdrafts-split/WOTS_C_Bridge.ec` EXITS 1 with
+#   `[critical] .. line 659 .. cannot prove goal (strict)` -- a step INSIDE
+#   D1_bridge_WOTSTW's own proof (lemma :391, qed :665) -- reproduced twice at
+#   the same site, although that file's header claims "PROOF STATUS
+#   (2026-07-08): PROVED IN FULL -- ZERO admits".  So the bridge is: not in
+#   WOTS_C_Multi.ec, downstream of it, UNGATED (none of WOTS_C_Bridge /
+#   WOTS_C_EmbDischarge / SPHINCS_C is in closure-c10-split.txt), and
+#   non-compiling at this toolchain.  Whether that is a genuine break or a
+#   prover-budget artefact is NOT diagnosed here and is NOT claimed.
+#
+#   WHAT THIS DOES NOT BUY, so nobody quotes it as more.  Gating D1_reduce does
+#   NOT discharge `c <= p_tgts`; that premise is still carried explicitly by the
+#   11 members that need it, and SphincsC10CapstoneWired.ec already labels it an
+#   HONEST RESIDUAL.  It does not connect D.1 to MM45's black box.  And IT PINS
+#   NOTHING: cert-statements-split.tsv gains no row, so D1_reduce's and
+#   D1_MEUFNACMA_WOTSC's STATEMENTS stay unpinned -- their premises could be
+#   weakened with the census unmoved, because module bodies would not change.
+#   That is the run-4 lesson applied to this file, and it is NOT closed here:
+#   pinning them needs EXPECT_PINS 111 -> 113 in cert_gate_split.sh, which is
+#   gate machinery and was out of scope for this change.  Named rather than left
+#   silent; it is the obvious next unit.
+#   WHAT THE CLOSURE DOES NOW ENFORCE: the file compiles as a target (PHASE 1),
+#   is REQUIRABLE (1d, the ends-mid-proof defect), agrees under both drivers
+#   (1e, which had never seen it), and its declaration inventory is frozen
+#   against addition AND removal (PHASE 2).
+#
+#   ALSO IN THIS COMMIT: cert-baseline-split.tsv's summary line (:2) still read
+#   run 26's "LEDGER=239 PARAMETERS=217 BINDINGS=341 MEANING=362 TOTAL=1159",
+#   three re-baselines stale, because no script reads it (PHASE 2 strips ^#).
+#   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
+#   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	eb589cafe306046da0a5d7ba0820c7e9
+split	45b788a6a623c698531c06c05a5c0e2b
 fork	7ab20d2ab0ba2c1f3942408a193b4836

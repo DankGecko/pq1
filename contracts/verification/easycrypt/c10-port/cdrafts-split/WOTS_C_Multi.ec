@@ -18,8 +18,40 @@
      `in_t <- dgst`, `f <- f`).  The connection to the repo's FC-based
      `M_EUF_GCMA_WOTSTWESNPRF` (and thus to MM45's `MEUFGCMA_WOTSTWESNPRF`
      black box) is the FC <-> STCRC_WC.Col unification deferred already in C.2
-     (see WOTS_C_Reduction.ec line ~342): stated here as two clearly-labelled
-     bridge admits, NOT smuggled into a module we cannot write.
+     (WOTS_C_Reduction.ec:344, which calls it "the remaining structural
+     reconciliation").  IT IS NOT DISCHARGED, AND IT IS NOT IN THIS FILE.
+
+     CORRECTED 2026-08-18.  The sentence that stood here read "stated here as
+     two clearly-labelled bridge admits, NOT smuggled into a module we cannot
+     write".  Every part of that is wrong about the present tree, and the
+     correction is recorded rather than quietly applied because a reader must
+     not believe a bridge exists here:
+       (i)   THIS FILE HAS NO ADMITS AT ALL.  scratch/sweep.py (comment-
+             stripping, word-boundary) reports admit=0 axiom=0 sorry=0, so
+             nothing here is labelled as, or stands in for, the bridge.
+       (ii)  The two artefacts the older text meant are LEMMAS, not admits, and
+             they live DOWNSTREAM rather than here: `D1_bridge_WOTSTW`
+             (WOTS_C_Bridge.ec:391) and `D1_MEUFNACMA_WOTSC_MM45`
+             (WOTS_C_Bridge.ec:677), the latter specialised as
+             `D1_MEUFNACMA_WOTSC_MM45_embthfc` (WOTS_C_EmbDischarge.ec:174) and
+             consumed at SPHINCS_C.ec:252.  WOTS_C_Bridge.ec REQUIRES this file
+             (its :137), so it could never be "below" inside it.
+       (iii) NONE of WOTS_C_Bridge.ec, WOTS_C_EmbDischarge.ec, SPHINCS_C.ec is
+             in closure-c10-split.txt, so nothing in them is gate-enforced.
+       (iv)  MEASURED 2026-08-18 in the gate's own container (r2026.02, same
+             include path, in the same run in which THIS file compiled RC=0):
+             `easycrypt compile cdrafts-split/WOTS_C_Bridge.ec` EXITS 1 with
+             `[critical] .. line 659 .. cannot prove goal (strict)` -- a step
+             INSIDE `D1_bridge_WOTSTW`'s own proof (lemma :391, qed :665),
+             reproduced twice at the same site --
+             even though that file's header claims "PROOF STATUS (2026-07-08):
+             PROVED IN FULL -- ZERO admits".  Whether that is a genuine break or
+             a prover-budget artefact is NOT diagnosed here; either way it is
+             not something a reader of THIS file may assume works.
+     So the honest status is: the reconciliation is deferred here, attempted
+     downstream in an UNGATED file, and at this toolchain that attempt does not
+     compile.  D.1 below is therefore stated against the LOCAL WOTS-TW game
+     `M_EUF_NACMA_WOTSTW_L`, and nothing in this file carries it to MM45's.
 
    * We model d-EU-naCMA in its literal non-adaptive shape: the adversary
      COMMITS its d signing queries in `choose()` (a `qC list`) and receives all
@@ -117,7 +149,10 @@ module M_EUF_NACMA_WOTSC_L(A : Adv_MnaCMA_WOTSC, OC : STCRC_WC.Col.Oracle_THFC) 
    The multi-instance d-EU-naCMA game for WOTS-TW, local to STCRC_WC.Col
    (the RHS WOTS-TW term of Thm D.1).  Same non-adaptive shape, over the REAL
    `WOTS_TW_ES_NPRF` scheme; signatures carry NO counter.  The bridge to the
-   repo's FC-based `M_EUF_GCMA_WOTSTWESNPRF` is a labelled admit (below).
+   repo's FC-based `M_EUF_GCMA_WOTSTWESNPRF` IS NOT IN THIS FILE and is not an
+   admit anywhere in it (CORRECTED 2026-08-18: this line read "is a labelled
+   admit (below)"; the file carries admit=0 axiom=0 sorry=0).  See the header
+   for where the bridge is attempted, and for its measured status there.
    ========================================================================== *)
 module type Adv_MnaCMA_WOTSTW(OC : STCRC_WC.Col.Oracle_THFC) = {
   proc choose() : qTW list { OC.query }
@@ -498,7 +533,14 @@ lemma D1_reduce
                          STCRC_WC.Col.O_THFC_Default).main() @ &m : res].
 proof.
   (* -----------------------------------------------------------------------
-     LABELLED ADMIT (D.1 hop1 core, Algorithm 9 multi-instance byequiv).
+     PROVED (zero admit).  HEADING CORRECTED 2026-08-18: this block was headed
+     "LABELLED ADMIT (D.1 hop1 core, Algorithm 9 multi-instance byequiv)" and
+     closed with a "Remaining work" note, both written while the proof below was
+     still open.  The byequiv is complete and closed by the `qed` that ends this
+     lemma, and scratch/sweep.py reports admit=0 axiom=0 sorry=0 for the file.
+     The obligation description is KEPT verbatim below, because it still says
+     exactly what the proof discharges -- only the two staleness claims are gone.
+
      Obligation: byequiv G0_MULTI ~ S_TCR_C(R_multi_STCRC(A)) coupling
        (res{1} /\ coll{1}) => res{2}, i.e. the d-query lift of the single-query
      coupling proved in WOTS_C_Reduction.ec:245-298 (WOTSC_C2_reduce).  Concretely
@@ -511,8 +553,6 @@ proof.
      target i: ThC pp tw_i m_i j_i = ThC pp tw_i m' ctr with m' <> m_i, plus the
      target-count bound (c <= p_tgts => nrts <= p_stcr) and the collection
      disjointness (per-instance address separation, the multi lift of C.2's `sep`).
-     Remaining work: a per-index while-loop invariant + `exists*` snapshots of
-     (pp, qs) — multi-round, exactly as C.2's reduce was built over several commits.
      ----------------------------------------------------------------------- *)
   move=> le_c_ptgts.
   byequiv (_ : ={glob A} ==> (res{1} /\ G0_MULTI.coll{1}) => res{2}) => //.
@@ -898,7 +938,13 @@ qed.
    encode bridge (`encb`) — the multi-instance analogues of C.2's hypotheses.
    The WOTS-TW term is the LOCAL d-EU-naCMA game M_EUF_NACMA_WOTSTW_L (over the
    S-TCR collection); connecting it to MM45's repo `MEUFGCMA_WOTSTWESNPRF` black
-   box is the deferred FC<->STCRC_WC.Col unification (D1_bridge_WOTSTW below).
+   box is the deferred FC<->STCRC_WC.Col unification.
+   CORRECTED 2026-08-18: this line said "(D1_bridge_WOTSTW below)".  There is no
+   such lemma BELOW -- the name occurs nowhere else in this file.  It DOES exist,
+   at WOTS_C_Bridge.ec:391, in a downstream file that requires this one, that is
+   absent from closure-c10-split.txt, and that does not compile at r2026.02.
+   See the file header for the measurement.  Nothing in THIS file discharges the
+   unification, so the bound below is over the LOCAL WOTS-TW game only.
    ========================================================================== *)
 lemma D1_MEUFNACMA_WOTSC
   (A <: Adv_MnaCMA_WOTSC{-R_multi_STCRC, -R_multi_WOTSTW, -G0_MULTI,

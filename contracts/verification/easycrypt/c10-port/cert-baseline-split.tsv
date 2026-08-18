@@ -1,5 +1,11 @@
-# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-05 (run 26: GprocVI admitted).
-# LEDGER=239  PARAMETERS=217  BINDINGS=341  MEANING=362  TOTAL=1159
+# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-05 (run 26: GprocVI admitted);
+# every change since is an APPENDED dated note plus its rows, at the end of this file.
+# LEDGER=242  PARAMETERS=217  BINDINGS=345  MEANING=389  TOTAL=1193   (LIVE, 2026-08-18)
+#   The line above read 239/217/341/362/1159 until 2026-08-18 -- run 26's values,
+#   carried unchanged through three later re-baselines.  Nothing reads it (PHASE 2
+#   strips ^# before comparing), which is precisely why it drifted; it is a summary
+#   for humans and it was wrong for humans.  The authority is the row set below plus
+#   cert_gate_split.sh's own class tally, not this line.
 #
 # 2026-08-05 (run 26) -- +3 ROWS, ALL MEANING, LEDGER UNCHANGED AT 239.
 # cdrafts-split/GprocVI.ec admitted to the closure: the V->VI hop for Gproc,
@@ -1336,3 +1342,43 @@ cdrafts-split/DarkSide.ec	refined-const:038162b8e18e	ge1_t	# line 82
 #   in the ledger by cert_gate_split.sh:503 and is reported as such.
 cdrafts-split/DarkSideC10.ec	operand:42a30d8df381	DS_C10.t	# line 32
 cdrafts-split/DarkSideC10.ec	clone-discharge:star|realize:ge1_t	DS_C10	# line 32
+#
+# 2026-08-18.  +14 ROWS, ALL MEANING, LEDGER UNCHANGED AT 242.
+#   cdrafts-split/WOTS_C_Multi.ec (Thm D.1, the MULTI-instance WOTS+C
+#   d-EU-naCMA lift) admitted to the closure, so the gate finally builds the
+#   lemma that justifies the SHAPE of the `c <= p_tgts` premise carried by 11
+#   closure members in 48 places: D1_reduce, "the reduction places one S-TCR(+C)
+#   target per committed query".  That file was in NEITHER closure-c10-split.txt
+#   NOR any cert-*.tsv, so nothing enforced it.
+#   ledger 242->242, parameters 217->217, bindings 345->345, meaning 375->389,
+#   TOTAL 1179->1193 (keys 1099->1113), added=14 removed=0, CONE_FILES 43->44.
+#   NOT ONE LEDGER-CLASS ROW: no admit, axiom, declare-axiom, refined-const,
+#   clone-discharge, op-annotation or clone-obligation.  That is the fact that
+#   made this re-baseline defensible and it was checked BEFORE it was performed.
+#   The file's own ledger is zero -- scratch/sweep.py reports admit=0 axiom=0
+#   sorry=0 (comment-stripped, word-boundary), with FORS_C_TreePort.ec reporting
+#   1 as a positive control, so the tool discriminates.
+#   The 14 rows are EXHAUSTIVELY the file's own declarations: 8 top-level
+#   (2 module type + 6 module) and 6 inner `module AA = A(OC)` at :99 :164 :241
+#   :302 :374 :427.  Predicted "13 rows, five AA" before the run; it is 14 with
+#   SIX AA.  The miscount was in the enumeration, not in the class -- nothing
+#   unexplained appeared -- and it is recorded rather than quietly corrected.
+#   THE SUMMARY LINE AT THE TOP OF THIS FILE WAS STALE and is corrected in the
+#   same commit: it still carried run 26's LEDGER=239 PARAMETERS=217
+#   BINDINGS=341 MEANING=362 TOTAL=1159 through three later re-baselines,
+#   because no script reads it (PHASE 2 strips ^# before comparing).  A number
+#   nothing checks is exactly the one that drifts.
+cdrafts-split/WOTS_C_Multi.ec	module-type:a8554dec8876	Adv_MnaCMA_WOTSC	# line 92
+cdrafts-split/WOTS_C_Multi.ec	module:1e54f0801ee5	M_EUF_NACMA_WOTSC_L	# line 98
+cdrafts-split/WOTS_C_Multi.ec	module:99fb146710d3	AA	# line 99
+cdrafts-split/WOTS_C_Multi.ec	module-type:19e69b4c331a	Adv_MnaCMA_WOTSTW	# line 157
+cdrafts-split/WOTS_C_Multi.ec	module:d9b7a076157d	M_EUF_NACMA_WOTSTW_L	# line 163
+cdrafts-split/WOTS_C_Multi.ec	module:ad102dc6d1ad	AA	# line 164
+cdrafts-split/WOTS_C_Multi.ec	module:71bd977dea4e	R_multi_STCRC	# line 239
+cdrafts-split/WOTS_C_Multi.ec	module:fcf3179dd841	AA	# line 241
+cdrafts-split/WOTS_C_Multi.ec	module:17413eb31712	R_multi_WOTSTW	# line 300
+cdrafts-split/WOTS_C_Multi.ec	module:b60c9a26f35d	AA	# line 302
+cdrafts-split/WOTS_C_Multi.ec	module:db54f499c6a6	GAME1_MULTI	# line 373
+cdrafts-split/WOTS_C_Multi.ec	module:2628b564683e	AA	# line 374
+cdrafts-split/WOTS_C_Multi.ec	module:cf05f7d16d25	G0_MULTI	# line 426
+cdrafts-split/WOTS_C_Multi.ec	module:f41e35ee1cdf	AA	# line 427

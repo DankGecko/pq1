@@ -721,3 +721,131 @@ about where the ignorance sits — not security.
 the overall EUF-CMA statement is meant to cover **bootstrap-signed Type-1
 authorisations**. If it is, the target-side argument does not apply to the bootstrap
 key, which has no device-side cap.
+
+### UPDATE 2026-08-18 (later) — a file ENTERS the certified closure; and the next link in its chain is RED
+
+Two things happened, and the second is the more important one.
+
+#### 1. `WOTS_C_Multi.ec` is now GATED — deliberate re-baseline, ledger UNCHANGED
+
+`c <= p_tgts` is a premise carried by **11 of the closure members, in 48 places**.
+The lemma that justifies its *shape* — `D1_reduce` ("the reduction places one
+S-TCR(+C) target per committed query", `cdrafts-split/WOTS_C_Multi.ec:523`) — lived
+in a file that was in **neither** `closure-c10-split.txt` **nor** any `cert-*.tsv`.
+**The gate had never built it.** Write-up:
+`scratch/FINDING-c-le-ptgts-justification-is-ungated.md`.
+
+It compiles clean and is zero-admit, so gating it is a strict improvement. Done:
+closure `32 -> 33`, `CONE_FILES 43 -> 44`,
+`INPUTS_SHA256 eb589caf... -> 45b788a6...`, with the mandatory `cert-identity.tsv`
+RE-BASELINE LOG entry.
+
+**Both runs are vendored, and the RED one is the point.** The gate was run *before*
+updating the baseline, and it correctly refused the change:
+
+```
+scratch/gate_run1_wcm.log   RED (2 failures)
+  FAIL INPUTS_SHA256 DRIFT: committed eb589caf..., computed 2af7b788...
+  cone: keys now=1113 baseline=1099 | ROWS now=1193 baseline=1179 | added=14
+  FAIL cone census GREW -- 14 new rows, ALL from cdrafts-split/WOTS_C_Multi.ec
+
+scratch/gate_run2_wcm.log   GREEN at 45b788a6...
+  cone: keys now=1113 baseline=1113 | ROWS now=1193 baseline=1193 | added=0
+  ledger=242 (UNCHANGED)   statements pinned=111/111
+```
+
+**All 14 added rows are `module` / `module-type` class. The ledger — admits,
+axioms, clone-discharges — stayed at 242.** Adding a proof file added zero
+assumptions. That is what "ADDITIONS ARE FATAL" is for: it made a deliberate,
+reviewable change impossible to make silently.
+
+#### 2. RETRACTION — "`D1_bridge_WOTSTW` does not exist" was FALSE
+
+The finding above originally reported that `WOTS_C_Multi.ec`'s header describes two
+bridge artefacts the tree does not contain, and marked it **VERIFIED**. It is wrong.
+`D1_bridge_WOTSTW` is at `cdrafts-split/WOTS_C_Bridge.ec:433` — **the same
+directory**. The name was searched for *inside `WOTS_C_Multi.ec`* and its absence
+**there** reported as absence from the repo: `absence-from-the-wrong-scope`, an error
+class this file's own log already records twice.
+
+The chain does exist: `D1_bridge_WOTSTW` (`:433`) -> `D1_MEUFNACMA_WOTSC_MM45`
+(`:719`) -> `..._embthfc` (`WOTS_C_EmbDischarge.ec:174`) -> consumed at
+`SPHINCS_C.ec:252`.
+
+*(Process note worth keeping: a delegated agent was briefed to write the "does not
+exist" sentence into a cone file and **refused**, having checked. Had it complied, a
+new false claim would have been installed in the tree.)*
+
+#### 3. THE FINDING THAT REPLACES IT — `WOTS_C_Bridge.ec` does not compile, and says it does
+
+**Measured at r2026.02, in-container.** The terminal
+`by rewrite hoq; do ! split; smt().` of the `disj_wgpidxs` bookkeeping step — inside
+`D1_bridge_WOTSTW`'s own proof — fails `cannot prove goal (strict)`, `__RC=1`, no
+`.eco`. Its header claimed, since 2026-07-08:
+
+> `PROOF STATUS (2026-07-08): PROVED IN FULL — ZERO admits.`
+
+**It is not a prover-budget artefact.** Re-run with `-timeout 120 -max-provers 8` it
+fails at the same tactic with the same error after **2592 s**. Receipts:
+`experiments/wots-badenc/bridge.out`, `bridge_timeout.out`.
+
+**Indicated cause, not demonstrated:** `fe2b22f` (2026-08-01) retyped the
+non-certified side-files for route (D) the same day `msgWOTS` widened to
+`mdgstblock` (`ea1087f`). The retype restored **type**-correctness; nothing
+re-checked **provability**, because the gate never builds this file.
+`WOTS_C_Multi.ec` went through the same retype in the same commit and **does**
+compile. No pre-split checkout was reconstructed. Full diagnosis:
+`scratch/FINDING-wots-c-bridge-is-genuinely-broken.md`.
+
+**What is NOT claimed:** that the goal is false (`smt` failing is not a refutation),
+or that anything certified is affected. `WOTS_C_Bridge`, `WOTS_C_EmbDischarge` and
+`SPHINCS_C` are all outside the closure; the gate is GREEN at `45b788a6...` without
+them. **"ZERO admits" also remains true** — there is no `admit`/`sorry`/`axiom` in
+the file. It does not *admit* the goal, it *fails to close* it. What was false is
+"PROVED IN FULL".
+
+The header is now corrected in place with a dated additive note (comments only —
+proven, not asserted: a comment-stripper was first shown to **detect** a mutated
+`smt()` call, then shown the before/after stripped text is byte-identical).
+**The file is deliberately NOT gated**: adding a red file to the closure turns the
+gate red by construction.
+
+#### 4. And the two receipts disagree on the line number — on purpose
+
+`bridge_timeout.out` prints `:659`, `bridge.out` prints `:693`. They are runs on
+**different versions of the file**: the 39-line correction note sits above the
+failing tactic and shifted it. Same tactic, same error, same step. Both the note and
+the finding now carry the file state per receipt.
+
+**And it happened again at vendoring time.** Every `file:line` in this section was
+re-measured against the snapshot before publishing, and **four of them were stale** —
+`D1_reduce` (`:488` -> `:523`), `D1_bridge_WOTSTW` (`:391` -> `:433`),
+`D1_MEUFNACMA_WOTSC_MM45` (`:677` -> `:719`), and the `WOTS_C_Reduction` span. The
+correction note's own 39 lines had moved two of them. A fifth citation was nearly
+dropped as fabricated because a `grep` for its exact phrase found nothing — the
+phrase wraps across two lines in the source; opening the file showed the quote is
+genuine (`WOTS_C_Reduction.ec:341-344`). All line numbers here are anchored to **this
+frozen snapshot**, which is the only reason they can be trusted at all.
+
+This is the **third** time in this one correction that a line reference went stale
+under its own edit — the first two being the note citing `:659` after itself moving
+it to `:693`, and the note's closing line still saying "until `:659` is repaired".
+Everything is now anchored on tactic text. It is a small thing that keeps recurring,
+which is the reason it is written down rather than quietly fixed.
+
+#### What this does and does not do for `c <= p_tgts`
+
+**Does:** the lemma giving the premise its shape is now inside the gate, so it cannot
+silently rot the way `WOTS_C_Bridge` did.
+
+**Does not:** `D1_reduce` is stated over `STCRC_WC.Col`, while the certified chain
+runs over `FC`. `WOTS_C_Reduction.ec:341-344` calls unifying them "the remaining
+structural reconciliation", and the bridge that would connect them is the file that
+does not currently compile. The premise remains **carried, not discharged** — which
+is what the certified statements already say, and they are right to.
+
+**Known gap in the new gating, stated plainly:** the gate proves `D1_reduce`
+**compiles**; it does not yet pin its **statement**, so it does not prove the lemma
+still *says* `c <= p_tgts`. Closing that means `EXPECT_PINS 111 -> 113` in
+`cert_gate_split.sh`. Deliberately not done in this change — a pin on the first link
+of a chain whose second link is red would read as more assurance than it is.
