@@ -669,3 +669,55 @@ the deployed statement.
 **What `2^-82` would still need:** an argument that the term counts *signing
 queries* rather than hypertree instances, and the `2^16` policy bound imported into
 the model. Neither exists.
+
+### CONCLUSION 2026-08-18 — do NOT import the deployment cap, and withdraw the numbers
+
+Asked both external reviewers whether importing `MAX_SLOT_USES` into the model is
+right. **Both said no.** Full write-up:
+`scratch/FINDING-do-not-import-the-policy-cap.md`.
+
+**The objection that invalidates the whole numeric thread:** *a surface cardinality
+does not prove that `Pr[T_COLL_RES_ENUM]` is bounded by a birthday expression.*
+`q²/|C_T|` is **not** obtained by counting `|C_T|`. Turning a surface size into an
+advantage needs an explicit assumption about how `ThC` images behave against an
+adversary holding the keyed oracle and choosing its own counter — and
+`TCollResEnum.ec` says outright that nothing bounds it.
+
+**So `2^-82` and `2^-78.09` are WITHDRAWN.** They were heuristic estimates on a
+model that was never derived. `"clears the 96 floor"` is withdrawn too: that floor
+is a **query-work** floor, `2^-82` is an **advantage**, and
+`tools/forsc_grinding_margin.py` carries an F3 correction that exists *because a
+previous version made exactly this conflation*.
+
+**And the term is not in the certified statement at all.** VERIFIED: `grep -rn
+T_COLL_RES_ENUM cdrafts-split/ base-c10-split/` returns nothing; the certified
+capstone RHS (`SphincsC10CapstoneWired.ec:595-604`) carries four other terms.
+
+**The query count fails independently.** VERIFIED on the live closure member
+(`XmssmtCC_All.ec:752`): `R_MEUFGCMAWOTSC_EUFNAGCMA_C.choose` computes and stores
+**all** WOTS+C public keys — it is **eager**, so `nrts = c = 262656` regardless of
+how many signatures the deployment makes. `q_s = 2^16` is wrong and `2·q_s` equally
+unsupported; a `q_s`-shaped bound needs an **on-demand reduction**, a rebuild.
+
+*(One reviewer cited a `_wip` file for this, absent from the closure and all four
+`cert-*.tsv` — the same non-certified-draft trap `Extraction.ec` sets. The live file
+was checked instead. Note the live `R_int_WOTSTW.choose` is by contrast **lazy**:
+the eagerness is at the hypertree layer, not the WOTS one.)*
+
+**A reviewer corrected itself, and I had over-recorded it.** A partial (killed) run
+called `MAX_SLOT_USES` a "mutable governance parameter"; its completed run withdrew
+that. VERIFIED: `PQSmartWallet.sol:71` is a compile-time `constant` with no setter,
+consistent with invariant #7 and Rust↔Solidity drift-gated. What survives is weaker
+— an imported cap would still rest on the on-chain check and the firmware gate,
+both outside EasyCrypt's TCB.
+
+### The honest position on this leg
+
+`Pr[T_COLL_RES_ENUM]` is an **unbounded assumption**; the surface count is a
+**theorem**; **no derivation connects them**. What the work bought is precision
+about where the ignorance sits — not security.
+
+**Still open, and it is a design-intent question rather than a proof task:** whether
+the overall EUF-CMA statement is meant to cover **bootstrap-signed Type-1
+authorisations**. If it is, the target-side argument does not apply to the bootstrap
+key, which has no device-side cap.
