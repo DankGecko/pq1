@@ -849,3 +849,65 @@ is what the certified statements already say, and they are right to.
 still *says* `c <= p_tgts`. Closing that means `EXPECT_PINS 111 -> 113` in
 `cert_gate_split.sh`. Deliberately not done in this change — a pin on the first link
 of a chain whose second link is red would read as more assurance than it is.
+
+### CORRECTION 2026-08-18 (same day) — the certified capstone does NOT consume D.1
+
+Raised by GPT-5.6 in the review round on the section immediately above, and
+**re-verified independently at source before being accepted**, because it
+contradicts a claim published minutes earlier. Full write-up:
+`scratch/FINDING-d1-is-not-the-certified-route.md`.
+
+**What was published:** *"the lemma that justifies [`c <= p_tgts`]'s shape —
+`D1_reduce` — lived in a file the gate had never built."* The factual half is
+right; the **inference is wrong**, and it is the part that made the change sound
+load-bearing.
+
+**VERIFIED.** The capstone discharges the hypertree term by applying the +C
+component theorem *directly* —
+`SphincsC10CapstoneWired.ec:624`,
+`have hHT := EUFNAGCMA_FLSLXMSSMTTWCESNPRF (R_top_C(F)) ...`. The token `D1_`
+occurs in that file **exactly once**, in a comment (`:548`), and that comment names
+the route actually taken: *"Carried from **`interactive_D1_MA`** up through
+`XmssmtCC_All` to here."*
+
+**`interactive_D1_MA` is `WOTS_C_Interactive.ec:3193`, and that file has been IN the
+closure all along.** It carries `c <= p_tgts` itself (`:3197`), and the "one target
+per query" rationale is stated in the same gated file (`:1350`). Every one of the 11
+premise-carrying files is on that interactive route.
+
+**The two developments are parallel, not sequential:**
+
+```
+CERTIFIED:  interactive_D1_MA (WOTS_C_Interactive, GATED)
+              -> XmssmtCC_All -> SphincsC10CapstoneWired          [GREEN]
+
+PAPER D.1:  D1_reduce -> D1_MEUFNACMA_WOTSC (WOTS_C_Multi, now gated)
+              -> D1_bridge_WOTSTW (WOTS_C_Bridge)                 [RED]
+              -> WOTS_C_EmbDischarge -> SPHINCS_C                 [ungated]
+```
+
+The D.1 chain is a **second, independent assembly of the same leg** (paper 2022/778
+App. D). The capstone depends on none of it — which is the real reason the red bridge
+costs the certified artifact nothing. That conclusion was stated correctly above; the
+*reason* given for it was wrong.
+
+**What the re-baseline actually bought — narrower, but real:** a compiling,
+zero-admit file is now inside the gate and cannot rot silently the way
+`WOTS_C_Bridge` did. It did **not** bring the certified premise's justification
+inside the gate; that was never outside it.
+
+**And a sharper point survives both versions:** *neither* route discharges
+`c <= p_tgts`. Both carry it as a hypothesis. "The lemma that justifies its shape"
+was the wrong phrase for `D1_reduce` to begin with — `D1_reduce` **uses** the
+premise, it does not establish it.
+
+**The framing error, named:** a premise was found in 11 certified files, a lemma
+elsewhere was found mentioning the same premise, and the second was concluded to
+justify the first — **without checking whether the certified chain reaches it**. A
+name-level match read as a dependency. One `grep` of the capstone for `D1_` settles
+it. Same family as `absence-from-the-wrong-scope`, inverted: **presence in the wrong
+scope, read as relevance.**
+
+**Effect on the deferred `EXPECT_PINS 111 -> 113`:** weaker still. The chain those
+pins would protect is not the certified one, so they are drift-hardening on a
+**supplemental** development and must be labelled as such if ever added.

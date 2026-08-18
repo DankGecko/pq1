@@ -941,7 +941,9 @@ qed.
    box is the deferred FC<->STCRC_WC.Col unification.
    CORRECTED 2026-08-18: this line said "(D1_bridge_WOTSTW below)".  There is no
    such lemma BELOW -- the name occurs nowhere else in this file.  It DOES exist,
-   at WOTS_C_Bridge.ec:391, in a downstream file that requires this one, that is
+   at WOTS_C_Bridge.ec:433 (was :391 -- that file's own status-correction note
+   moved it; anchor on the NAME, not the number), in a downstream file that
+   requires this one, that is
    absent from closure-c10-split.txt, and that does not compile at r2026.02.
    See the file header for the measurement.  Nothing in THIS file discharges the
    unification, so the bound below is over the LOCAL WOTS-TW game only.
