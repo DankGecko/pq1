@@ -3,6 +3,14 @@
 2026-08-18. Found while looking for a next unit that was a fact rather than a
 number. Everything below verified at source.
 
+> **:warning: THIS FINDING'S CENTRAL INFERENCE IS RETRACTED — see
+> `FINDING-d1-is-not-the-certified-route.md`.** `D1_reduce` does **not** justify the
+> premise the certified chain carries: the capstone never reaches it. The certified
+> route is `interactive_D1_MA` (`WOTS_C_Interactive.ec:3193`), gated all along. The
+> *measurements* below (11 files, 48 occurrences, `WOTS_C_Multi` ungated, zero
+> ledger) are correct; the *dependency claim* is not. A second retraction, on a
+> different claim, is recorded at the end of this file.
+
 ---
 
 ## THE SHAPE OF IT

@@ -724,6 +724,12 @@ key, which has no device-side cap.
 
 ### UPDATE 2026-08-18 (later) — a file ENTERS the certified closure; and the next link in its chain is RED
 
+> **:warning: READ THE CORRECTION AT THE END OF THIS FILE BEFORE §1 BELOW.** The
+> *rationale* given in §1 — that gating `WOTS_C_Multi` brought a certified premise's
+> justification inside the gate — is **retracted**: the certified capstone does not
+> consume D.1 at all. The **mechanics** in §1 (RED -> GREEN, ledger unchanged at
+> 242, census additions zero) stand, as do §2-§4.
+
 Two things happened, and the second is the more important one.
 
 #### 1. `WOTS_C_Multi.ec` is now GATED — deliberate re-baseline, ledger UNCHANGED
@@ -911,3 +917,57 @@ scope, read as relevance.**
 **Effect on the deferred `EXPECT_PINS 111 -> 113`:** weaker still. The chain those
 pins would protect is not the certified one, so they are drift-hardening on a
 **supplemental** development and must be labelled as such if ever added.
+
+### UPDATE 2026-08-18 — the certified statement is ROLE-AGNOSTIC, and no key is named in it
+
+The open question flagged at the end of the 2026-08-15 update — *does the overall
+EUF-CMA statement cover bootstrap-signed Type-1 authorisations?* — is answered.
+Full write-up: `scratch/FINDING-bootstrap-scope-is-unwritten.md`.
+
+**It covers them, and that is the problem.** VERIFIED:
+
+```
+cdrafts-split/FxChain.ec:255
+  module EUFCMA_C10 (F : Adv_EUFCMA_C) =
+    DSSC.Stateless.EUF_CMA(SPHINCS_PLUS_C10, F, DSSC.Stateless.O_CMA_Default).
+```
+
+The textbook **single-key stateless EUF-CMA game** — one keypair, one adversary, one
+signing oracle, and no chain, owner index, wallet, role, or per-key counter anywhere
+in it. So the theorem is not slot-only: it applies verbatim to the bootstrap key, and
+an adversary collecting `C · 2^16` Type-1 signatures across `C` chains is just *an
+adversary in the same game*. **No carried term becomes unsound.**
+
+**And `c` / `p_tgts` were never the signature count** — an error corrected here.
+`WOTS_C_Real.ec:41` defines `c` as the **structural** WOTS-TW instance count of the
+hypertree (`bigi predT (fun d' => nr_nodes_ht d' 0) 0 d`), which is why it pins
+unconditionally at `262656`. `c <= p_tgts` is a reduction-side **target** cap, not a
+bound on how many messages a wallet key may sign.
+
+**What actually degrades is the NUMBER.** The generic multi-target contribution is
+`(q + q²)·2⁻¹²⁸`, so at `q = C·2^16` the floor is `96 − 2·log₂ C` bits — below 96 as
+soon as `C > 1`. The project's own Lean already tabulates this
+(`Quantitative.lean:193-210`) and notes there is **no on-chain cap on the number of
+chains**.
+
+**THE FINDING — the scope restriction is written down nowhere in the EasyCrypt.**
+Checked as an absence claim by searching the *mechanism*: all 33 closure members for
+`bootstrap|chain_id|chainid|slot_index|65536|MAX_SLOT|per-chain|wallet`. **Exactly two
+hits, both comments, neither a statement** — and the second
+(`FORS_C10.ec:87`) is the one place in the certified closure where the deployment cap
+appears in a quantitative argument, using the **per-chain `2^16`**: the exact number
+that does not apply to the bootstrap key. It is prose justifying a rejected route, so
+it moves no theorem — but it is a certified file reasoning from a per-chain cap.
+
+**This is a documentation/scope question, not a proof task.** A second EUF-CMA
+theorem "for the bootstrap key" would be the same theorem. What is missing is an
+explicit instantiation contract: slot keys instantiate `q` with their capped per-key
+count; the bootstrap key instantiates `q` with the **aggregate across every chain
+sharing it**; and every quoted bit-figure names which of the two it used. Proving
+that mapping is a real project — the Lean file records that even the single-chain
+`Reachable -> q <= C` theorem is not assembled (`Quantitative.lean:87-95`).
+
+**Owner decision required:** state the instantiation contract, or restrict the quoted
+figures to slot keys explicitly. Realistic bootstrap usage is tens of signatures
+(slot rotations only), so practical exposure is far below any of this — but practical
+exposure is not what a security claim states, and the claim currently names no key.
