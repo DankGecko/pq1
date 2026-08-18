@@ -971,3 +971,66 @@ that mapping is a real project — the Lean file records that even the single-ch
 figures to slot keys explicitly. Realistic bootstrap usage is tens of signatures
 (slot rotations only), so practical exposure is far below any of this — but practical
 exposure is not what a security claim states, and the claim currently names no key.
+
+### UPDATE 2026-08-18 (round 2) — the two reviewers DIVERGE, and the sharper answer wins
+
+Both models were asked the bootstrap-scope question independently. They **converge**
+on the verdict and **diverge on the mechanism**, which is the whole reason for running
+two. Full write-up: `scratch/FINDING-round2-divergence-none-of-the-terms.md`;
+transcript `scratch/review_kimi_bootstrap_scope_2026_08_18.md`.
+
+| | claim |
+|---|---|
+| GPT-5.6 | "the directly affected generic multi-target term is `S_TCR_C_Int_MA`; its quadratic component degrades to `96 − 2⌈log₂ C⌉`" |
+| Kimi K3 | "**none** of the four terms degrades, by nothing — the model has no signing-query parameter at all" |
+
+**Kimi is right.** VERIFIED: the four carried terms appear in the capstone RHS
+(`:595-604`) with **coefficient 1 and no query factor** — bare `Pr[...]` summands;
+same in the component theorem (`XmssmtCC_All.ec:8583-8592`). Query counts enter only
+as win-condition caps keyed to **hypertree geometry**, not adversary behaviour. GPT
+mapped the EasyCrypt term onto Lean's `(q + q²)·2⁻¹²⁸` arithmetic for the *same
+assumption* — two different objects. **Nothing in the certified artifact prices `q`.**
+
+So the correct statement is not "the certificate is silently weaker for the bootstrap
+key" but **"the certificate is silent, full stop"** — all cross-chain degradation
+lives outside it. (The section above already said the number degrades rather than a
+term; this sharpens *why*.)
+
+**Three facts the round produced that were not in hand, all verified here:**
+
+1. **A hard structural ceiling that `C · 65536` crosses at C = 4.**
+   `FL_SL_XMSS_MT_ES.ec:73` `const l : int = 2 ^ h` with `h = h'·d = 18`
+   (`SPHINCS_PLUS.ec:124`), so `l = 2^18 = 262144` messages — the capacity of the
+   hypertree game itself. Not a probability claim; the model's geometry. Practically
+   irrelevant (real bootstrap use is tens of signatures) but a crisp boundary where
+   the discussion previously had only soft arithmetic.
+
+2. **`c <= p_tgts` is ALREADY PINNED where it is load-bearing.** The capstone
+   statement is pinned (`cert-statements-split.tsv:3`) and
+   `tools/stmt_digest.py:108-113` digests from `^lemma <name>` to `^\s*proof\b` —
+   **premises included**. This deflates the deferred `EXPECT_PINS 111 -> 113` a third
+   time: not merely on the wrong (supplemental) chain, it **duplicates existing
+   protection**. Kimi also caught that the digest's negative lookahead
+   `(?![A-Za-z0-9_'])` means a pin on `D1_MEUFNACMA_WOTSC` would not match
+   `D1_MEUFNACMA_WOTSC_MM45`; correct targets are `WOTS_C_Multi.ec:523` and `:951`.
+
+3. **The unbounded-query evidence was outside the repo, and I had searched the repo.**
+   `DigitalSignatures.eca` is an EasyCrypt **stdlib** theory in the opam switch —
+   `~/.opam/checkct/lib/easycrypt/theories/crypto/DigitalSignatures.eca:1335`: *"access
+   to a signing oracle that it can query an **unlimited** number of times"*, with
+   `O_CMA_Default` keeping a query list as a counter, not a cap. Q1(a) now rests on
+   source rather than inference. **That is `absence-from-the-wrong-scope` for the
+   fourth time in one day** — this time searching the project tree for a file that
+   lives in the toolchain's library path.
+
+**THE BETTER NEXT UNIT (Kimi's, and better than anything on my list): pin the
+NEGATIVE scope facts.** `experiments/ptgts-pin/PTgtsPin.ec` already proves them and
+already compiles (Kimi compile-tested: RC=0, ~2 s) — `c = 262656`, `! (c <= 65536)`,
+`l = 2^18` — and its own prose already says *"nothing in this model expresses the
+on-chain 2^16 cap"*. Promoting a cleaned version into the closure with statement pins
+turns the finding *"the scope restriction is written nowhere"* from a README paragraph
+into a **machine-checked, gated artifact**. It is the only candidate that changes what
+can be claimed, and the work largely exists.
+
+Revised ranking: **(1) pin the negative scope facts** · (2) bridge repair, with eyes
+open that the certificate does not need it · (3) the statement pins — busywork.
