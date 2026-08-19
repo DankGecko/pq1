@@ -920,6 +920,13 @@ pins would protect is not the certified one, so they are drift-hardening on a
 
 ### UPDATE 2026-08-18 — the certified statement is ROLE-AGNOSTIC, and no key is named in it
 
+> **:white_check_mark: PARTLY RESOLVED 2026-08-19 — see the final section of this
+> file.** The finding below that *"the scope restriction is written down nowhere in
+> the EasyCrypt"* was true when written; those facts are now **gated** as
+> `cdrafts-split/C10DeployedScope.ec` with six statement pins. Still open, and
+> still yours to decide: the instantiation contract naming which key a quoted
+> figure applies to.
+
 The open question flagged at the end of the 2026-08-15 update — *does the overall
 EUF-CMA statement cover bootstrap-signed Type-1 authorisations?* — is answered.
 Full write-up: `scratch/FINDING-bootstrap-scope-is-unwritten.md`.

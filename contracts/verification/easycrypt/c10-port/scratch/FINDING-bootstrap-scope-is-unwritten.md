@@ -1,5 +1,13 @@
 # FINDING — the certified statement is ROLE-AGNOSTIC, and nothing anywhere says which key its numbers are for
 
+> **:white_check_mark: RESOLVED 2026-08-19 — the facts bounding this silence are
+> now GATED.** `experiments/ptgts-pin/PTgtsPin.ec` was promoted (by *moving*) to
+> `cdrafts-split/C10DeployedScope.ec`, closure 33 -> 34, six statement pins,
+> gate GREEN with `ledger` unchanged. §(c) below — "the scope restriction is
+> written down NOWHERE" — was true when written and is **no longer current**.
+> What has NOT changed: the capstone still has no query parameter, so this
+> remains a scope/documentation matter and §(d)'s owner decision is still open.
+
 2026-08-18. The open question I had flagged before the review round — *does the
 overall EUF-CMA statement cover bootstrap-signed Type-1 authorisations?* — put to
 GPT-5.6. **Every load-bearing claim below re-verified by me at source.**
