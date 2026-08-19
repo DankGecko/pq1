@@ -4,7 +4,7 @@
 require import AllCore IntDiv Ring StdBigop StdOrder.
 require import SPHINCS_PLUS.
 require import WOTS_C_Real.
-require import PTgtsPin.
+require import C10DeployedScope.
 
 op ctl_p_tgts : int = 262655.        (* c10_p_tgts - 1 *)
 

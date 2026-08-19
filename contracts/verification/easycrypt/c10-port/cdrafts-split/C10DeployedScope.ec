@@ -1,4 +1,38 @@
 (* ==========================================================================
+   C10DeployedScope.ec -- DEPLOYED HYPERTREE SCOPE: pin `p_tgts`, discharge
+   `c <= p_tgts`, and state what the DEPLOYMENT CAP is NOT.
+
+   PROMOTED 2026-08-19 from experiments/ptgts-pin/PTgtsPin.ec, which is where
+   this content was developed (2026-08-15) and where its twelve-target control
+   receipt still lives.  It was MOVED, not copied: there is exactly one
+   definition of these facts in the tree, so the two cannot drift apart.  The
+   experiment's controls bind to it by `require import C10DeployedScope` and the
+   runner's `-I cdrafts-split`.
+
+   WHY PROMOTE IT.  Section 5's negative facts -- the deployed usage cap is
+   strictly below `c`, is not admissible as `p_tgts`, and the hypertree's own
+   capacity is `l = 4 * c10_q_s` -- were the answer to "where is the scope of the
+   certified statement written down?", and the answer was: in an UNGATED
+   experiment.  As a closure member they are compiled on every gate run and their
+   statements are pinned by digest, so they cannot rot.
+
+   WHAT THIS DOES AND DOES NOT BUY.  It does NOT make the certified capstone say
+   anything about query counts -- the capstone has no query parameter at all
+   (see section 5).  What it buys is that the facts BOUNDING that silence are now
+   machine-checked artifacts rather than prose: a reader who wants to know why
+   "at 2^16 uses" is not a reading of this development gets a gated theorem
+   (`c10_usage_cap_is_not_admissible_as_p_tgts`) instead of a paragraph.
+
+   `c10_q_s` (= 65536 = MAX_SLOT_USES) IS DEPLOYMENT POLICY AND IS FENCED AS SUCH.
+   It occurs ONLY in the CONCLUSIONS of section 5's lemmas, never as a hypothesis
+   of anything, and nothing in base-c10-split/ or cdrafts-split/ requires this
+   file.  Importing the policy cap into the model is exactly the move both
+   external reviewers rejected on 2026-08-15; naming it in a negative statement
+   about what it cannot be is the opposite of that move, but the fence is stated
+   here so the distinction is not left to the reader.
+
+   ---- original header follows, unchanged ----
+
    PTgtsPin.ec -- PIN `p_tgts` AT THE DEPLOYED VALUE, AND DISCHARGE `c <= p_tgts`.
 
    WHY THIS FILE EXISTS.  Every deployed statement in this development carries
@@ -166,12 +200,17 @@ qed.
 
    (B) NOT CERTIFIED -- stated as design intent, NOT as a verified fact:
      * The bridging step "the reduction places ONE target PER COMMITTED QUERY"
-       appears in WOTS_C_Multi.ec:490-494 (`D1_reduce`).  **WOTS_C_Multi is NOT
-       in closure-c10-split.txt**: it is not a gate target, no certified run
-       compiles it, and `D1_reduce` carries a header labelling the Algorithm-9
-       multi-instance byequiv as its core obligation.  So the "one target per
-       WOTS instance" reading is the reduction's INTENT; it is not checked here
-       and this file does not rest on it.
+       is stated at WOTS_C_Multi.ec:233 and used by `D1_reduce` (:523).
+       CORRECTED 2026-08-19 -- this passage previously read ":490-494" and
+       "**WOTS_C_Multi is NOT in closure-c10-split.txt**".  BOTH ARE NOW WRONG:
+       the line moved under comment-only edits, and the file WAS ADDED to the
+       closure on 2026-08-18.  But the conclusion is UNCHANGED, and for a reason
+       found the same day: the certified capstone DOES NOT CONSUME D.1 at all --
+       it applies the +C component theorem directly at R_top_C(F)
+       (SphincsC10CapstoneWired.ec:624), and reaches `c <= p_tgts` through
+       `interactive_D1_MA` (WOTS_C_Interactive.ec:3193, in the closure all
+       along).  So `D1_reduce` remains the reduction's INTENT on a PARALLEL
+       assembly; it is not checked here and this file does not rest on it.
 
    WHY 262656 IS NEVERTHELESS THE RIGHT PIN, and why (B) does not weaken it:
    the object to satisfy is the premise the CERTIFIED statements already carry,

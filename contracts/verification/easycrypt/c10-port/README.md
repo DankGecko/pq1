@@ -1034,3 +1034,85 @@ can be claimed, and the work largely exists.
 
 Revised ranking: **(1) pin the negative scope facts** · (2) bridge repair, with eyes
 open that the certificate does not need it · (3) the statement pins — busywork.
+
+### UPDATE 2026-08-19 — the negative scope facts are now GATED (closure 33 → 34, gate GREEN)
+
+Kimi K3's ranked-#1 unit from the review round, and it was better than anything on
+my own list. The finding above was that the **scope** of the certified statement —
+what stops a reader quoting it *"at 2^16 uses"* — is written down nowhere in the
+EasyCrypt. Those facts existed, but in an **ungated experiment**. They are now
+compiled on every gate run and pinned by digest.
+
+**Promoted by MOVING, not copying.** `experiments/ptgts-pin/PTgtsPin.ec` was
+`git mv`d to `cdrafts-split/C10DeployedScope.ec` and all ten dependents repointed,
+so exactly **one** definition of these facts exists in the tree. A copy would have
+been a fresh drift surface — the defect class this whole arc keeps finding.
+
+```
+GATE: GREEN (RC=0), in-container r2026.02, 25 prover configurations
+  CLOSURE_COMPILED = 34/34        (was 33)
+  statements pinned = 117/117     (was 111 — six new pins)
+  cone: added=0 removed=0         ledger=242 UNCHANGED
+  OK inputs unchanged across the run (bcb2f295...)
+```
+
+Both runs are vendored: `scratch/gate_run1_scope.log` is RED **on the drift line
+only** — the gate correctly refusing an unbaselined change — and
+`scratch/gate_run2_scope.log` is GREEN.
+
+**Zero census rows of any class**, so `cert-baseline-split.tsv` needed **no edit at
+all**: the file contains only definitions (`op x : int = <value>`) and proved
+lemmas, and a definition is not an assumption. Only the identity row moved.
+
+**And `added=0` was not taken on trust.** It is ambiguous between "nothing new
+entered" and "the census never looked at this file" — the
+absence-from-the-wrong-search shape recorded four times this week. Settled by
+measurement (`experiments/ptgts-pin/census_coverage_probe.sh`): injecting an axiom
+into the new file moves `ledger` 242 → 243; removing it restores 242.
+
+**What is pinned:** `c10_c_closed`, `c10_p_tgts_is_least`, `c10_c_le_p_tgts_at_pin`,
+`c10_usage_cap_is_not_admissible_as_p_tgts`, `c10_ht_capacity`,
+`c10_ht_capacity_vs_usage_cap`.
+
+**What it does NOT buy, stated in the file header:** it does not make the capstone
+say anything about query counts — the capstone has no query parameter at all. The
+gain is that the facts *bounding that silence* are machine-checked artifacts rather
+than prose. A reader asking why "at 2^16 uses" is not a reading of this development
+now gets a gated theorem instead of a paragraph.
+
+**The policy cap is NOT imported.** `c10_q_s` (= 65536 = `MAX_SLOT_USES`) occurs
+only in the **conclusions** of the section-5 lemmas, never as a hypothesis, and
+nothing in `base-c10-split/` or `cdrafts-split/` requires this file. Both reviewers
+rejected importing the deployment cap on 2026-08-15; naming it in a *negative*
+statement about what it cannot be is the opposite move, and the fence is in the
+header so the distinction is not left to the reader.
+
+**Controls.** `pin_discrimination.sh`: deleting each pinned lemma's conclusion
+(replacing it with `true`) moves its digest, 6/6 — plus a no-op leg, because if
+whitespace also moved a digest then "it moved" would carry no signal. An
+axiom-downgrade leg checks that `lemma` → `axiom` yields `NOT-FOUND`, which the
+gate hard-fails. `runall.sh`: 11 targets at declared polarity after the move,
+statement-identity 0 broken, 0 admits/axioms in code.
+
+**My first version of the axiom-downgrade control passed for the wrong reason** and
+is worth recording. The mutation helper threw (it anchored `qed.` at line start;
+this file's proofs are one-liners), leaving an **empty** file — and an empty file
+also digests to `NOT-FOUND`, the exact verdict under test. Caught by reading the
+traceback rather than the verdict. It is now guarded by a size check, and **the
+guard is self-tested**: a deliberately truncating helper makes it report
+`truncated, not downgraded`.
+
+**Two defects fixed in the file before promotion**, both found by re-measuring
+rather than trusting: it cited `WOTS_C_Multi.ec:490-494` (stale — the phrase is at
+`:233`, `D1_reduce` at `:523`) and asserted *"`WOTS_C_Multi` is NOT in
+`closure-c10-split.txt`"*, which **became false on 2026-08-18** when that file was
+gated. The section's conclusion is unchanged, for the reason found the same day:
+the capstone does not consume D.1 at all.
+
+**Method note.** I tried to predict the new `INPUTS_SHA256` locally instead of
+re-running the gate, got a mismatch, and nearly read it as tree drift. A
+**known-answer test** settled it: my script produced `d124120a` for a clean `HEAD`
+worktree whose committed identity is `45b788a6`, so the script was wrong — it
+omitted the four `base-c10-split` roots the gate adds — not the tree. The gate then
+printed `OK INPUTS_SHA256 matches`. A mismatch against a tool written five minutes
+ago is evidence about the tool first.

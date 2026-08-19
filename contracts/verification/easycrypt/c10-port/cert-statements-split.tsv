@@ -136,3 +136,16 @@ cdrafts-split/DarkSide.ec::mixture_le_moment	464ad56df8ab57d55e0c23b25a13eb23
 cdrafts-split/DarkSide.ec::mixture_le_moment_finite_ex	0ac2baaf163e806d0a3ad4905121d50d
 cdrafts-split/GprocChargedQWired.ec::EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED	b1ac3dd439cda438df8627fcb47bcf62
 cdrafts-split/GprocChargedQWired.ec::charged_qwired_at_witness	d2e768c10d18a584875d479fb6421c56
+
+# --- C10DeployedScope (promoted 2026-08-19 from experiments/ptgts-pin/PTgtsPin.ec) ---
+# The DEPLOYED-SCOPE facts.  Pinned because their VALUE is entirely in what they
+# say: a name-only check would let `! (c <= c10_q_s)` be weakened to `true` and
+# every other phase would still pass.  Note c10_q_s (= MAX_SLOT_USES) appears
+# ONLY in conclusions here -- it is never a hypothesis, and nothing certified
+# requires this file, so the deployment cap is NOT imported into the model.
+cdrafts-split/C10DeployedScope.ec::c10_c_closed	25874a8bd9dc44a61be1012d7319cc3c
+cdrafts-split/C10DeployedScope.ec::c10_p_tgts_is_least	eb6975a4ded06381d60f76456cec64cf
+cdrafts-split/C10DeployedScope.ec::c10_c_le_p_tgts_at_pin	614a85247d5086e5ec360152660adfe5
+cdrafts-split/C10DeployedScope.ec::c10_usage_cap_is_not_admissible_as_p_tgts	87f6ef81e556ff2ba8c9546876754084
+cdrafts-split/C10DeployedScope.ec::c10_ht_capacity	741b506a042b203b9085d892ef00086a
+cdrafts-split/C10DeployedScope.ec::c10_ht_capacity_vs_usage_cap	185df70ae6f1284ffa4e9cd9a3ed2fdc

@@ -25,7 +25,7 @@ require import SphincsC10CapstoneWired.
 require import SphincsC10Content.
 require import C10DeployedInstance.
 require import C10DeployedCapstone.
-require import PTgtsPin.
+require import C10DeployedScope.
 
 
 lemma CTL_EUFCMA_SPHINCS_PLUS_C10_WITH_NO_PIN

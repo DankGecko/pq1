@@ -6,7 +6,7 @@
 require import AllCore IntDiv Ring StdBigop StdOrder.
 require import SPHINCS_PLUS.
 require import WOTS_C_Real.
-require import PTgtsPin.
+require import C10DeployedScope.
 
 lemma ctl_false : p_tgts = c10_p_tgts => false.
 proof. by move=> hpin; smt(c10_c_closed ge0_ptgts c10_p_tgts_dominates_c). qed.

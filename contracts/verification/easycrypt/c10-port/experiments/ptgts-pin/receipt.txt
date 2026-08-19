@@ -1,0 +1,29 @@
+OK     PASS   PTgtsPin                                   __RC=0 __ECO=yes 7408 
+OK     PASS   PTgtsPinCapstone                           __RC=0 __ECO=yes 9271 
+OK     PASS   controls/CtlPinIsLive                      __RC=0 __ECO=yes 7527 
+OK     PASS   controls/CtlCapstonePinPlusOne             __RC=0 __ECO=yes 9271 
+OK     FAIL   controls/CtlPtgtsMinusOne                  __RC=1 __ECO=NO 
+       [critical] [experiments/ptgts-pin/controls/CtlPtgtsMinusOne.ec: line 12 (7-61)] [by]: cannot close goals
+OK     FAIL   controls/CtlPtgtsPlusOneIsLeast            __RC=1 __ECO=NO 
+       [critical] [experiments/ptgts-pin/controls/CtlPtgtsPlusOneIsLeast.ec: line 13 (54-55)] cannot prove goal (strict)
+OK     FAIL   controls/CtlCValueMinusOne                 __RC=1 __ECO=NO 
+       [critical] [experiments/ptgts-pin/controls/CtlCValueMinusOne.ec: line 20 (0-28)] [by]: cannot close goals
+OK     FAIL   controls/CtlUsageCapAsPin                  __RC=1 __ECO=NO 
+       [critical] [experiments/ptgts-pin/controls/CtlUsageCapAsPin.ec: line 11 (7-58)] [by]: cannot close goals
+OK     FAIL   controls/CtlPinDerivesFalse                __RC=1 __ECO=NO 
+       [critical] [experiments/ptgts-pin/controls/CtlPinDerivesFalse.ec: line 12 (7-74)] cannot prove goal (strict)
+OK     FAIL   controls/CtlCapstonePinOffByOne            __RC=1 __ECO=NO 
+       [critical] [experiments/ptgts-pin/controls/CtlCapstonePinOffByOne.ec: line 35 (7-64)] [by]: cannot close goals
+OK     FAIL   controls/CtlCapstoneNoPin                  __RC=1 __ECO=NO 
+       [critical] [experiments/ptgts-pin/controls/CtlCapstoneNoPin.ec: line 147 (0) to line 150 (55)] [by]: cannot close goals
+OK     FAIL   controls/CtlSmtCannotEvaluatePow           __RC=1 __ECO=NO 
+       [critical] [experiments/ptgts-pin/controls/CtlSmtCannotEvaluatePow.ec: line 10 (7-13)] cannot prove goal (strict)
+### STATEMENT IDENTITY (capstone corollary + its three capstone controls)
+OK     experiments/ptgts-pin/PTgtsPinCapstone.ec            statement matches the certified slice
+OK     experiments/ptgts-pin/controls/CtlCapstonePinOffByOne.ec statement matches the certified slice
+OK     experiments/ptgts-pin/controls/CtlCapstonePinPlusOne.ec statement matches the certified slice
+OK     experiments/ptgts-pin/controls/CtlCapstoneNoPin.ec   statement matches the certified slice
+### STATEMENT-IDENTITY: 0 broken
+### ADMIT/AXIOM SWEEP (code only, comments excluded)
+  admits+axioms in code: 0
+### RESULT: 0 broken

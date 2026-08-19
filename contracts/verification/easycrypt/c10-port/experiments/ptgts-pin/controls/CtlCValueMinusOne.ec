@@ -8,7 +8,7 @@ require import WOTS_C_Real.
 import FSSLXMTWES.
 import Bigint BIA.
 import IntOrder.
-require import PTgtsPin.
+require import C10DeployedScope.
 
 lemma ctl_c_value : c = 262655.
 proof.

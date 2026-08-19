@@ -54,7 +54,7 @@ require import SphincsC10CapstoneWired.
 require import SphincsC10Content.
 require import C10DeployedInstance.
 require import C10DeployedCapstone.
-require import PTgtsPin.
+require import C10DeployedScope.
 
 lemma EUFCMA_SPHINCS_PLUS_C10_AT_PINNED_PTGTS
   (F <: Adv_EUFCMA_C{ -R_int_STCRC, -R_int_WOTSTW,

@@ -524,6 +524,46 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-19.  split 45b788a6a623c698531c06c05a5c0e2b -> bcb2f2956488ac7867cd0fbdb3606eec.
+#   A FILE ENTERS THE CERTIFIED CLOSURE: cdrafts-split/C10DeployedScope.ec, the
+#   DEPLOYED-SCOPE facts.  closure-c10-split.txt 33 -> 34, EXPECT_PINS 111 -> 117
+#   (six statement pins), and the file is inside the hashed set, so the identity
+#   had to move.  A deliberate change to the certified tree.
+#   WHY.  The 2026-08-18 review round asked where the SCOPE of the certified
+#   statement is written down -- what stops a reader quoting it "at 2^16 uses".
+#   The answer was: an UNGATED experiment.  The facts bounding the statement's
+#   silence were prose.  They are now compiled on every gate run and pinned.
+#   PROMOTED BY MOVING, NOT COPYING.  experiments/ptgts-pin/PTgtsPin.ec was
+#   `git mv`d here and its ten dependents repointed, so exactly ONE definition of
+#   these facts exists in the tree.  A copy would have been a fresh drift
+#   surface -- the defect class this whole arc has been finding.
+#   WHAT THE RUN PROVES, rather than what I assert: CLOSURE_COMPILED=34/34,
+#   statements pinned=117/117, and the important row --
+#   `cone: keys now=1113 baseline=1113 | ROWS now=1193 baseline=1193 |
+#   added=0 removed=0`.  ZERO census rows of ANY class, so
+#   cert-baseline-split.tsv needed NO edit at all: this file contains only
+#   DEFINITIONS (`op x : int = <value>`) and PROVED lemmas, and a definition is
+#   not an assumption.  ledger stays 242.  The ONLY failure in the run was the
+#   drift line.  Receipt: RED (1 failure), r2026.02, 25 provers, in-container,
+#   scratch/gate_run1_scope.log.
+#   AND `added=0` WAS NOT TAKEN ON TRUST.  "added=0" is ambiguous between
+#   "nothing new entered" and "the census never looked at this file" -- the same
+#   absence-from-the-wrong-search shape recorded twice above.  Settled by
+#   MEASUREMENT (experiments/ptgts-pin/census_coverage_probe.sh): injecting
+#   `axiom census_probe_injected : 1 = 1.` into the new file moves ledger
+#   242 -> 243, and removing it restores 242.  The census covers the file.
+#   THE POLICY CAP IS NOT IMPORTED.  c10_q_s (= 65536 = MAX_SLOT_USES) occurs
+#   ONLY in the CONCLUSIONS of the section-5 lemmas, never as a hypothesis, and
+#   nothing in base-c10-split/ or cdrafts-split/ requires this file.  Both
+#   external reviewers rejected importing the deployment cap into the model on
+#   2026-08-15; naming it in a NEGATIVE statement about what it CANNOT be is the
+#   opposite move.  The fence is stated in the file header.
+#   TWO DEFECTS FIXED IN THE FILE BEFORE PROMOTION, both found by re-measuring
+#   rather than trusting: section 3(B) cited WOTS_C_Multi.ec:490-494 (stale --
+#   the phrase is at :233, D1_reduce at :523) and asserted "WOTS_C_Multi is NOT
+#   in closure-c10-split.txt", which BECAME FALSE on 2026-08-18 when that file
+#   was gated.  The section's CONCLUSION is unchanged, for the reason found the
+#   same day: the capstone does not consume D.1 at all.
 # 2026-08-18.  split eb589cafe306046da0a5d7ba0820c7e9 -> 45b788a6a623c698531c06c05a5c0e2b.
 #   A FILE ENTERS THE CERTIFIED CLOSURE: cdrafts-split/WOTS_C_Multi.ec, Thm D.1
 #   (multi-instance WOTS+C d-EU-naCMA).  closure-c10-split.txt 32 -> 33,
@@ -613,5 +653,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	45b788a6a623c698531c06c05a5c0e2b
+split	bcb2f2956488ac7867cd0fbdb3606eec
 fork	7ab20d2ab0ba2c1f3942408a193b4836

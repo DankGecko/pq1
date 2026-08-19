@@ -5,7 +5,7 @@
 require import AllCore IntDiv Ring StdBigop StdOrder.
 require import SPHINCS_PLUS.
 require import WOTS_C_Real.
-require import PTgtsPin.
+require import C10DeployedScope.
 
 lemma ctl_pin_live :
   p_tgts = c10_p_tgts => 0 <= p_tgts /\ c <= p_tgts /\ ! (p_tgts <= 262655).

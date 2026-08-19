@@ -5,7 +5,7 @@
 require import AllCore IntDiv Ring StdBigop StdOrder.
 require import SPHINCS_PLUS.
 require import WOTS_C_Real.
-require import PTgtsPin.
+require import C10DeployedScope.
 
 lemma ctl_usage : p_tgts = c10_q_s => c <= p_tgts.
 proof. by move=> ->; rewrite c10_c_closed /c10_c /c10_q_s. qed.

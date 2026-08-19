@@ -1,5 +1,5 @@
 [-] [0007] 84.6% (-1.0B / [frag -1.0B])[\] [0008] 88.4% (-1.0B / [frag -1.0B])[|] [0010] 95.8% (-1.0B / [frag -1.0B])[/] [0010] 97.4% (-1.0B / [frag -1.0B])[-] [0010] 98.9% (-1.0B / [frag -1.0B])                                                                                                      [critical] [experiments/ptgts-pin/controls/CtlSmtCannotEvaluatePow.ec: line 10 (7-13)] cannot prove goal (strict)
 [\] [0010] 98.9% (-1.0B / [frag -1.0B])[|] [0010] 98.9% (-1.0B / [frag -1.0B])
 __RC=1
-__WALL_MS=60117
+__WALL_MS=59799
 __ECO=NO

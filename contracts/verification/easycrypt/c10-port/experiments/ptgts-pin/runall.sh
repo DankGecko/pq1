@@ -8,7 +8,11 @@ set -u
 cd "$(dirname "$0")/../.."
 R=experiments/ptgts-pin
 declare -a T=(
-  "PASS PTgtsPin"
+  # PTgtsPin.ec was PROMOTED 2026-08-19 to cdrafts-split/C10DeployedScope.ec and is
+  # now a CLOSURE MEMBER, so cert_gate_split.sh compiles it on every gate run --
+  # strictly stronger coverage than this script gave it.  Not a target here; the
+  # controls below still bind to it via `require import C10DeployedScope` and the
+  # runner's `-I cdrafts-split`.
   "PASS PTgtsPinCapstone"
   "PASS controls/CtlPinIsLive"
   "PASS controls/CtlCapstonePinPlusOne"

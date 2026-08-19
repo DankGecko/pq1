@@ -30,7 +30,7 @@ TMPD=$(mktemp -d) || { echo 'FAIL mktemp'; exit 1; }
 trap 'rm -rf "$TMPD"' EXIT
 # Expected inventory sizes, COMMITTED. A guard that recomputes its expectation
 # from the file it is checking cannot detect truncation of that file.
-EXPECT_PINS=111
+EXPECT_PINS=117
 # COMMITTED WATCHED-ROW COUNT (2026-08-10).  This replaced a `-ge 3` floor when
 # T1/T2/T3 were PROMOTED into closure-c10-split.txt: a floor cannot express
 # "there are deliberately none left", so retiring the last watched row would

@@ -17,6 +17,7 @@ GprocVI
 SphincsC10CapstoneWired
 SphincsC10Content
 C10DeployedGeometry
+C10DeployedScope
 GFailCharged
 XmssmtCCCharged
 SphincsC10CapstoneCharged
