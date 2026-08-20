@@ -524,6 +524,24 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-20.  split 2fcbf2ef683bb976940715ab59b6b232 -> 84ebde0d73e28e82a5cc01b4d95498df.
+#   ANTI-VACUITY FIX INSIDE THE FENCE ITSELF (tools/policy_cap_fence.py, hashed).
+#   MEASURED, not suspected: the fence as first published printed
+#   "OK   quarantine intact" WITH rc=0 against a cert-quarantine-split.tsv gutted
+#   to comments only.  `want_decls`/`want_reqs` both came back empty, so Q2 and Q4
+#   SILENTLY SKIPPED and the check reported green while checking nothing -- the
+#   exact vacuous-pass shape the controls in this tree exist to catch, reproduced
+#   inside a control I had just written.  Raised by the advisor reviewing the
+#   pushed fence; confirmed by gutting the manifest and running it.
+#   FIX: EXPECT_DECLS = 24 / EXPECT_REQS = 3 as COMMITTED CONSTANTS IN THE TOOL --
+#   not in the manifest they guard, which could then be zeroed by the same edit --
+#   checked as Q0 before any comparison.  New control C0 in fence_controls.sh
+#   REMOVES the manifest's rows and asserts the failure names Q0; the other five
+#   controls only ADD things, which is the direction that could never have found
+#   this.  Suite now 6/6 for the declared reason against a green baseline.
+#   Also: Q5 documented as a TRIPWIRE, not a rule -- `2 ^ 16` will eventually match
+#   legitimate arithmetic in some future certified file and there is deliberately
+#   no allowlist yet.
 # 2026-08-19 (second).  split bcb2f2956488ac7867cd0fbdb3606eec -> 2fcbf2ef683bb976940715ab59b6b232.
 #   THE POLICY-CAP FENCE BECOMES ENFORCED: new PHASE 1g (POLICY-CAP QUARANTINE)
 #   plus tools/policy_cap_fence.py and cert-quarantine-split.tsv, and EXPECT_PINS
@@ -687,5 +705,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	2fcbf2ef683bb976940715ab59b6b232
+split	84ebde0d73e28e82a5cc01b4d95498df
 fork	7ab20d2ab0ba2c1f3942408a193b4836

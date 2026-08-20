@@ -31,6 +31,23 @@ echo "### baseline must be GREEN first (a fence that never passes proves nothing
 if python3 tools/policy_cap_fence.py >/dev/null 2>&1; then echo "OK   baseline GREEN"
 else echo "FAIL baseline is not green -- controls are meaningless"; bad=$((bad+1)); fi
 
+# C0 -- ANTI-VACUITY.  The first version of this fence printed "OK quarantine
+# intact" with rc=0 against a manifest gutted to comments only: want_decls and
+# want_reqs both came back empty, so Q2 and Q4 silently skipped.  A control suite
+# that only ever ADDS things would never have found that -- this leg REMOVES the
+# manifest's contents, which is the direction that makes a checker vacuous.
+cp cert-quarantine-split.tsv "$T/qman.tsv"
+grep '^#' "$T/qman.tsv" > cert-quarantine-split.tsv
+out=$(python3 tools/policy_cap_fence.py 2>&1); rc=$?
+cp "$T/qman.tsv" cert-quarantine-split.tsv
+if [ $rc -eq 0 ]; then
+  echo "FAIL control C0 gutted-manifest (Q0): fence PASSED VACUOUSLY"; bad=$((bad+1))
+elif printf '%s' "$out" | grep -q "Q0 manifest"; then
+  echo "OK   control C0 gutted-manifest (Q0): failed for the DECLARED reason (Q0 manifest)"
+else
+  echo "FAIL control C0 gutted-manifest: wrong reason"; printf '%s\n' "$out" | sed 's/^/       /'; bad=$((bad+1))
+fi
+
 printf '\nrequire import C10DeployedScope.\n' >> "$VICTIM"
 check "C1 inbound-require (Q1)" "Q1 inbound require"
 

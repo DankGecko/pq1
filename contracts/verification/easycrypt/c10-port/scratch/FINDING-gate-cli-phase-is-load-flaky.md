@@ -17,6 +17,7 @@ Same file, same toolchain, same prover set, **zero source changes** between the 
 | `gate_run2_scope.log` | `bcb2f295` | `OK GprocT1Opre` | `OK GprocT1Opre (cli, 880 cmds)` |
 | **`gate_run1_fence.log`** | `2fcbf2ef` | `OK GprocT1Opre` | **`FAIL … 473 diagnostic(s)`** |
 | `gate_run2_fence.log` | `2fcbf2ef` | `OK GprocT1Opre` | `OK GprocT1Opre (cli, 880 cmds)` |
+| `gate_run3_fence.log` | `84ebde0d` | `OK GprocT1Opre` | `OK GprocT1Opre (cli, 880 cmds)` |
 
 The failing diagnostics were `cannot prove goal (strict)` and `[by]: cannot close
 goals` — an **smt** failure, not a syntax or typing failure. `CLI_DISAGREEMENTS` went
@@ -25,7 +26,7 @@ goals` — an **smt** failure, not a syntax or typing failure. `CLI_DISAGREEMENT
 ## WHAT IS AND IS NOT ESTABLISHED
 
 **Established:** the `cli` leg of PHASE 1e is **not deterministic** on this machine at
-this toolchain. One run in four disagreed with the compile driver on a file nobody had
+this toolchain. **One run in five** disagreed with the compile driver on a file nobody had
 touched.
 
 **Not established: the cause.** The leading hypothesis is prover load/timeout, which
@@ -37,6 +38,14 @@ load*. Consistent with that: during run 1 of the fence I was also running
 same container**; during run 2 I deliberately ran nothing. That is suggestive, but it
 is a quasi-experiment with one trial per arm, not a controlled measurement, and I am
 not claiming it as the cause.
+
+**One state difference was found and RULED OUT.** `gate_run1_fence.log` reports
+`ECO_PURGED=37` while the others report `38`, `38` and `0` — a real difference in the receipt,
+worth chasing. It is fully explained: a cleanup step deleted
+`cdrafts-split/C10DeployedScope.eco` between the runs, so one fewer `.eco` existed at
+purge time. And it **cannot be causal**: all five runs report `ECO_REMAINING=0`, so
+every run began from an identical zero-`.eco` state regardless of how many were purged.
+Chased on an external reviewer's prompt; a good lead with a negative result.
 
 **Also not established:** whether the 473 diagnostics were one root failure cascading
 or 473 independent ones. Only the first two lines were captured by the gate's own

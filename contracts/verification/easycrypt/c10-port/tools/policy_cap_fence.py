@@ -43,6 +43,17 @@ import re, sys, os
 
 FENCED = 'cdrafts-split/C10DeployedScope.ec'
 MANIFEST = 'cert-quarantine-split.tsv'
+# COMMITTED ROW COUNTS -- the manifest's own anti-vacuity guard, same idea as
+# EXPECT_PINS in cert_gate_split.sh.  ADDED 2026-08-20 after measuring that the
+# first version of this fence printed `OK ... quarantine intact` with rc=0
+# against a manifest gutted to comments only: `want_decls`/`want_reqs` both came
+# back empty, so Q2 and Q4 SILENTLY SKIPPED and the fence reported green while
+# checking nothing.  That is the exact vacuous-pass shape this repo's controls
+# exist to catch, reproduced inside the control.  A count that lives in the TOOL
+# (hashed, and not in the manifest it guards) cannot be zeroed by editing the
+# manifest.
+EXPECT_DECLS = 24
+EXPECT_REQS = 3
 # Constructs that could turn a closed-arithmetic leaf into something that can
 # carry an assumption.  `declare`/`section` cover the section-hypothesis route;
 # `clone` covers the with-clause operand route (`op p_stcr <- c10_q_s`), which
@@ -54,6 +65,10 @@ DECL_RE = re.compile(
     r"\s+([A-Za-z0-9_']+)", re.M)
 # Every spelling of the deployment magnitude a value-grep can reasonably cover.
 # NOT a closure of the class -- see the module docstring; `l %/ 4` defeats this.
+# Q5 IS A TRIPWIRE, NOT A RULE: `2 ^ 16` will match legitimate arithmetic in some
+# future certified file, and there is deliberately no allowlist yet.  Expect to add
+# one the first time it fires on an unrelated proof; do not treat a Q5 hit as proof
+# of a policy import.
 MAGNITUDES = [r'\b65536\b', r'\b0x10000\b', r'2\s*\^\s*16', r'\b4\s*\^\s*8\b']
 
 
@@ -117,6 +132,16 @@ def main():
                 want_reqs.append(rest)
     else:
         problems.append(f'Q4 manifest {MANIFEST} missing -- the fence is unpinned')
+
+    # Q0 -- ANTI-VACUITY.  Before comparing anything, assert the manifest actually
+    # carries the rows it is supposed to.  Without this, an empty manifest makes
+    # Q2 and Q4 no-ops and the fence passes vacuously.
+    if len(want_decls) != EXPECT_DECLS:
+        problems.append(f'Q0 manifest declaration rows = {len(want_decls)}, expected {EXPECT_DECLS} '
+                        f'-- manifest truncated, Q4 would be vacuous')
+    if len(want_reqs) != EXPECT_REQS:
+        problems.append(f'Q0 manifest require rows = {len(want_reqs)}, expected {EXPECT_REQS} '
+                        f'-- manifest truncated, Q2 would be vacuous')
 
     want_decls, want_reqs = sorted(want_decls), sorted(want_reqs)
     if want_reqs and reqs != want_reqs:

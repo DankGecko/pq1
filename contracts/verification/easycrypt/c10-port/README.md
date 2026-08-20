@@ -1199,3 +1199,42 @@ a slot machine, and it is the reason both logs are here.
 save a 50-minute run. A known-answer test caught **both** attempts wrong — each
 reproduced the wrong hash for a clean `HEAD` worktree whose identity is committed. I
 stopped after two and used the gate as the authority.
+
+#### CORRECTION 2026-08-20 — the fence above PASSED VACUOUSLY, and my own controls could not have found it
+
+Raised by review of the pushed fence; **confirmed by measurement**. Against a
+`cert-quarantine-split.tsv` gutted to comments only, the fence printed
+`OK quarantine intact` with `rc=0` — `want_decls` and `want_reqs` both came back
+empty, so **Q2 and Q4 silently skipped** and the check reported green while checking
+nothing.
+
+That is the exact vacuous-pass shape this tree's controls exist to catch, reproduced
+inside a control I had written the previous day — in the same session where I fixed
+the same defect in `pin_discrimination.sh`. Twice, same shape.
+
+**Why my own controls could not have found it:** all five **add** something (an
+inbound require, a require line, a section, a declaration, a magnitude). Vacuity comes
+from **removal**. New control `C0` removes the manifest's rows and asserts the failure
+names `Q0`. The suite is now 6/6 for the declared reason, against a green baseline.
+
+**Fix:** a `Q0` anti-vacuity check with `EXPECT_DECLS = 24` / `EXPECT_REQS = 3` as
+committed constants **in the tool — deliberately not in the manifest they guard**,
+which the same edit could otherwise zero along with the data.
+
+Also: `Q5` is now documented as a **tripwire, not a rule** — `2 ^ 16` will eventually
+match legitimate arithmetic in some future certified file, and there is deliberately no
+allowlist yet. A `Q5` hit is not proof of a policy import.
+
+```
+GATE run 3: GREEN (RC=0)   identity 2fcbf2ef -> 84ebde0d
+  34/34 compiled · 135/135 pins · cone added=0 · ledger=242
+  OK quarantine intact · OK inputs unchanged across the run
+```
+
+**And the flake lead came back negative, which is worth as much as a positive.** The
+`ECO_PURGED=37` vs `38` difference in the flaking run is real, is explained (a cleanup
+deleted one `.eco` between runs), and **cannot be causal**: all five runs report
+`ECO_REMAINING=0`, so every run began from an identical zero-`.eco` state. Run 3 adds a
+fourth distinct purge count (`0`) with the same post-purge state and a passing `cli`
+leg. `GprocT1Opre (cli)` now stands at **1 failure in 5 runs**; the finding records the
+ruled-out hypothesis rather than leaving it open.
