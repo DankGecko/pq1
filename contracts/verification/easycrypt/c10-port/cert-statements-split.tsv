@@ -994,3 +994,156 @@ op:cdrafts-split/FORS_C_TreePort.ec::trh_registration	a351fb0910bb498f46b6fe3f99
 op:cdrafts-split/FORS_C_TreePort.ec::leaf_openpre_structural	a88d2c2071c2d0cbeea56cb9c7b3467b
 op:cdrafts-split/FORS_C_TreePort.ec::op_registration	6e1f6f95d195f9b434d92020dfd56ac9
 op:cdrafts-split/FORS_C_TreePort.ec::sim_sig_op_fidelity	f7ff3db450def9ba3ee0a5409539784d
+# --- NON-ROOT CONE FILES (2026-08-20) ---
+# Coverage originally enumerated only the 38 GATE ROOTS, but the certified cone
+# is 45 files.  The 79 statements in the 7 transitively-required files were pinned
+# by NEITHER check -- not by PHASE 1c (no manifest row) and not by PHASE 1h (not
+# enumerated) -- so one could change, or appear, with no delta anywhere.  Note one
+# of the seven is cdrafts-split/FORS_C.ec: project code, not vendored library.
+base-c10-split/BinaryTrees.ec::ge0_height	c93eef14842164a138f40a6be7094b62
+base-c10-split/BinaryTrees.ec::height_eq0	d26489b94aae6108dc6993da74513146
+base-c10-split/BinaryTrees.ec::height_gt0	79030225e693d6a9708fd1c52809da07
+base-c10-split/BinaryTrees.ec::height_balanced_gt0	5e30428bfdfd50bfd867a51d6786ced9
+base-c10-split/BinaryTrees.ec::subbt_empty	3ccf9c83a368c4c6f0cecf3a55c3c44a
+base-c10-split/BinaryTrees.ec::vallf_subbt_Leaf	7a53f1a8e61e9a03aacf4bbc61415560
+base-c10-split/BinaryTrees.ec::vallf_subbt_Node	630be5bd291641516980a1e8229e4ea8
+base-c10-split/BinaryTrees.ec::list2tree_spec	5ad363a5f98257b0b42f235e10c7a5d5
+base-c10-split/BinaryTrees.ec::list2tree_spec_ok	7a3d2bca545fe10f70ccd56ae8a45ada
+base-c10-split/BinaryTrees.ec::list2tree_ok	c59a69a4c57b3edf632845ad7c3e590d
+base-c10-split/BinaryTrees.ec::list2tree_lvb	98e46ba69fab8894a1cbc093f833165d
+base-c10-split/BinaryTrees.ec::list2tree_height	edcd4d2820cb381a4702eb7893ea61cc
+base-c10-split/BinaryTrees.ec::list2tree_fullybalanced	c89da2ce6ef6e22d5b74d1ba536a2b36
+base-c10-split/BinaryTrees.ec::list2tree1	a1a20966e5d458bb2242dd7584567ebc
+base-c10-split/BinaryTrees.ec::list2tree_uniq2	edda147b3d8e2c9279a3741073857987
+base-c10-split/BinaryTrees.ec::list2tree_uniq	c5b13d44a72bb4655638aa9ec590c267
+base-c10-split/BinaryTrees.ec::list2tree_pred0	8e0a0da2228ec11476fe312b3ad64b11
+base-c10-split/BinaryTrees.ec::list2tree0	9ec88a405a110ebc2a99979f893c2142
+base-c10-split/BinaryTrees.ec::list2tree_predS	7780a877156ee16eb66a071517fe9e9c
+base-c10-split/BinaryTrees.ec::list2treeS	b035af1a6e9fdde78e9e7ac122578716
+base-c10-split/BinaryTrees.ec::subbt_list2tree_cons	037c0889593f1c57c5026a401f8ff2ee
+base-c10-split/BinaryTrees.ec::subbt_list2tree_takedrop	ad35b417e50a391acc5811737dde4c48
+base-c10-split/BinaryTrees.ec::subbt_list2tree_idx_leaf	558d06f900b6945c408f9f658c66b8b1
+base-c10-split/HashAddresses.eca::eq_adrs_idxs	6e0fd96a5fa274818836071078949513
+base-c10-split/HashAddresses.eca::eq_adrs_idxsq	6b3ec0cdd89b27ca090c662c72d3f1ea
+base-c10-split/HashAddresses.eca::getidx_df_setidx	82e43f4a3885619f8619f37749a7d061
+base-c10-split/HashAddresses.eca::valin_getidx_setidx	3705bf8607e52eb241c0166ee4040235
+base-c10-split/HashAddresses.eca::eq_after_setidx	71424b43cb6bba4f1560b1fa090f4537
+base-c10-split/HashAddresses.eca::neq_after_setidx_sida	3964e14d025dab516da0921a60e83b8a
+base-c10-split/HashAddresses.eca::neq_after_setidx_sidv	16b2d0dcc054f6c5b6abb78a82693f76
+base-c10-split/MerkleTrees.ec::size_consap	de4a274730ce78a0e7032ae11493cb4c
+base-c10-split/MerkleTrees.ec::nth_consap	ad2db391a2a97260f310cb1199d62fb2
+base-c10-split/MerkleTrees.ec::eq_valbt_valap	b82efb156766a4facec599ef55b3b704
+base-c10-split/MerkleTrees.ec::ecbtapP	017c56160c80c658c326471746dbfbf4
+base-c10-split/MerkleTrees.ec::ecbtabp_props	d6bddee493e9fc2c0c5ad216fea07db6
+base-c10-split/MerkleTrees.ec::ecbtap_vals	61f620135e2e6c100335518c71eed84f
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::mem_size_ge1	b27699d4c76fc50c0c6cd054c84e81e7
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::mem_size_ge2	5f3e4398b5ef3acaabc3ef5642cfeac9
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::uniq_size_ge2_mem	99b14610f3cff199309c4d435acfceb3
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::is_finite_ispref	12029e5e5eb0034c87149b7648bdb924
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::ltcard_szprefl	c29b11a3933d73a41f459148e95261ee
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::rngprefl_image	a74158fd467e9aa804facebc65b3e484
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::eqv_spex_szprefl	d0b7c2f9ae145c588894d101112c69e0
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::eqv_img_prefl	1885b412c946c1adfc68b18f42bced84
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::eqv_img_mem	3af39834e6e5b22bc184339969b886a2
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::eqv_prefl_mem	17fbf23384c5bccbfbedb1d9e88e7748
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::fin_sum_type	d1bf0556b66d4d630b618abff6e56510
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::sumr_const_val	3ca45abd9b1c1aa1b0337ee8bd822b31
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::sumr_const_val_seq	494085498d8aa9a7e2e850df4e1940fd
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::Si_eq_sem	bdfc33a89cc94a15950388a9cdb7cc12
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_Si_Sief_eq	37d7306da9c6e6a8e0e7eed8dfdce9d4
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_Si_Sief	602322457fe878432af592f7269f1e49
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_Sief_Siis_eq	1313160bf9c77585bf66e0693705898e
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::opreg0	f2a5318b6cf5fdcc85f23251a43d8a5b
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::dspr0	4c12b8441b0237eb52f4b8c25ccec830
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::spproba0	b4065dd6a776ec6731c82157d6c52b44
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::tcr0	f898daa8f4bfee7d09a79783bba65e26
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::si0	7e1dad1c023d3283eb3d169dfac9ccd6
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::ef0	b894ed143546a7f17997b0e8af6c7bff
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::is0	a3bc23fb1841829caf9cffa7e94f97b5
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_Sief_Siis	ce25c1840567fc45cccb4c416cb5e30b
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_Siis_Siisa_eq	122b68a94493bd218dcabfbef22d2257
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_Siis_Siisa	5fda8ee2d6dc85af2f6f2da46eba270a
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::PrSiis_Siisa_sub	9ca2c3333d74903a08c9c1e2f530daca
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_cond_neqxxp_Si	61bfcf01aaf58c915c9e7a42c3c59112
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_OpenPRE_bigSi	aa425be57c87cf18878845d517fd796e
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_DSPR_bigSiFi	595d6deb5ab446f6e27aeb9d921147e2
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_SPprob_bigSi	2289c9f872ab7f81bb558b4b9b695439
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_DSPRSPprob_bigSi	1399cd78910c99490abc05b17061fc64
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::pr_TCR_bigSi	08a63a631ebdde5bc0146013a9aa2b41
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::OpenPRE_From_DSPR_TCR	eb4fc430b56ef120bbe2d656c017965d
+cdrafts-split/FORS_C.ec::mco_C_predC	7d21a34be2e1a7beefd3d4e2c502e874
+cdrafts-split/FORS_C.ec::O_ITSRC_query_good	fc2e7806f1a2c0aa96a261e1bfed1cee
+cdrafts-split/FORS_C.ec::eufcma_forsc_I_eq	7d0fe99ae79ec95cb16fc9ff2167edb6
+cdrafts-split/FORS_C.ec::ITSRC_hop	e4c9e94fb8a8196745fb8e288872857c
+cdrafts-split/FORS_C.ec::EUFCMA_FORSC	ea3a6bd030748ef5814c381cc1f970de
+# --- DEFINITIONS in the 7 non-root cone files (2026-08-20) ---
+# A BODIED op is pure logical content that NOTHING watched: cert_cone.py skips any
+# op/const/type whose declaration has a body (a definition, not a parameter), and
+# PHASE 1h enumerates only statements.  MEASURED: redefining
+# cdrafts-split/FORS_C.ec::predC_fors -- the FORS+C GATE PREDICATE -- to `true`
+# left the digest of the lemma carrying it (mco_C_predC) IDENTICAL and coverage
+# still reporting full coverage.  Nothing moved.  These pins fix that for the 7
+# files this change is about.  SCOPE, STATED: this pins CHANGES to these
+# definitions; nothing yet FORCES a new definition to be pinned, and the same
+# hole spans all 45 cone files (661 op/const/abbrev, of which 90 are not
+# pinnable by the current tool: 84 resolve to None, 6 are genuinely AMBIGUOUS).
+op:base-c10-split/BinaryTrees.ec::height	77c4387b5766713a21106308f06bcc24
+op:base-c10-split/BinaryTrees.ec::fully_balanced	f7f775f77f26f9a5da5fe386222d15f7
+op:base-c10-split/BinaryTrees.ec::sub_bt	463cd8e2b77feb83b7dc610b617886b7
+op:base-c10-split/BinaryTrees.ec::val_lf	b8d5f7ee29d0587b3374a7a9cdc3545c
+op:base-c10-split/BinaryTrees.ec::vallf_subbt	add8b302050b2686a38379354d98d479
+op:base-c10-split/BinaryTrees.ec::list2tree_pred	6ea6f5c313a6706059e49f83870b4301
+op:base-c10-split/BinaryTrees.ec::list2tree	08d3169d1d54d07043297816a92cebcf
+op:base-c10-split/HashAddresses.eca::l	63c59dd2d0d67676c8dc1824b5867a4e
+op:base-c10-split/HashAddresses.eca::valid_idxvals	b32e92c2c5279482288625c092f5e349
+op:base-c10-split/HashAddresses.eca::valid_adrsidxs	b1166bbd6dabce09bc74f237f1db6250
+op:base-c10-split/HashAddresses.eca::get_idx	8bbf889879ce35387ded6c5069222d40
+op:base-c10-split/HashAddresses.eca::set_idx	23eaa39fc381b0da9b17a0e59086c7d6
+op:base-c10-split/HashAddresses.eca::valid_setidx	de5e61d2097f868cc4d8069ee7b68795
+op:base-c10-split/HashAddresses.eca::eq_idx	bee2e5249166e264b687255ed75a0001
+op:base-c10-split/KeyedHashFunctions.eca::f	d14ddf97e5af2d4f808596d2ce8f7c4b
+op:base-c10-split/KeyedHashFunctions.eca::t_smpre	9f71d8cd893755d9e681e53fc80cd7e6
+op:base-c10-split/KeyedHashFunctions.eca::t_mmpre	2e5eb2bd526667aa355730174c781117
+op:base-c10-split/KeyedHashFunctions.eca::t_smspr	4229e371fb820510df3ad32248bedeb1
+op:base-c10-split/KeyedHashFunctions.eca::t_mmspr	7389856192332d8d57e7d21787eaf228
+op:base-c10-split/KeyedHashFunctions.eca::spexists	4ecf0ba77e2c145385b2a7768c8c9272
+op:base-c10-split/KeyedHashFunctions.eca::t_smdspr	b7484a9f8ce2181af5bc260cb99b9cc9
+op:base-c10-split/KeyedHashFunctions.eca::t_mmdspr	36336327ac5ffb31a87e414a119001a4
+op:base-c10-split/KeyedHashFunctions.eca::t_smud	bede33d610208777a0455ef5221ad529
+op:base-c10-split/KeyedHashFunctions.eca::t_mmud	c35140819f2865f56972d4830f247841
+op:base-c10-split/KeyedHashFunctions.eca::g	f838497d11b36ab3a14be65ca6b95bc2
+op:base-c10-split/KeyedHashFunctions.eca::h	cb4dc00cebe0dc16393a70e4bedaf6ac
+op:base-c10-split/KeyedHashFunctions.eca::doutm	3486e78b6681821a4e11a7a0d39db0dd
+op:base-c10-split/MerkleTrees.ec::val_bt	1827103629ef8eefee77f8ef8fe6fca7
+op:base-c10-split/MerkleTrees.ec::cons_ap	3ddeb4a14cdcaeba1cd44d815073b14a
+op:base-c10-split/MerkleTrees.ec::val_ap	cf7c4a3711672f9dbd468806bfa8ba39
+op:base-c10-split/MerkleTrees.ec::extract_collision_bt_ap	ef99cca109794b5146e340241cedd8ec
+op:base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::t	6f21c9bb65d597748aafc25b30458924
+op:base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::f	ce3471132a5d4e33f61a595edc53b9d1
+op:base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::f	ce3471132a5d4e33f61a595edc53b9d1
+op:base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::dpp	4183bb38825b3dd232f9cf8da2c48705
+op:base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::din	f0b2c3d9a80bd64b18825630cbb63dc6
+op:base-c10-split/TweakableHashFunctions.eca::f	ce3471132a5d4e33f61a595edc53b9d1
+op:base-c10-split/TweakableHashFunctions.eca::t_smdtpre	0eb2c8f056138566deb0f2f3926fa2b7
+op:base-c10-split/TweakableHashFunctions.eca::t_smdtopenpre	97e43dae360d8a5b6f119b91545f6496
+op:base-c10-split/TweakableHashFunctions.eca::t_smdttcr	dc98125693de904bce72a57ed8249b10
+op:base-c10-split/TweakableHashFunctions.eca::spexists	6530b9cc938630b17c70427a02623e20
+op:base-c10-split/TweakableHashFunctions.eca::t_smdtdspr	3800c4d28c8f784f588a97c4280058d7
+op:base-c10-split/TweakableHashFunctions.eca::t_smdtud	1e57a8f07fbf1a3993cb797bb547308f
+op:base-c10-split/TweakableHashFunctions.eca::disj_lists	228d52d75175339390d3af2272fb6477
+op:base-c10-split/TweakableHashFunctions.eca::get_diff	65eca185f335fd5073abd09fbc7e02f6
+op:base-c10-split/TweakableHashFunctions.eca::fc	de909d26ca6de8e846d14b4b2770a3d1
+op:cdrafts-split/FORS_C.ec::k	9e22b6814a6f3814db510ffeb3a6e1bf
+op:cdrafts-split/FORS_C.ec::a	189022591c4cc55c8ab5dc0faa6f8787
+op:cdrafts-split/FORS_C.ec::t	b3dcd7a6b606bda098b6ba25d1e9051c
+op:cdrafts-split/FORS_C.ec::adz	d7ac8e6eb90d5dc1584f21088aba500d
+op:cdrafts-split/FORS_C.ec::mco	f2169a585ffb0020d7af1f2f551ed29f
+op:cdrafts-split/FORS_C.ec::g	f838497d11b36ab3a14be65ca6b95bc2
+op:cdrafts-split/FORS_C.ec::predC_fors	90059fe76e67f4941dac3a43a4a49a09
+op:cdrafts-split/FORS_C.ec::gc	348f94ea728a1375a6bb2d2de56491be
+op:cdrafts-split/FORS_C.ec::mco_C	686474d350581a582f6ff34adb116aaf
+op:cdrafts-split/FORS_C.ec::hC	ebc60f31d3a69c22090f3a28f953cb88
+op:cdrafts-split/FORS_C.ec::fkeygen	7bd60a3e5cfc35c22e486c817674ce21
+op:cdrafts-split/FORS_C.ec::fsign	c597fa5279eaeb73c081ce3a04812f0c
+op:cdrafts-split/FORS_C.ec::fverify	297c6ad567c6001ba7b29f0265359ba6
+op:cdrafts-split/FORS_C.ec::verifyC	0bec72ca57ce72a09a89023c7e144710

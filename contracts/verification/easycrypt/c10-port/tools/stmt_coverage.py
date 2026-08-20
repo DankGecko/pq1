@@ -43,11 +43,58 @@ KINDS = r"(?:local\s+)?(?:lemma|theorem|equiv|hoare|phoare|declare\s+axiom|axiom
 DECL = re.compile(r"(?:^|\.)\s*(" + KINDS + r")\s+([A-Za-z0-9_']+)", re.M | re.S)
 
 
+CONE_MANIFEST = 'cert-cone-files-split.tsv'
+
+
 def roots():
+    """The 38 GATE ROOTS: the closure list plus the four base roots."""
     rs = [os.path.join(D, n.strip() + '.ec') for n in open('closure-c10-split.txt')
           if n.strip() and not n.lstrip().startswith('#')]
     rs += [os.path.join(B, n + '.ec') for n in BASE_ROOTS]
     return rs
+
+
+def computed_cone():
+    """The CERTIFIED CONE: every file the roots transitively require.
+
+    Coverage originally enumerated only the 38 roots, but the cone is 45 files -- so
+    79 statements in 7 transitively-required files (BinaryTrees, MerkleTrees, the three
+    .eca theories, KeyedHashFunctions and cdrafts-split/FORS_C.ec) were pinned by
+    NEITHER check: not by PHASE 1c (no manifest row) and not by PHASE 1h (not
+    enumerated).  A statement there could change, or appear, with no delta anywhere.
+    Computed with the same tool and the same roots the gate already uses for
+    INPUTS_SHA256, so the three computations cannot disagree about what is certified.
+    """
+    import subprocess
+    env = dict(os.environ, CERT_CONE_DIRS='base-c10-split,cdrafts-split')
+    out = subprocess.run([sys.executable, 'tools/cert_cone.py'] + roots(),
+                         capture_output=True, text=True, env=env).stdout
+    return sorted({l[4:].strip() for l in out.splitlines()
+                   if l.startswith('#   ') and l[4:].strip()})
+
+
+def cone():
+    """The cone, cross-checked against a COMMITTED file list.
+
+    Committing the list matters independently of coverage: it makes a file ENTERING or
+    LEAVING the certified cone a fatal, human-visible delta, instead of something
+    coverage would silently absorb by simply enumerating whatever it found today.
+    """
+    got = computed_cone()
+    if not os.path.exists(CONE_MANIFEST):
+        return got, [f'cone manifest {CONE_MANIFEST} missing -- the cone file set is unpinned']
+    want = sorted(l.strip() for l in open(CONE_MANIFEST, encoding='utf-8')
+                  if l.strip() and not l.startswith('#'))
+    problems = []
+    if not want:
+        problems.append(f'cone manifest {CONE_MANIFEST} has no rows -- would be vacuous')
+    for f in got:
+        if f not in want:
+            problems.append(f'FILE ENTERED THE CONE (fatal): {f}')
+    for f in want:
+        if f not in got:
+            problems.append(f'file left the cone: {f}')
+    return got, problems
 
 
 def statements(path):
@@ -64,8 +111,9 @@ def main():
                 continue
             keys.add(line.split('\t', 1)[0])
 
+    cone_files, cone_problems = cone()
     unpinned, total = [], 0
-    for r in roots():
+    for r in cone_files:
         if not os.path.exists(r):
             print(f'FAIL coverage: root file missing: {r}'); return 1
         for kind, name in statements(r):
@@ -82,6 +130,8 @@ def main():
             want = int(m.group(1)); break
 
     rc = 0
+    for cp in cone_problems:
+        print('FAIL coverage: ' + cp); rc = 1
     if unpinned:
         print(f'FAIL coverage: {len(unpinned)} UNPINNED statement(s) -- a statement can '
               f'appear without a manifest delta:')
@@ -96,8 +146,8 @@ def main():
         print(f'FAIL coverage: statement TOTAL {total} != committed EXPECT_STMTS {want} '
               f'-- the certified statement set changed'); rc = 1
     if rc == 0:
-        print(f'OK   coverage: all {total} top-level statements across {len(roots())} '
-              f'root files are pinned')
+        print(f'OK   coverage: all {total} top-level statements across {len(cone_files)} '
+              f'CONE files are pinned (roots {len(roots())} + transitively required)')
     return rc
 
 

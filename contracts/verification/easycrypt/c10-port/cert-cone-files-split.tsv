@@ -1,0 +1,50 @@
+# CERTIFIED CONE FILE LIST -- every file the 38 gate roots transitively require.
+# Enforced by PHASE 1h (tools/stmt_coverage.py): a file ENTERING or LEAVING the cone is
+# a fatal, human-visible delta.  Without this the coverage check would silently absorb a
+# new cone file by enumerating whatever it found that day.
+# 45 files = the 38 roots + 7 transitively required.
+base-c10-split/BinaryTrees.ec
+base-c10-split/FL_SL_XMSS_MT_ES.ec
+base-c10-split/FORS_ES.ec
+base-c10-split/HashAddresses.eca
+base-c10-split/KeyedHashFunctions.eca
+base-c10-split/MerkleTrees.ec
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca
+base-c10-split/SPHINCS_PLUS.ec
+base-c10-split/TweakableHashFunctions.eca
+base-c10-split/WOTS_TW_ES.ec
+cdrafts-split/C10DeployedCapstone.ec
+cdrafts-split/C10DeployedGeometry.ec
+cdrafts-split/C10DeployedInstance.ec
+cdrafts-split/C10DeployedScope.ec
+cdrafts-split/C10SpecControls.ec
+cdrafts-split/DarkSide.ec
+cdrafts-split/DarkSideC10.ec
+cdrafts-split/FORS_C.ec
+cdrafts-split/FORS_C10.ec
+cdrafts-split/FORS_C10_Multi.ec
+cdrafts-split/FORS_C_TreePort.ec
+cdrafts-split/FxChain.ec
+cdrafts-split/GFailCharged.ec
+cdrafts-split/GprocChargedQWired.ec
+cdrafts-split/GprocFORSC10.ec
+cdrafts-split/GprocQBound.ec
+cdrafts-split/GprocQWired.ec
+cdrafts-split/GprocT1Opre.ec
+cdrafts-split/GprocT2Trh.ec
+cdrafts-split/GprocT3Trco.ec
+cdrafts-split/GprocVI.ec
+cdrafts-split/Grind.ec
+cdrafts-split/RtopCSoundness.ec
+cdrafts-split/STCR_C.ec
+cdrafts-split/SphincsC10CapstoneCharged.ec
+cdrafts-split/SphincsC10CapstoneWired.ec
+cdrafts-split/SphincsC10Content.ec
+cdrafts-split/WOTS_C_Interactive.ec
+cdrafts-split/WOTS_C_Multi.ec
+cdrafts-split/WOTS_C_Real.ec
+cdrafts-split/WOTS_C_Reduction.ec
+cdrafts-split/WOTS_C_Scheme.ec
+cdrafts-split/XMSSMT_C_Scheme.ec
+cdrafts-split/XmssmtCCCharged.ec
+cdrafts-split/XmssmtCC_All.ec

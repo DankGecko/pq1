@@ -1,4 +1,4 @@
-# FINDING — a certified-chain member's `cli` check failed on an UNCHANGED tree, then passed
+# FINDING — `GprocT1Opre` fails under GATE LOAD on either driver, and passes cold
 
 2026-08-19/20, observed while gating the policy-cap fence. Recorded because a gate
 phase that can fail on an unchanged tree makes every receipt containing it partly a
@@ -89,3 +89,63 @@ one) passed in all four runs. But if the `cli` cross-check is to stay a gate pha
 
 Until one of those is done, treat a lone `CLI_DISAGREEMENTS=1` on an unchanged tree as
 **unexplained**, and re-run — but publish both receipts, every time.
+
+
+---
+
+## UPDATE 2026-08-20 — it is NOT the cli leg, and it IS a budget problem. Measured.
+
+Both of my earlier framings were wrong, in opposite directions.
+
+**Framing 1 (too narrow):** *"the `cli` leg of PHASE 1e is not deterministic."* Refuted —
+on 2026-08-20 `GprocT1Opre` failed **PHASE 1, the COMPILE driver**, while
+`CLI_DISAGREEMENTS=0` in the same run. It is the FILE, not the leg.
+
+**Framing 2 (too alarming):** *"a closure member contains a proof step that does not
+reliably discharge."* Also refuted, and this is the one I would have published had I
+stopped at the failure. Compiled **in isolation with a pinned budget**
+(`-timeout 60 -max-provers 4`, nothing else running):
+
+| run | result |
+|---|---|
+| 1 | 0 critical, `.eco` produced |
+| 2 | 0 critical, `.eco` produced |
+| 3 | 0 critical, `.eco` produced |
+
+**3/3 clean, ~4 minutes each.** The proof discharges reliably when given room.
+
+## THE ACTUAL DIAGNOSIS
+
+`GprocT1Opre.ec` needs ~4 minutes of prover time **on its own**. Inside a full gate run
+it competes with 33 other closure members across 25 prover configurations. It sits close
+enough to its budget that contention tips it over — on **either** driver, which is
+exactly why it looked like a cli-leg problem the first time.
+
+Tally across seven full-gate runs: **2 failures** (one cli with 473 diagnostics, one
+compile), 5 passes, file byte-unchanged throughout (`git diff HEAD` empty each time).
+Plus 3/3 cold passes in isolation.
+
+This is the `EncoderBridge.pow8` pattern this repo already documents — *"timed out under
+full-chain load while passing cold"*, rewritten to be deterministic precisely because a
+flaky proof makes every receipt a measurement of machine load.
+
+## WHAT THIS DOES AND DOES NOT MEAN
+
+**Does not mean** the certified artifact is wrong. The proof is fine; the compile driver
+passed in 5 of 7 runs and 3 of 3 cold.
+
+**Does mean** any single GREEN receipt containing this file is partly a measurement of
+machine load, and that a real regression in it could be waved away as "the known flake" —
+the reverse of what happened here.
+
+## THE FIX, in the repo's own idiom
+
+1. **Pin the budget for this file** — an explicit `-timeout`/`-max-provers` for
+   `GprocT1Opre` in PHASE 1, so it is not at the mercy of ambient load. Cheapest.
+2. **Or make the offending step deterministic**, as was done once for
+   `EncoderBridge.pow8`.
+3. **Report a load-induced failure distinctly** from a proof failure, so the two cannot
+   be confused in either direction.
+
+Not done here: this change was about cone coverage, and folding an unrelated gate-timing
+fix into it would make the receipt harder to read, not easier. Named as the next unit.

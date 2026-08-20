@@ -30,11 +30,11 @@ TMPD=$(mktemp -d) || { echo 'FAIL mktemp'; exit 1; }
 trap 'rm -rf "$TMPD"' EXIT
 # Expected inventory sizes, COMMITTED. A guard that recomputes its expectation
 # from the file it is checking cannot detect truncation of that file.
-EXPECT_PINS=932
+EXPECT_PINS=1068
 # Committed count of top-level statements across the 38 certified roots.  Guards
 # PHASE 1h: if the statement TOTAL moves, the certified statement set changed and
 # somebody must say why.  896 measured 2026-08-20.
-EXPECT_STMTS=905
+EXPECT_STMTS=984
 # COMMITTED WATCHED-ROW COUNT (2026-08-10).  This replaced a `-ge 3` floor when
 # T1/T2/T3 were PROMOTED into closure-c10-split.txt: a floor cannot express
 # "there are deliberately none left", so retiring the last watched row would
@@ -89,7 +89,7 @@ for n in WOTS_TW_ES FL_SL_XMSS_MT_ES FORS_ES SPHINCS_PLUS; do ROOTS_ID="$ROOTS_I
 # proof, and PHASE 2b/2c only canary two specific behaviours of it.
 INPUTS_ID=$( { CERT_CONE_DIRS="base-c10-split,cdrafts-split" python3 tools/cert_cone.py $ROOTS_ID 2>/dev/null \
     | sed -n 's/^#   //p' | sort -u | while read -r f; do [ -f "$f" ] && sha256sum "$f"; done
-  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py tools/policy_cap_fence.py cert-quarantine-split.tsv tools/stmt_coverage.py scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
+  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py tools/policy_cap_fence.py cert-quarantine-split.tsv tools/stmt_coverage.py cert-cone-files-split.tsv scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
 echo "### INPUTS_SHA256 $INPUTS_ID"
 # AND NOW COMPARE IT.  This line was printed and checked by nothing: an identity
 # receipt that no run can fail on is decoration.  The expected value lives in
@@ -824,7 +824,7 @@ fi
 # past the compile is caught, and it costs one second.
 INPUTS_ID_END=$( { CERT_CONE_DIRS="base-c10-split,cdrafts-split" python3 tools/cert_cone.py $ROOTS_ID 2>/dev/null \
     | sed -n 's/^#   //p' | sort -u | while read -r f; do [ -f "$f" ] && sha256sum "$f"; done
-  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py tools/policy_cap_fence.py cert-quarantine-split.tsv tools/stmt_coverage.py scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
+  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py tools/policy_cap_fence.py cert-quarantine-split.tsv tools/stmt_coverage.py cert-cone-files-split.tsv scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
 if [ "$INPUTS_ID_END" != "$INPUTS_ID" ]; then
   echo "FAIL inputs CHANGED DURING THE RUN: start $INPUTS_ID, end $INPUTS_ID_END"
   fail=$((fail+1))
