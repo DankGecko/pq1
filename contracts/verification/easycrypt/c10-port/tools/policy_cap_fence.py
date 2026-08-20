@@ -73,14 +73,28 @@ MAGNITUDES = [r'\b65536\b', r'\b0x10000\b', r'2\s*\^\s*16', r'\b4\s*\^\s*8\b']
 
 
 def strip_comments(s):
+    """Strip (nested) EasyCrypt comments, REPLACING each with a separator.
+
+    The first version spliced the surrounding text together, so `lemma(* x *)foo`
+    became `lemmafoo` and the declaration went INVISIBLE to every regex keyed on
+    `lemma\\s+name` -- unpinned and uncounted, which is an evasion, not a
+    formatting quirk.  Newlines inside comments are preserved so that line-anchored
+    scans keep their line structure."""
     out, depth, i = [], 0, 0
     while i < len(s):
         if s.startswith('(*', i):
+            if depth == 0:
+                out.append(' ')
             depth += 1; i += 2; continue
         if s.startswith('*)', i) and depth:
-            depth -= 1; i += 2; continue
+            depth -= 1
+            if depth == 0:
+                out.append(' ')
+            i += 2; continue
         if not depth:
             out.append(s[i])
+        elif s[i] == '\n':
+            out.append('\n')
         i += 1
     return ''.join(out)
 

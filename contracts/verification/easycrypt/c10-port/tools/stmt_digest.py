@@ -63,11 +63,11 @@ def digest_op(path, name):
     #     at :654 was pinned by NOTHING.  A `<-` binding is never the declaration
     #     the pin means, so those matches are skipped; genuine ambiguity is
     #     reported instead of silently resolved.
-    pat = re.compile(r'^\s*(?:op|const|abbrev|axiom|declare\s+axiom)\s*(?:\[[^\]]*\]\s*)?' +
-                     re.escape(name) + r'(?![A-Za-z0-9_\'])', re.M)
+    pat = re.compile(r'(?:^|\.)\s*((?:op|pred|const|abbrev|axiom|declare\s+axiom)\s*(?:\[[^\]]*\]\s*)?' +
+                     re.escape(name) + r'(?![A-Za-z0-9_\']))', re.M | re.S)
     cands = []
     for c in pat.finditer(body):
-        tail = body[c.start():]
+        tail = body[c.start(1):]   # group 1 = keyword onward; c.start() may be the preceding '.'
         t = re.search(r'\.(?=\s|$)', tail)
         decl = tail[:t.end()] if t else tail
         if '<-' in decl.split('=')[0]:      # clone with-operand binding, not a declaration
@@ -80,7 +80,7 @@ def digest_op(path, name):
         # declaration and the file has several.
         return 'AMBIGUOUS-%d-DECLARATIONS' % len(cands)
     m = cands[0]
-    rest = body[m.start():]
+    rest = body[m.start(1):]   # SPAN RE-ANCHOR: see the note on `(?:^|\.)` above
     # A DECLARATION TERMINATOR is a period followed by whitespace/EOF.  The naive
     # `rest.find('.')` stopped inside QUALIFIED NAMES: join_dgst's body begins
     # `MDigestBlock.insubd (...)`, so the digest covered only
@@ -101,17 +101,22 @@ def digest(path, name):
     # literal string NOT-FOUND then COMPARED EQUAL.  A pin that cannot resolve
     # its target must fail, not agree with itself.  Found while pinning
     # GprocKg_sk_eq (Tier 1 brick 2).
-    _c = re.findall(r'^(?:lemma|theorem|equiv|hoare|phoare)\s+' + re.escape(name) + r'(?![A-Za-z0-9_\'])',
+    _c = re.findall(r'(?:^|\.)\s*(?:local\s+)?(?:lemma|theorem|equiv|hoare|phoare)\s+' + re.escape(name) + r'(?![A-Za-z0-9_\'])',
                     body, re.M)
     if len(_c) > 1:
         return 'AMBIGUOUS-%d-STATEMENTS' % len(_c)
-    m = re.search(r'^(?:lemma|theorem|equiv|hoare|phoare)\s+' + re.escape(name) + r'(?![A-Za-z0-9_\'])',
-                  body, re.M)
+    m = re.search(r'(?:^|\.)\s*((?:local\s+)?(?:lemma|theorem|equiv|hoare|phoare)\s+' + re.escape(name) + r'(?![A-Za-z0-9_\']))',
+                  body, re.M | re.S)
     if not m:
         return None
-    rest = body[m.start():]
-    p = re.search(r'^\s*proof\b', rest, re.M)
-    stmt = rest[:p.start()] if p else rest
+    rest = body[m.start(1):]   # SPAN RE-ANCHOR: group 1 starts at the keyword
+    # TERMINATOR RE-ANCHOR.  `(?:^|\.)` is needed so a MID-LINE `proof` is found
+    # (`qed. lemma h : 1 = 1. proof. trivial. qed.` is legal EasyCrypt), but the
+    # slice must stop at the KEYWORD, not at the '.' the alternation consumes --
+    # otherwise the statement's own terminating period is dropped and EVERY digest
+    # moves.  Measured: without group(1) here, 870 of 923 pins changed.
+    p = re.search(r'(?:^|\.)\s*(proof\b)', rest, re.M)
+    stmt = rest[:p.start(1)] if p else rest
     norm = ' '.join(stmt.split())
     return hashlib.sha256(norm.encode()).hexdigest()[:32]
 

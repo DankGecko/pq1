@@ -524,6 +524,45 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-20 (second).  split 84ebde0d73e28e82a5cc01b4d95498df -> 8157467568e9b7fe60b5b256f6f4d7d8.
+#   TOTAL STATEMENT COVERAGE.  EXPECT_PINS 135 -> 932, new EXPECT_STMTS = 905, new
+#   PHASE 1h (tools/stmt_coverage.py).  Every top-level statement in all 38 certified
+#   roots is now pinned by digest.
+#   WHY THE PINS ALONE WOULD NOT HAVE WORKED.  PHASE 1c iterates the MANIFEST
+#   (`done < cert-statements-split.tsv`), so it is structurally BLIND to a statement
+#   that was never pinned: pinning the 905 that exist today does nothing about a 906th
+#   appearing tomorrow.  That was the entire point of the exercise, so PHASE 1h supplies
+#   the other direction -- enumerate FROM THE FILES, assert each has a row --
+#   with EXPECT_STMTS catching REMOVAL, which leaves every surviving pin valid and is
+#   invisible to both.  Control CV1 (add a lemma) is the one that justifies the work.
+#   TWO BLOCKERS FOUND BY ADVERSARIAL REVIEW BEFORE THE GATE RUN, both re-verified:
+#     (1) `pred` was pinnable by NEITHER digest path -- digest() takes only
+#         lemma/theorem/equiv/hoare/phoare, digest_op() lacked `pred`.  A pred BODY is
+#         pure logical content usable as a lemma HYPOTHESIS, and statements naming it
+#         digest only the TOKEN.  So appending `/\ c10_q_s = 65536` to a body installed
+#         that hypothesis in every statement using it with ZERO pin/coverage/census
+#         delta -- the exact attack PHASE 1g exists to stop, landing through a surface
+#         no phase watched.  FORS_C_TreePort.ec alone declares 9.  Fixed; the 9 bodies
+#         are pinned via the op: path; control CV5 shows the pred pin MOVES while the
+#         statement digest does NOT, which is what makes the pred row load-bearing.
+#     (2) Both new scans anchored declarations at line start, but EasyCrypt is
+#         whitespace-insensitive: `qed. lemma hidden : 1 = 1. proof. trivial. qed.` on
+#         ONE line is legal, saved and requirable -- uncounted, unreported and
+#         UNPINNABLE.  tools/cert_cone.py:162 already used the right `(?:^|\.)` idiom
+#         for axioms, so a mid-line AXIOM was caught by the census while a mid-line
+#         LEMMA was caught by nothing.  Fixed in digest(), digest_op() and the coverage
+#         scan; control CV6.  No mid-line statements exist today -- preventive.
+#   AND A DEFECT IN THE EXISTING PINS, surfaced by the anchoring fix: 11 of the 135
+#   pre-existing rows were OVER-BROAD.  Their lemmas have ONE-LINE proofs
+#   (`lemma foo : X. proof. by rewrite. qed.`), so the line-anchored `^\s*proof`
+#   terminator ran past them into NEIGHBOURING lemmas -- mem4_f's span was 331 chars
+#   covering four lemmas and their proofs.  11/11 swallowed a `qed.`.  Their digests are
+#   corrected here; that is why 11 committed values move in a change that is otherwise
+#   purely additive.
+#   THE STRIPPER ALSO SPLICED: comments were removed without a separator, so
+#   `lemma(* x *)foo` became `lemmafoo` and the declaration went invisible to every
+#   regex.  Now emits a separator and preserves newlines.
+#   COST: PHASE 1c is ~42 s for 932 rows (one python3 per row).  Accepted.
 # 2026-08-20.  split 2fcbf2ef683bb976940715ab59b6b232 -> 84ebde0d73e28e82a5cc01b4d95498df.
 #   ANTI-VACUITY FIX INSIDE THE FENCE ITSELF (tools/policy_cap_fence.py, hashed).
 #   MEASURED, not suspected: the fence as first published printed
@@ -705,5 +744,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	84ebde0d73e28e82a5cc01b4d95498df
+split	8157467568e9b7fe60b5b256f6f4d7d8
 fork	7ab20d2ab0ba2c1f3942408a193b4836

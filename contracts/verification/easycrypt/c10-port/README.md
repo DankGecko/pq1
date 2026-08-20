@@ -1238,3 +1238,80 @@ deleted one `.eco` between runs), and **cannot be causal**: all five runs report
 fourth distinct purge count (`0`) with the same post-purge state and a passing `cli`
 leg. `GprocT1Opre (cli)` now stands at **1 failure in 5 runs**; the finding records the
 ruled-out hypothesis rather than leaving it open.
+
+### UPDATE 2026-08-20 — ALL 905 statements pinned, plus PHASE 1h, without which the pins buy nothing
+
+Every top-level statement in all 38 certified roots is now pinned by digest.
+`EXPECT_PINS 135 -> 932`, new `EXPECT_STMTS = 905`. Gate GREEN. Write-up:
+`scratch/FINDING-pins-alone-do-not-close-the-hole.md`.
+
+**The obvious version of this task does not work, and that is the main result.**
+PHASE 1c iterates the **manifest** (`done < cert-statements-split.tsv`): it checks that
+every *pinned* statement still says what it said, and never reads the files to ask what
+statements **exist**. So pinning the 905 that exist today does nothing about a 906th
+appearing tomorrow — absence is invisible to a loop over the manifest.
+
+```
+PHASE 1c    manifest -> files    a pinned statement cannot silently CHANGE
+PHASE 1h    files -> manifest    a statement cannot silently APPEAR unpinned
+EXPECT_STMTS                     a statement cannot silently be REMOVED
+```
+
+Removal needs its own line: it leaves every surviving pin valid and every remaining
+statement pinned, so it is invisible to *both* checks. Control **CV1** — add a lemma,
+expect FAIL — is what justifies the whole exercise; without PHASE 1h it passes.
+
+#### Two blockers, found by adversarial review before the gate run
+
+**1. `pred` bodies were watched by nothing.** `digest()` takes only
+`lemma|theorem|equiv|hoare|phoare`; `digest_op()`'s alternation lacked `pred`; and
+`cert_cone.py`'s abstract scan matches `(const|op|type)` and skips bodies. A pred body
+is **pure logical content usable as a lemma hypothesis**, and a statement naming one
+digests only the **token** — so appending a conjunct installs that hypothesis into
+every statement using it with **zero pin, coverage and census delta**.
+`FORS_C_TreePort.ec` declares 9, appearing in 12 results.
+
+That is the exact attack PHASE 1g exists to stop, landing through a surface no phase
+watched — and needing no reference to the quarantined file at all. **Control CV5 is the
+discriminating evidence:** after the fix, editing a pred body moves the **pred** pin
+while the digests of the statements naming it do **not**. That gap is why the pred row
+is load-bearing, and a measurement of how invisible the body was before.
+
+**2. Line-anchored scans, in a whitespace-insensitive language.**
+`qed. lemma hidden : 1 = 1. proof. trivial. qed.` on one line is legal, saved and
+requirable — uncounted, unreported, and *unpinnable*. **The repo already knew the right
+idiom and I did not use it:** `cert_cone.py:162` matches `(?:^|\.)\s*(declare\s+axiom|axiom)`,
+so a mid-line **axiom** was caught by the census while a mid-line **lemma** was caught
+by nothing. Preventive — none exist today. Control CV6.
+
+#### And a defect in the pins that already existed
+
+The anchoring fix surfaced that **11 of the 135 pre-existing pins were over-broad**.
+Their lemmas have one-line proofs (`lemma foo : X. proof. by rewrite /foo. qed.`), so
+the line-anchored `^\s*proof` terminator found no line-start `proof` until a much later
+lemma. `mem4_f`'s pinned span was **331 characters covering four lemmas and their
+proofs**; 11/11 swallowed a `qed.`. Those pins were not pinning what their key said.
+Corrected here — which is why 11 committed digests move in an otherwise additive change.
+
+**A trap for the next person, recorded because I hit it:** the first anchoring attempt
+moved **870 of 923** digests. The cause was the *terminator*, not the declaration
+anchor — changing `^\s*proof` to `(?:^|\.)\s*proof` made it match at the statement's own
+closing period, silently dropping the trailing `.` from every span. Both must be
+re-anchored to their **keyword** via a capture group. **870 means you broke the tool; 11
+means you fixed a real defect.**
+
+Also: the comment stripper *spliced* — `lemma(* x *)foo` became `lemmafoo` and the
+declaration vanished from every regex. Now separates and preserves newlines.
+
+```
+GATE: GREEN (RC=0)   identity 84ebde0d -> 81574675
+  34/34 compiled · 932/932 pins · CLI_DISAGREEMENTS=0
+  OK coverage: all 905 top-level statements across 38 root files are pinned
+  OK quarantine intact · cone added=0 · ledger=242
+  OK inputs unchanged across the run
+```
+
+**Still not closed, named rather than left to be rediscovered:** coverage enumerates the
+**38 roots** while the certified cone is **45 files**, so statements in the 7 non-root
+cone files are pinned by neither check; and `abbrev` is pinnable via `digest_op` but
+forced by nothing — the same pinnable-but-not-forced shape that made `pred` dangerous.
