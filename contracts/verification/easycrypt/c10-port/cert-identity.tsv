@@ -524,6 +524,36 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-20 (fourth).  split 3986daa80bd31722e051b65ba8f67251 -> 4af03fe0f00f1f6520165012c58753ea.
+#   THE PROVER BUDGET IS NOW A COMMITTED CONSTANT: EC_TIMEOUT=60, applied to every
+#   certified-file `easycrypt compile` AND to the PHASE 1e `cli` leg.  Before this the
+#   gate ran at whatever the toolchain default happened to be, so a receipt was partly a
+#   measurement of that default rather than of the proofs.
+#   THE DIAGNOSIS THAT PRECEDED IT WAS WRONG TWICE, and the corrections are the point:
+#     (a) "the cli leg is non-deterministic" -- FALSE: it later failed the COMPILE driver
+#         with CLI_DISAGREEMENTS=0 in the same run.  It is the FILE, not the leg.
+#     (b) "gate-load contention tips it over" -- FALSE, and this is the one I published.
+#         The failure REPRODUCES IN ISOLATION with the gate's exact flags: 1 fail in 3,
+#         no load at all.  My "3/3 clean cold" runs had silently been given `-timeout 60
+#         -max-provers 4`, i.e. 20x the budget, and I credited the absence of load rather
+#         than the extra budget -- an uncontrolled variable, in the same finding where I
+#         had written "one trial per arm, not a controlled measurement".  And PHASE 1
+#         compiles SEQUENTIALLY (cert_gate_split.sh:203 is a plain while-loop), so there
+#         was never file-level contention to blame.
+#   THE ACTUAL CAUSE: cdrafts-split/GprocT1Opre.ec:1427, inside `lemma find_fresh`, is
+#   `by smt(allP hasP)` proving the all/has duality.  It is MARGINAL at the default
+#   budget.  MEASURED, one variable at a time:
+#       default     7/10 pass  (2 fails across 7 full-gate runs, 1 fail in 3 isolated)
+#       -timeout 60 8/8  pass  (5 isolated + 3 earlier)
+#   Cost on that file: ~130s -> ~300s.  `-timeout` only, NOT `-max-provers`: -timeout is
+#   PER PROVER CALL so it costs nothing on goals that already close quickly, whereas
+#   capping parallel provers would slow all 34 files.
+#   THE BETTER FIX IS AVAILABLE AND NOT TAKEN HERE: `has_predC : has (predC p) s = ! all
+#   p s` exists (List.ec:568), so that smt call is doing by SEARCH what a named rewrite
+#   does deterministically -- the same shape the repo already fixed once for
+#   EncoderBridge.pow8.  Rewriting it would make the receipt independent of machine speed
+#   entirely.  Deliberately NOT done under a change scoped to the budget: it edits a proof
+#   inside a certified file and should be its own reviewed decision.
 # 2026-08-20 (third).  split 8157467568e9b7fe60b5b256f6f4d7d8 -> 3986daa80bd31722e051b65ba8f67251.
 #   THE 7 NON-ROOT CONE FILES ARE CLOSED.  PHASE 1h now enumerates the FULL 45-FILE CONE
 #   instead of the 38 roots; the 79 statements in the transitively-required files are
@@ -777,5 +807,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	3986daa80bd31722e051b65ba8f67251
+split	4af03fe0f00f1f6520165012c58753ea
 fork	7ab20d2ab0ba2c1f3942408a193b4836

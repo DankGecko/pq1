@@ -35,6 +35,22 @@ EXPECT_PINS=1068
 # PHASE 1h: if the statement TOTAL moves, the certified statement set changed and
 # somebody must say why.  896 measured 2026-08-20.
 EXPECT_STMTS=984
+# COMMITTED PROVER BUDGET.  The gate previously ran `easycrypt compile` with NO
+# -timeout, i.e. at whatever the toolchain default happens to be -- so a receipt was
+# partly a measurement of the default rather than of the proofs.  cdrafts-split/
+# GprocT1Opre.ec is MARGINAL at that default and failed ~1 run in 3.
+# MEASURED, one variable at a time, in isolation with the gate's exact flags:
+#   default    : 7/10 pass  (2 fails across 7 full-gate runs, 1 fail in 3 isolated)
+#   -timeout 60: 8/8  pass  (5 isolated + 3 earlier with -max-provers 4)
+# NOTE the first diagnosis was WRONG: the failure was blamed on gate-load contention,
+# but it REPRODUCES in isolation with no load -- the earlier "clean cold" runs had
+# silently been given 20x the budget.  PHASE 1 compiles SEQUENTIALLY, so there was
+# never file-level contention to begin with.
+# -timeout only (NOT -max-provers): -timeout is PER PROVER CALL, so it costs nothing
+# on goals that already close quickly, whereas capping parallel provers would slow
+# all 34 files.  Cost on the marginal file: ~130s -> ~300s.
+EC_TIMEOUT=60
+ECFLAGS="-timeout $EC_TIMEOUT"
 # COMMITTED WATCHED-ROW COUNT (2026-08-10).  This replaced a `-ge 3` floor when
 # T1/T2/T3 were PROMOTED into closure-c10-split.txt: a floor cannot express
 # "there are deliberately none left", so retiring the last watched row would
@@ -178,13 +194,13 @@ echo "### ECO_REMAINING=$left"
 
 echo "### PHASE 1 — TARGETS"
 for n in WOTS_TW_ES FL_SL_XMSS_MT_ES FORS_ES SPHINCS_PLUS; do
-  if easycrypt compile -I $B $B/$n.ec >/dev/null 2>&1; then echo "OK   base/$n"; else echo "FAIL base/$n"; fail=$((fail+1)); fi
+  if easycrypt compile $ECFLAGS -I $B $B/$n.ec >/dev/null 2>&1; then echo "OK   base/$n"; else echo "FAIL base/$n"; fail=$((fail+1)); fi
 done
 n_seen=0
 while read -r n || [ -n "$n" ]; do
   case "$n" in ''|\#*) continue;; esac
   n_seen=$((n_seen+1))
-  if easycrypt compile $INC $D/$n.ec >/dev/null 2>&1; then echo "OK   $n"; else echo "FAIL $n"; fail=$((fail+1)); fi
+  if easycrypt compile $ECFLAGS $INC $D/$n.ec >/dev/null 2>&1; then echo "OK   $n"; else echo "FAIL $n"; fail=$((fail+1)); fi
 done < closure-c10-split.txt
 n_exp=$(grep -cve '^[[:space:]]*$' -e '^#' closure-c10-split.txt)
 echo "### CLOSURE_COMPILED=$n_seen EXPECTED=$n_exp"
@@ -207,11 +223,11 @@ echo "### PHASE 1d — EVERY CLOSURE FILE MUST BE REQUIRABLE (not merely compila
     echo "require import $n."
   done < $CLOSURE
 } > "$TMPD/require_all.ec"
-if easycrypt compile $INC "$TMPD/require_all.ec" >/dev/null 2>&1; then
+if easycrypt compile $ECFLAGS $INC "$TMPD/require_all.ec" >/dev/null 2>&1; then
   echo "OK   all closure files are requirable"
 else
   echo "FAIL a closure file cannot be REQUIRED -- a proof is probably left open at EOF"
-  easycrypt compile $INC "$TMPD/require_all.ec" 2>&1 | tr '\r' '\n' | grep -a '^\[critical\]' | head -2 | sed 's/^/       /'
+  easycrypt compile $ECFLAGS $INC "$TMPD/require_all.ec" 2>&1 | tr '\r' '\n' | grep -a '^\[critical\]' | head -2 | sed 's/^/       /'
   fail=$((fail+1))
 fi
 
@@ -258,7 +274,12 @@ cli_run=0
 cli_one() { # $1 = label, $2..= easycrypt cli args, stdin = the file
   local lbl="$1"; shift
   local out d pr
-  out=$(easycrypt cli -iterate "$@" 2>&1 | tr '\r' '\n')
+  # SAME COMMITTED BUDGET AS THE COMPILE DRIVER.  The first observed failure of
+  # GprocT1Opre was on THIS leg (473 diagnostics), and leaving the two drivers on
+  # different budgets would mean a "driver disagreement" could be nothing but a
+  # budget disagreement -- which is precisely the confusion the comment above says
+  # this phase already caused once with -iterate.
+  out=$(easycrypt cli -iterate $ECFLAGS "$@" 2>&1 | tr '\r' '\n')
   d=$(printf '%s\n' "$out" | grep -c '^<tty>:' || true)
   pr=$(printf '%s\n' "$out" | grep -c '^\[[0-9]*|' || true)
   cli_run=$((cli_run+1))
@@ -684,7 +705,7 @@ while IFS=$'\t' read -r path kind reason; do
     echo "FAIL control $path: MUST-FAIL with no declared reason (would accept any failure)"; fail=$((fail+1)); continue
   fi
   ran="$ran $path"
-  out=$(easycrypt compile $INC "$path" 2>&1); rc=$?
+  out=$(easycrypt compile $ECFLAGS $INC "$path" 2>&1); rc=$?
   msg=$(printf '%s' "$out" | tr '\r' '\n' | grep -a '^\[critical\]' | head -1)
   if [ $rc -eq 0 ]; then
     if [ "$kind" = MUST-PASS ]; then echo "OK   control $path (MUST-PASS)"

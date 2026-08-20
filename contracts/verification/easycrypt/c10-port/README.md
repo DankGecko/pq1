@@ -1383,3 +1383,65 @@ cone-coverage commit would make the receipt harder to read, not easier.
 resolve to `None`, 6 genuinely `AMBIGUOUS`, e.g. `P` declared four times in
 `FL_SL_XMSS_MT_ES.ec`). What landed pins *changes* to the 60 definitions in the 7 files;
 nothing yet *forces* a new definition to be pinned anywhere.
+
+### UPDATE 2026-08-20 (final) — `GprocT1Opre`'s budget is fixed, and it was never load
+
+`EC_TIMEOUT=60` is now a **committed constant** in `cert_gate_split.sh`, applied to every
+certified-file `easycrypt compile` **and** to the PHASE 1e `cli` leg. The gate previously
+ran at whatever the toolchain default happened to be — so a receipt was partly a
+measurement of that default rather than of the proofs.
+
+**The controlled experiment I should have run first.** Same file, isolation, the gate's
+**exact** flags:
+
+```
+run1 rc=0 115s   run2 rc=0 155s   run3 rc=1 104s eco=NO
+```
+
+The failure **reproduces with zero gate load**, which kills the contention hypothesis
+outright. And PHASE 1 compiles **sequentially** — a plain `while` loop — so there was
+never file-level contention to blame, a fact available by *reading* the gate before any
+measurement.
+
+**Why I got it wrong:** my "3/3 clean cold" runs had been given `-timeout 60
+-max-provers 4`, ~20× the default, while the gate passes no flags. I varied **two** things
+— load and budget — saw a difference, and attributed it to the one I had a story for. In
+the very finding where I had written *"one trial per arm, not a controlled measurement."*
+
+| # | framing | status |
+|---|---|---|
+| 1 | "the `cli` leg is non-deterministic" | **false** — later failed **compile**, `CLI_DISAGREEMENTS=0` same run |
+| 2 | "gate-load contention tips it over" | **false** — reproduces in isolation. *Published before it was checked.* |
+| 3 | "marginal at the default prover budget" | holds, one variable at a time |
+
+**Actual cause:** `GprocT1Opre.ec:1427` in `lemma find_fresh` is `by smt(allP hasP)`,
+discharging the `all`/`has` duality by search.
+
+```
+default      7/10 pass   (2 fails in 7 gate runs, 1 in 3 isolated)
+-timeout 60  8/8  pass   (5 isolated + 3 earlier)
+```
+
+`-timeout` only, **not** `-max-provers` — timeout is per prover call, so it costs nothing
+on goals that already close quickly, whereas capping parallel provers would slow all 34
+files. Cost on the marginal file: ~130s → ~300s. Both drivers get the same budget
+deliberately: the first failure was on the cli leg, and different budgets would mean a
+reported "driver disagreement" could be nothing but a *budget* disagreement.
+
+```
+GATE: GREEN (RC=0)   identity 3986daa8 -> 4af03fe0
+  OK GprocT1Opre (compile)  ·  OK GprocT1Opre (cli, 880 cmds)  ·  CLI_DISAGREEMENTS=0
+  1068/1068 pins · coverage 984/984 across 45 cone files · quarantine intact
+  cone added=0 · ledger=242 · inputs unchanged across the run
+```
+
+**The better fix, available and deliberately not taken:** `has_predC : has (predC p) s =
+! all p s` at `List.ec:568` makes that `smt` call a named rewrite — deterministic, the
+same shape this repo already fixed once for `EncoderBridge.pow8`. It edits a **proof
+inside a certified file** under a change scoped to the budget, so it should be its own
+reviewed decision.
+
+**The durable lesson:** a budget is a *variable*, and running the control arm with
+different flags from the treatment arm is not a control. The receipt now commits the
+budget, so "was that a proof failure or a budget failure?" is answerable from the
+manifest instead of from someone's memory of which flags they used.

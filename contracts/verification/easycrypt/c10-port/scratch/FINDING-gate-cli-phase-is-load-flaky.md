@@ -1,4 +1,4 @@
-# FINDING — `GprocT1Opre` fails under GATE LOAD on either driver, and passes cold
+# FINDING — `GprocT1Opre` is MARGINAL AT THE DEFAULT PROVER BUDGET (two wrong diagnoses first)
 
 2026-08-19/20, observed while gating the policy-cap fence. Recorded because a gate
 phase that can fail on an unchanged tree makes every receipt containing it partly a
@@ -149,3 +149,84 @@ the reverse of what happened here.
 
 Not done here: this change was about cone coverage, and folding an unrelated gate-timing
 fix into it would make the receipt harder to read, not easier. Named as the next unit.
+
+
+---
+
+## FINAL 2026-08-20 — it was never load. It was the BUDGET. And the fix is committed.
+
+**The controlled experiment I should have run first.** Same file, isolation, **the gate's
+exact flags** (no `-timeout`, no `-max-provers`):
+
+```
+run1 rc=0 115s eco=yes
+run2 rc=0 155s eco=yes
+run3 rc=1 104s eco=NO   <- FAILURE REPRODUCED WITH ZERO GATE LOAD
+```
+
+That kills the contention hypothesis outright. And PHASE 1 compiles **sequentially**
+(`cert_gate_split.sh` PHASE 1 is a plain `while` loop), so there was never file-level
+contention to blame in the first place — a fact available by reading the gate, before any
+measurement.
+
+**Why I got it wrong:** my "3/3 clean cold" runs were given `-timeout 60 -max-provers 4`
+— roughly 20x the default budget — while the gate passes no flags at all. I varied TWO
+things (load and budget), observed a difference, and attributed it to the one I had a
+story for. In the very same finding where I had written *"one trial per arm, not a
+controlled measurement"*.
+
+**Three framings, in order, only the last one measured properly:**
+
+| # | claim | status |
+|---|---|---|
+| 1 | "the `cli` leg is non-deterministic" | FALSE — it later failed **compile**, with `CLI_DISAGREEMENTS=0` in the same run |
+| 2 | "gate-load contention tips it over" | FALSE — reproduces in isolation; **published before it was checked** |
+| 3 | "marginal at the default prover budget" | holds under a one-variable-at-a-time measurement |
+
+## THE ACTUAL CAUSE
+
+`cdrafts-split/GprocT1Opre.ec:1427`, inside `lemma find_fresh`:
+
+```
+have hs : has (fun (x : int * int * int) => ! (x \in c)) hh
+  by smt(allP hasP).
+```
+
+The `all`/`has` duality, discharged by search. Marginal at the default budget:
+
+```
+default      7/10 pass   (2 fails in 7 full-gate runs, 1 fail in 3 isolated)
+-timeout 60  8/8  pass   (5 isolated + 3 earlier)
+```
+
+## THE FIX, AND ITS COST
+
+`EC_TIMEOUT=60` is now a **committed constant** in `cert_gate_split.sh`, applied to every
+certified-file `easycrypt compile` **and** to the PHASE 1e `cli` leg. Both drivers on the
+same budget deliberately: the first failure was on the cli leg, and leaving them on
+different budgets means a reported "driver disagreement" could be nothing but a budget
+disagreement — the exact confusion that phase already caused once with `-iterate`.
+
+`-timeout` only, **not** `-max-provers`: timeout is per prover call, so it costs nothing
+on goals that already close quickly, whereas capping parallel provers would slow all 34
+files. Cost on the marginal file: ~130s -> ~300s.
+
+**Validated in situ:** gate GREEN, `OK GprocT1Opre` on compile AND `OK GprocT1Opre (cli,
+880 cmds)`, `CLI_DISAGREEMENTS=0`.
+
+## THE BETTER FIX, AVAILABLE AND DELIBERATELY NOT TAKEN
+
+`has_predC : has (predC p) s = ! all p s` exists at `List.ec:568`. That `smt` call is
+doing by SEARCH what a named rewrite does deterministically — the same shape this repo
+already fixed once for `EncoderBridge.pow8`. Rewriting it would make the receipt
+independent of machine speed entirely, rather than merely funding the search.
+
+Not done here because it edits a **proof inside a certified file** under a change scoped
+to the budget. It is a small, well-evidenced follow-up.
+
+## THE PROCESS LESSON, WHICH IS THE DURABLE PART
+
+A budget is a **variable**, and running the "control" arm with different flags from the
+treatment arm is not a control. The receipt now commits the budget, so this class of
+question — "was that a proof failure or a budget failure?" — is answerable from the
+manifest instead of from someone's memory of which flags they used.
