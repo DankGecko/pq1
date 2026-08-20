@@ -1,0 +1,267 @@
+### INPUTS_SHA256 2fcbf2ef683bb976940715ab59b6b232
+FAIL INPUTS_SHA256 DRIFT: committed bcb2f2956488ac7867cd0fbdb3606eec, computed 2fcbf2ef683bb976940715ab59b6b232
+     a certified input or the certification machinery changed;
+     re-baseline deliberately and update cert-identity.tsv in the same commit
+### TOOLCHAIN GIT hash: r2026.02
+### PROVERS 0a5b3d54dcce300e 25 configurations
+OK   no dual-extension theory names on the include path
+### ECO_PURGED=37
+### ECO_REMAINING=0
+### PHASE 1 — TARGETS
+OK   base/WOTS_TW_ES
+OK   base/FL_SL_XMSS_MT_ES
+OK   base/FORS_ES
+OK   base/SPHINCS_PLUS
+OK   Grind
+OK   STCR_C
+OK   WOTS_C_Real
+OK   WOTS_C_Scheme
+OK   XMSSMT_C_Scheme
+OK   WOTS_C_Reduction
+OK   WOTS_C_Multi
+OK   WOTS_C_Interactive
+OK   XmssmtCC_All
+OK   RtopCSoundness
+OK   FxChain
+OK   FORS_C10
+OK   FORS_C10_Multi
+OK   GprocFORSC10
+OK   FORS_C_TreePort
+OK   GprocVI
+OK   SphincsC10CapstoneWired
+OK   SphincsC10Content
+OK   C10DeployedGeometry
+OK   C10DeployedScope
+OK   GFailCharged
+OK   XmssmtCCCharged
+OK   SphincsC10CapstoneCharged
+OK   C10DeployedInstance
+OK   C10DeployedCapstone
+OK   C10SpecControls
+OK   GprocT1Opre
+OK   GprocT2Trh
+OK   GprocT3Trco
+OK   GprocQBound
+OK   GprocQWired
+OK   DarkSide
+OK   DarkSideC10
+OK   GprocChargedQWired
+### CLOSURE_COMPILED=34 EXPECTED=34
+### PHASE 1d — EVERY CLOSURE FILE MUST BE REQUIRABLE (not merely compilable)
+OK   all closure files are requirable
+### PHASE 1e — BOTH DRIVERS (compile AND cli)
+OK   base/WOTS_TW_ES (cli, 2153 cmds)
+OK   base/FL_SL_XMSS_MT_ES (cli, 679 cmds)
+OK   base/FORS_ES (cli, 2191 cmds)
+OK   base/SPHINCS_PLUS (cli, 456 cmds)
+OK   Grind (cli, 59 cmds)
+OK   STCR_C (cli, 37 cmds)
+OK   WOTS_C_Real (cli, 115 cmds)
+OK   WOTS_C_Scheme (cli, 41 cmds)
+OK   XMSSMT_C_Scheme (cli, 58 cmds)
+OK   WOTS_C_Reduction (cli, 204 cmds)
+OK   WOTS_C_Multi (cli, 164 cmds)
+OK   WOTS_C_Interactive (cli, 744 cmds)
+OK   XmssmtCC_All (cli, 2624 cmds)
+OK   RtopCSoundness (cli, 673 cmds)
+OK   FxChain (cli, 1219 cmds)
+OK   FORS_C10 (cli, 59 cmds)
+OK   FORS_C10_Multi (cli, 69 cmds)
+OK   GprocFORSC10 (cli, 400 cmds)
+OK   FORS_C_TreePort (cli, 289 cmds)
+OK   GprocVI (cli, 190 cmds)
+OK   SphincsC10CapstoneWired (cli, 102 cmds)
+OK   SphincsC10Content (cli, 198 cmds)
+OK   C10DeployedGeometry (cli, 121 cmds)
+OK   C10DeployedScope (cli, 91 cmds)
+OK   GFailCharged (cli, 103 cmds)
+OK   XmssmtCCCharged (cli, 66 cmds)
+OK   SphincsC10CapstoneCharged (cli, 48 cmds)
+OK   C10DeployedInstance (cli, 247 cmds)
+OK   C10DeployedCapstone (cli, 64 cmds)
+OK   C10SpecControls (cli, 11 cmds)
+FAIL GprocT1Opre (cli): 473 diagnostic(s) -- compile accepted what cli rejects
+       <tty>: line 1427 (0) to line 1428 (20): cannot prove goal (strict)
+       <tty>: line 1429 (0) to line 1430 (23): [by]: cannot close goals
+OK   GprocT2Trh (cli, 1184 cmds)
+OK   GprocT3Trco (cli, 385 cmds)
+OK   GprocQBound (cli, 12 cmds)
+OK   GprocQWired (cli, 46 cmds)
+OK   DarkSide (cli, 153 cmds)
+OK   DarkSideC10 (cli, 14 cmds)
+OK   GprocChargedQWired (cli, 28 cmds)
+### CLI_FILES_RUN=38 CLI_DISAGREEMENTS=1
+### PHASE 1f — WATCHED FILES (T1/T2/T3 branch proofs; NOT certified)
+### WATCHED_FILES_RUN=0 WATCHED_FAILURES=0
+### PHASE 1b — NAMED RESULTS EXIST AS LEMMAS (not axioms)
+OK   EUFCMA_SPHINCS_PLUS_C10_GROUNDED is a lemma in cdrafts-split/SphincsC10CapstoneWired.ec
+OK   EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS is a lemma in cdrafts-split/C10DeployedCapstone.ec
+OK   EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_PINNED_ENCODER is a lemma in cdrafts-split/C10DeployedCapstone.ec
+OK   EUFCMA_SPHINCS_PLUS_C10_CONTENTFUL_AT_DEPLOYED_ENCODER is a lemma in cdrafts-split/C10DeployedCapstone.ec
+OK   EUFCMA_SPHINCS_PLUS_C10_CHARGED is a lemma in cdrafts-split/SphincsC10CapstoneCharged.ec
+OK   EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_QWIRED is a lemma in cdrafts-split/GprocQWired.ec
+OK   EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_PINNED_ENCODER_QWIRED is a lemma in cdrafts-split/GprocQWired.ec
+OK   EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED is a lemma in cdrafts-split/GprocChargedQWired.ec
+### PHASE 1c — STATEMENT DIGESTS (names are not enough)
+OK   statement pinned: cdrafts-split/C10DeployedCapstone.ec::EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS
+OK   statement pinned: cdrafts-split/SphincsC10CapstoneCharged.ec::EUFCMA_SPHINCS_PLUS_C10_CHARGED
+OK   statement pinned: cdrafts-split/SphincsC10CapstoneWired.ec::EUFCMA_SPHINCS_PLUS_C10_GROUNDED
+OK   statement pinned: op:base-c10-split/FL_SL_XMSS_MT_ES.ec::dist_adrstypes
+OK   statement pinned: op:base-c10-split/FL_SL_XMSS_MT_ES.ec::valid_xidxvals_idxvals
+OK   statement pinned: op:base-c10-split/FORS_ES.ec::A_forge_ll
+OK   statement pinned: op:base-c10-split/FORS_ES.ec::dist_adrstypes
+OK   statement pinned: op:base-c10-split/FORS_ES.ec::valid_fidxvals_idxvals
+OK   statement pinned: op:base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::A_find_ll
+OK   statement pinned: op:base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca::A_pick_ll
+OK   statement pinned: op:base-c10-split/SPHINCS_PLUS.ec::a_val
+OK   statement pinned: op:base-c10-split/SPHINCS_PLUS.ec::d_val
+OK   statement pinned: op:base-c10-split/SPHINCS_PLUS.ec::dist_adrstypes
+OK   statement pinned: op:base-c10-split/SPHINCS_PLUS.ec::hp_val
+OK   statement pinned: op:base-c10-split/SPHINCS_PLUS.ec::k_val
+OK   statement pinned: op:base-c10-split/SPHINCS_PLUS.ec::len_val
+OK   statement pinned: op:base-c10-split/SPHINCS_PLUS.ec::log2_w_val
+OK   statement pinned: op:base-c10-split/SPHINCS_PLUS.ec::n_val
+OK   statement pinned: op:base-c10-split/TweakableHashFunctions.eca::in_collection
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::A_choose_ll
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::A_forge_ll
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::P
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::ch0
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::chS
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::digitsum
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::encode_msgWOTS
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::join_dgst
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::n_m
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::target_sum
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::tgt_witness
+OK   statement pinned: op:base-c10-split/WOTS_TW_ES.ec::valid_widxvals_idxvals
+OK   statement pinned: op:cdrafts-split/C10DeployedInstance.ec::c10_k
+OK   statement pinned: op:cdrafts-split/C10DeployedInstance.ec::c10_len
+OK   statement pinned: op:cdrafts-split/C10DeployedInstance.ec::c10_n
+OK   statement pinned: op:cdrafts-split/C10DeployedInstance.ec::c10_r
+OK   statement pinned: op:cdrafts-split/FORS_C10.ec::dmkey_ll
+OK   statement pinned: op:cdrafts-split/FORS_C10.ec::eqiks_g
+OK   statement pinned: op:cdrafts-split/FORS_C10.ec::good_pos
+OK   statement pinned: op:cdrafts-split/FORS_C10.ec::neqisvs_g
+OK   statement pinned: op:cdrafts-split/FORS_C10.ec::rng_g
+OK   statement pinned: op:cdrafts-split/FORS_C10.ec::size_g
+OK   statement pinned: op:cdrafts-split/FORS_C10.ec::uniq_g
+OK   statement pinned: op:cdrafts-split/STCR_C.ec::dpp_ll
+OK   statement pinned: op:cdrafts-split/WOTS_C_Real.ec::ThC
+OK   statement pinned: op:cdrafts-split/WOTS_C_Real.ec::emb_in
+OK   statement pinned: op:cdrafts-split/WOTS_C_Real.ec::emb_in0
+OK   statement pinned: op:cdrafts-split/WOTS_C_Real.ec::emb_in1
+OK   statement pinned: op:cdrafts-split/WOTS_C_Real.ec::emb_tw
+OK   statement pinned: op:cdrafts-split/WOTS_C_Real.ec::predC
+OK   statement pinned: base-c10-split/WOTS_TW_ES.ec::nhchwcoll_hchwpre_msg
+OK   statement pinned: cdrafts-split/C10DeployedCapstone.ec::EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_PINNED_ENCODER
+OK   statement pinned: cdrafts-split/C10DeployedCapstone.ec::c10_deployed_STCR_premises_hold
+OK   statement pinned: cdrafts-split/C10DeployedInstance.ec::c10_deployed_encoder_meets_model
+OK   statement pinned: cdrafts-split/C10DeployedInstance.ec::c10_deployed_encoder_gives_width
+OK   statement pinned: cdrafts-split/C10DeployedCapstone.ec::EUFCMA_SPHINCS_PLUS_C10_CONTENTFUL_AT_DEPLOYED_ENCODER
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::Gproc_uncovered_gives_witness
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::GprocKg_sk_eq
+OK   statement pinned: cdrafts-split/C10DeployedCapstone.ec::c10_dfC_separations_from_width_alone
+OK   statement pinned: cdrafts-split/C10DeployedCapstone.ec::c10_embg_not_constant
+OK   statement pinned: cdrafts-split/C10DeployedCapstone.ec::c10_deployed_encoder_not_constant
+OK   statement pinned: op:cdrafts-split/GprocFORSC10.ec::pkfors_of
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::genpkfors_cf_op
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::MM45_keygen_pk_from_sk
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::Gproc_keygen_pk_from_sk
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::pk_pools_eq
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::GprocKg_keygen_eq
+OK   statement pinned: cdrafts-split/FORS_C_TreePort.ec::fors_c_tree_port
+OK   statement pinned: cdrafts-split/FORS_C_TreePort.ec::extract_op
+OK   statement pinned: cdrafts-split/FORS_C_TreePort.ec::extract_trh
+OK   statement pinned: cdrafts-split/FORS_C_TreePort.ec::extract_trco
+OK   statement pinned: cdrafts-split/FORS_C_TreePort.ec::instr_eq
+OK   statement pinned: cdrafts-split/FORS_C_TreePort.ec::op_preimage_core
+OK   statement pinned: cdrafts-split/FORS_C_TreePort.ec::op_extract_wins
+OK   statement pinned: cdrafts-split/FORS_C_TreePort.ec::trh_collision_at_div
+OK   statement pinned: cdrafts-split/FORS_C_TreePort.ec::op_win_satisfiable
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::gproc_V_eq
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::gproc_V_split
+OK   statement pinned: cdrafts-split/GprocFORSC10.ec::gproc_Q_decomposition
+OK   statement pinned: cdrafts-split/GprocVI.ec::gproc_V_VI_eq
+OK   statement pinned: cdrafts-split/GprocVI.ec::gprockg_vi_eq
+OK   statement pinned: cdrafts-split/GprocVI.ec::gprockg_vi_sk_eq
+OK   statement pinned: cdrafts-split/GprocVI.ec::GprocKgVI_pk_from_sk
+OK   statement pinned: cdrafts-split/GprocVI.ec::GprocTreeVI_root_h
+OK   statement pinned: cdrafts-split/GprocVI.ec::GprocTreeVI_root_ll
+OK   statement pinned: cdrafts-split/GprocVI.ec::pkfors_of_from_roots
+OK   statement pinned: cdrafts-split/GprocVI.ec::cube_is_mkseq
+OK   statement pinned: cdrafts-split/GprocVI.ec::size_cube
+OK   statement pinned: cdrafts-split/GprocT1Opre.ec::t1_term_pinned
+OK   statement pinned: cdrafts-split/GprocT1Opre.ec::t1_opre_bound
+OK   statement pinned: cdrafts-split/GprocT1Opre.ec::Eqv_OCMA_sign
+OK   statement pinned: cdrafts-split/GprocT2Trh.ec::t2_trh_bound
+OK   statement pinned: cdrafts-split/GprocT2Trh.ec::t2_trh_bound_VI
+OK   statement pinned: cdrafts-split/GprocT3Trco.ec::t3_trco_bound
+OK   statement pinned: cdrafts-split/GprocT3Trco.ec::t3_trco_bound_VI
+OK   statement pinned: cdrafts-split/GprocQBound.ec::gproc_Q_bound
+OK   statement pinned: cdrafts-split/GprocQWired.ec::EUFCMA_SPHINCS_PLUS_C10_QWIRED
+OK   statement pinned: cdrafts-split/GprocQWired.ec::qwired_at_witness
+OK   statement pinned: cdrafts-split/GprocQWired.ec::EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_QWIRED
+OK   statement pinned: cdrafts-split/GprocQWired.ec::EUFCMA_SPHINCS_PLUS_C10_AT_DEPLOYED_PARAMS_PINNED_ENCODER_QWIRED
+OK   statement pinned: cdrafts-split/GprocQWired.ec::deployed_qwired_at_witness
+OK   statement pinned: cdrafts-split/DarkSide.ec::ds_ge_1t
+OK   statement pinned: cdrafts-split/DarkSide.ec::forsc_le_fors
+OK   statement pinned: cdrafts-split/DarkSide.ec::cover_all_pr
+OK   statement pinned: cdrafts-split/DarkSide.ec::cover_some_le
+OK   statement pinned: cdrafts-split/DarkSide.ec::ds_le_linear
+OK   statement pinned: cdrafts-split/DarkSideC10.ec::c10_ds_ge_1t
+OK   statement pinned: cdrafts-split/DarkSideC10.ec::c10_forsc_le_fors
+OK   statement pinned: cdrafts-split/DarkSide.ec::mixture_le_moment
+OK   statement pinned: cdrafts-split/DarkSide.ec::mixture_le_moment_finite_ex
+OK   statement pinned: cdrafts-split/GprocChargedQWired.ec::EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED
+OK   statement pinned: cdrafts-split/GprocChargedQWired.ec::charged_qwired_at_witness
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_c_closed
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_p_tgts_is_least
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_c_le_p_tgts_at_pin
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_usage_cap_is_not_admissible_as_p_tgts
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_ht_capacity
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_ht_capacity_vs_usage_cap
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_pow2_9
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_pow2_18
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_geometry_pinned_in_base
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_c_is_two_powers
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_c_is_leaves_plus_toptree
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_p_tgts_admissible
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_p_tgts_dominates_c
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_p_tgts_is_exactly_c
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_pin_respects_ge0_ptgts
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_usage_cap_below_c
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_layers_times_usage_cap_below_c
+OK   statement pinned: cdrafts-split/C10DeployedScope.ec::c10_distinct_instances_under_usage_cap
+OK   statement pinned: op:cdrafts-split/C10DeployedScope.ec::c10_hp
+OK   statement pinned: op:cdrafts-split/C10DeployedScope.ec::c10_d
+OK   statement pinned: op:cdrafts-split/C10DeployedScope.ec::c10_h
+OK   statement pinned: op:cdrafts-split/C10DeployedScope.ec::c10_c
+OK   statement pinned: op:cdrafts-split/C10DeployedScope.ec::c10_p_tgts
+OK   statement pinned: op:cdrafts-split/C10DeployedScope.ec::c10_q_s
+statements pinned=135 expected=135 (manifest rows)
+### PHASE 1g — POLICY-CAP QUARANTINE (cdrafts-split/C10DeployedScope.ec)
+OK   quarantine intact: 24 declarations, 3 require lines, sealed leaf, no inbound requires, no magnitude leakage
+### PHASE 2 — CONE CENSUS vs cert-baseline-split.tsv (ADDITIONS FATAL)
+cone: keys now=1113 baseline=1113 | ROWS now=1193 baseline=1193 | added=0 removed=0
+  ledger=242  parameters=217  bindings=345  meaning=389  total=1193
+### PHASE 2b — CENSUS REGRESSION CANARY (admitted.)
+OK   census detects 'admitted.' (canary caught)
+### PHASE 2c — DIGEST DISCRIMINATION CANARY
+OK   module-type digest discriminates (module-type:1ed74e3a5614 vs module-type:f9d6086d602e)
+OK   admit statement digest discriminates (admit:7c56af2d53b1 vs admit:4eeb8521bd94)
+OK   no live row carries a degenerate digest
+OK   no live admit row degraded to 'nostmt'
+### PHASE 3 — CONTROLS (polarity AND declared reason)
+OK   control scratch/vac_probe_full.ec (MUST-FAIL, rejected for the DECLARED reason)
+OK   control scratch/probe_len46.ec (MUST-FAIL, rejected for the DECLARED reason)
+OK   control scratch/c10_spec_vacuity_canary.ec (MUST-FAIL, rejected for the DECLARED reason)
+OK   control cdrafts-split/C10SpecControls.ec (MUST-PASS)
+OK   control scratch/tier0_degenerate_encoder_excluded.ec (MUST-FAIL, rejected for the DECLARED reason)
+controls executed (unique)=5 expected>=5
+### PHASE 4 — FORS+C GRINDING MARGIN (heuristic figures, NOT a theorem)
+OK   margin guardrails 4/4 (happy path)
+OK   margin negative controls 3/3 (guardrails demonstrably fire)
+OK   margin figures match the committed manifest (7/7)
+OK   inputs unchanged across the run (2fcbf2ef683bb976940715ab59b6b232)
+### RESULT: RED (2 failures)
+__GATE_RC=1

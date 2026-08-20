@@ -1,0 +1,39 @@
+# POLICY-CAP QUARANTINE MANIFEST -- cdrafts-split/C10DeployedScope.ec
+#
+# The complete declaration inventory and require set of the file that names the
+# DEPLOYMENT cap c10_q_s (= 65536 = MAX_SLOT_USES).  Enforced by PHASE 1g via
+# tools/policy_cap_fence.py.  ADDITIONS ARE FATAL, in the same idiom as the cone
+# census: you cannot add, remove or rename a declaration in that file without a
+# delta in this manifest that a human has to approve.
+#
+# WHY AN INVENTORY AND NOT A GREP: a 54-agent adversarial review confirmed 33
+# bypasses of the token-grep design that preceded this.  See the module docstring
+# of tools/policy_cap_fence.py for the three decisive ones and for what this
+# fence explicitly does NOT close.
+require	AllCore List IntDiv Ring StdBigop StdOrder
+require	SPHINCS_PLUS
+require	WOTS_C_Real
+decl	lemma	c10_c_closed
+decl	lemma	c10_c_is_leaves_plus_toptree
+decl	lemma	c10_c_is_two_powers
+decl	lemma	c10_c_le_p_tgts_at_pin
+decl	lemma	c10_distinct_instances_under_usage_cap
+decl	lemma	c10_geometry_pinned_in_base
+decl	lemma	c10_ht_capacity
+decl	lemma	c10_ht_capacity_vs_usage_cap
+decl	lemma	c10_layers_times_usage_cap_below_c
+decl	lemma	c10_p_tgts_admissible
+decl	lemma	c10_p_tgts_dominates_c
+decl	lemma	c10_p_tgts_is_exactly_c
+decl	lemma	c10_p_tgts_is_least
+decl	lemma	c10_pin_respects_ge0_ptgts
+decl	lemma	c10_pow2_18
+decl	lemma	c10_pow2_9
+decl	lemma	c10_usage_cap_below_c
+decl	lemma	c10_usage_cap_is_not_admissible_as_p_tgts
+decl	op	c10_c
+decl	op	c10_d
+decl	op	c10_h
+decl	op	c10_hp
+decl	op	c10_p_tgts
+decl	op	c10_q_s

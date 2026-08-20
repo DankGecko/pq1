@@ -149,3 +149,28 @@ cdrafts-split/C10DeployedScope.ec::c10_c_le_p_tgts_at_pin	614a85247d5086e5ec3601
 cdrafts-split/C10DeployedScope.ec::c10_usage_cap_is_not_admissible_as_p_tgts	87f6ef81e556ff2ba8c9546876754084
 cdrafts-split/C10DeployedScope.ec::c10_ht_capacity	741b506a042b203b9085d892ef00086a
 cdrafts-split/C10DeployedScope.ec::c10_ht_capacity_vs_usage_cap	185df70ae6f1284ffa4e9cd9a3ed2fdc
+# --- C10DeployedScope: FULL declaration coverage (2026-08-19) ---
+# The six scope pins added on promotion covered 6 of 18 lemmas and 0 of 6
+# ops -- so twelve statements and every op VALUE were unpinned inside the
+# very file that quarantines the deployment cap.  A value swap
+# (op c10_p_tgts : int = 262656 -> 65536) moved NO pin.  Now every
+# declaration in that file is pinned; PHASE 1g additionally makes adding
+# or removing one fatal.
+cdrafts-split/C10DeployedScope.ec::c10_pow2_9	e55dd93932a03c64b2e067612a2ce39e
+cdrafts-split/C10DeployedScope.ec::c10_pow2_18	cbfc4c13d4867b794c5fea9fa6a1f267
+cdrafts-split/C10DeployedScope.ec::c10_geometry_pinned_in_base	f8daefeeaebd48da2e980b5ec147c83f
+cdrafts-split/C10DeployedScope.ec::c10_c_is_two_powers	ec387afc850d76b8946197908371d0e8
+cdrafts-split/C10DeployedScope.ec::c10_c_is_leaves_plus_toptree	9ebdacdfcd6a88439281dfcd21397168
+cdrafts-split/C10DeployedScope.ec::c10_p_tgts_admissible	4e800323c44e81d464c23f4fad708ca4
+cdrafts-split/C10DeployedScope.ec::c10_p_tgts_dominates_c	573f1d498edfecf068c304878f3b7b23
+cdrafts-split/C10DeployedScope.ec::c10_p_tgts_is_exactly_c	dec643cbc79a4468c699a107670349bb
+cdrafts-split/C10DeployedScope.ec::c10_pin_respects_ge0_ptgts	6f7b3a01e716f90fe00e6c1d58c55451
+cdrafts-split/C10DeployedScope.ec::c10_usage_cap_below_c	8656fbd9f3371ebc415f7b949558edb8
+cdrafts-split/C10DeployedScope.ec::c10_layers_times_usage_cap_below_c	16649d8a662ec2a9d52d280664e9fa31
+cdrafts-split/C10DeployedScope.ec::c10_distinct_instances_under_usage_cap	253bed4bb4803b74ba6d0126c42841ce
+op:cdrafts-split/C10DeployedScope.ec::c10_hp	ea32435467d935dbb5cebb92366ddb68
+op:cdrafts-split/C10DeployedScope.ec::c10_d	5144b78f4f841381926e974c0479777d
+op:cdrafts-split/C10DeployedScope.ec::c10_h	1cb5b6e046243f4e925a1476aa0fef25
+op:cdrafts-split/C10DeployedScope.ec::c10_c	6e4556d7fb1382d9011b615dae7896b2
+op:cdrafts-split/C10DeployedScope.ec::c10_p_tgts	403f6508dc2d65c5efd5984ed2e66a93
+op:cdrafts-split/C10DeployedScope.ec::c10_q_s	775acb6fd903a15ed87c995969a12ff4

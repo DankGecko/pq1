@@ -30,7 +30,7 @@ TMPD=$(mktemp -d) || { echo 'FAIL mktemp'; exit 1; }
 trap 'rm -rf "$TMPD"' EXIT
 # Expected inventory sizes, COMMITTED. A guard that recomputes its expectation
 # from the file it is checking cannot detect truncation of that file.
-EXPECT_PINS=117
+EXPECT_PINS=135
 # COMMITTED WATCHED-ROW COUNT (2026-08-10).  This replaced a `-ge 3` floor when
 # T1/T2/T3 were PROMOTED into closure-c10-split.txt: a floor cannot express
 # "there are deliberately none left", so retiring the last watched row would
@@ -85,7 +85,7 @@ for n in WOTS_TW_ES FL_SL_XMSS_MT_ES FORS_ES SPHINCS_PLUS; do ROOTS_ID="$ROOTS_I
 # proof, and PHASE 2b/2c only canary two specific behaviours of it.
 INPUTS_ID=$( { CERT_CONE_DIRS="base-c10-split,cdrafts-split" python3 tools/cert_cone.py $ROOTS_ID 2>/dev/null \
     | sed -n 's/^#   //p' | sort -u | while read -r f; do [ -f "$f" ] && sha256sum "$f"; done
-  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
+  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py tools/policy_cap_fence.py cert-quarantine-split.tsv scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
 echo "### INPUTS_SHA256 $INPUTS_ID"
 # AND NOW COMPARE IT.  This line was printed and checked by nothing: an identity
 # receipt that no run can fail on is decoration.  The expected value lives in
@@ -473,6 +473,35 @@ else
   echo "FAIL cert-statements-split.tsv missing -- statements unpinned"; fail=$((fail+1))
 fi
 
+echo "### PHASE 1g — POLICY-CAP QUARANTINE (cdrafts-split/C10DeployedScope.ec)"
+# That file names the DEPLOYMENT cap c10_q_s = 65536 = MAX_SLOT_USES.  Two external
+# reviewers ruled (2026-08-15) that importing the cap into the model would make a
+# reusable theorem depend on one wallet's on-chain policy; the file may name it ONLY
+# in NEGATIVE statements about what it CANNOT be.  Until this phase existed that held
+# by INSPECTION and a header comment -- a future closure member could `require` the
+# file and nothing would notice.
+#
+# THIS IS AN INVENTORY, NOT A GREP, AND THAT IS THE POINT.  The first design was three
+# token-greps; a 54-agent adversarial review confirmed 33 bypasses of it.  The decisive
+# ones: (a) re-declare the VALUE under another name in the file that wants it -- the
+# HOUSE IDIOM, verified at C10DeployedGeometry.ec:66 vs C10DeployedInstance.ec:44,
+# which define the same constants without requiring each other; (b) spell it in model
+# symbols as `l %/ 4`, since this very file proves l = 4 * c10_q_s; (c) `declare axiom`
+# in a section, which carries no `=>`.  A grep keys on a NAME; the object of concern is
+# a NUMBER IN A PREMISE POSITION.  So the fence instead makes the file
+# immutable-by-default in this gate's own ADDITIONS-ARE-FATAL idiom.
+#
+# WHAT IT DOES NOT CLOSE: a NEW policy number introduced ELSEWHERE under another name.
+# That needs exhaustive statement pinning over all 34 members (~623 statements) and is
+# a separate project.  See tools/policy_cap_fence.py.
+if fence_out=$(python3 tools/policy_cap_fence.py 2>&1); then
+  echo "$fence_out"
+else
+  echo "$fence_out" | sed 's/^/     /'
+  echo "FAIL policy-cap quarantine breached"
+  fail=$((fail+1))
+fi
+
 echo "### PHASE 2 — CONE CENSUS vs cert-baseline-split.tsv (ADDITIONS FATAL)"
 # Rewritten 2026-08-01.  The first version was a flat `admit` regex over the 22
 # closure filenames in cdrafts-split ONLY.  It therefore could not see the live
@@ -766,7 +795,7 @@ fi
 # past the compile is caught, and it costs one second.
 INPUTS_ID_END=$( { CERT_CONE_DIRS="base-c10-split,cdrafts-split" python3 tools/cert_cone.py $ROOTS_ID 2>/dev/null \
     | sed -n 's/^#   //p' | sort -u | while read -r f; do [ -f "$f" ] && sha256sum "$f"; done
-  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
+  sha256sum $CLOSURE $BASELINE $STMTS cert-controls-split.tsv cert-watched-split.tsv cert-margin-split.tsv $CTL_SRC $CANARY_SRC tools/cert_cone.py tools/stmt_digest.py tools/forsc_grinding_margin.py tools/policy_cap_fence.py cert-quarantine-split.tsv scratch/sweep.py cert_gate_split.sh 2>/dev/null; } | sha256sum | cut -c1-32)
 if [ "$INPUTS_ID_END" != "$INPUTS_ID" ]; then
   echo "FAIL inputs CHANGED DURING THE RUN: start $INPUTS_ID, end $INPUTS_ID_END"
   fail=$((fail+1))

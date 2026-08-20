@@ -1123,3 +1123,79 @@ worktree whose committed identity is `45b788a6`, so the script was wrong — it
 omitted the four `base-c10-split` roots the gate adds — not the tree. The gate then
 printed `OK INPUTS_SHA256 matches`. A mismatch against a tool written five minutes
 ago is evidence about the tool first.
+
+### UPDATE 2026-08-19/20 — the policy-cap fence is now ENFORCED (PHASE 1g), and my first design was wrong
+
+The claim *"we did not import the deployment cap into the model"* held by **inspection
+and a header comment**. A future closure member could `require` `C10DeployedScope` and
+nothing would notice. It is now a gate check.
+
+**The main result is that my first design was killed before implementation.** It was
+three token-greps: no inbound require · the identifier `c10_q_s` is confined to one
+file · lemmas naming it carry no `=>`. A 54-agent adversarial review confirmed **33
+bypasses**. The decisive three, each re-verified at source:
+
+1. **Re-declare the value under another name** — `op c10_max_slot_uses : int = 65536.`
+   in whatever file wants it, plus a premise. No require edge, no occurrence of the
+   token. This is the **house idiom**, not a contrived attack:
+   `C10DeployedGeometry.ec:66` and `C10DeployedInstance.ec:44` both define
+   `c10_n = 16` and **neither requires the other**.
+2. **Spell it in model symbols.** This very file proves `l = 4 * c10_q_s`, so `l %/ 4`
+   denotes 65536 using only model constants — defeating a token grep, a literal grep,
+   **and human review**, since it reads as a structural fraction of hypertree capacity.
+3. **`declare axiom` inside a section** carries no `=>`, so an arrow test is blind.
+
+The root error: **a grep keys on a NAME; the object of concern is a NUMBER IN A PREMISE
+POSITION.** No enumeration of forbidden syntax closes that. (The review also caught
+that `PHASE 1f` was already taken — `cert_gate_split.sh:295`, WATCHED FILES.)
+
+**So the fence is an INVENTORY**, in this gate's own additions-are-fatal idiom, making
+the quarantine file immutable-by-default: its committed declaration set (24) and
+require set (3) live in `cert-quarantine-split.tsv`, enforced by
+`tools/policy_cap_fence.py`. Five checks — isolation-in, isolation-out, sealed-leaf
+construct allowlist, declaration inventory, magnitude tripwire.
+
+**And the file is now fully pinned.** It was **6 of 18 lemmas and 0 of 6 ops** — so a
+value swap `op c10_p_tgts : int = 262656 -> 65536` moved **no pin**, inside the very
+file that quarantines the cap. All 24 declarations are pinned; `EXPECT_PINS 117 -> 135`.
+
+**The fence's own files are hashed**, in *both* the start and end-of-run computations.
+An assertion caught that the hash line occurs **twice**; updating only one would have
+made them disagree and spuriously tripped "inputs CHANGED DURING THE RUN".
+
+```
+GATE run 2: GREEN (RC=0)   identity bcb2f295 -> 2fcbf2ef
+  CLOSURE_COMPILED = 34/34      statements pinned = 135/135
+  cone: added=0 removed=0       ledger=242
+  OK quarantine intact: 24 declarations, 3 require lines, sealed leaf,
+     no inbound requires, no magnitude leakage
+```
+
+**Controls:** five must-fail controls (`fence_controls.sh`), each asserted to fail *for
+the declared reason*, against a green baseline first — a fence that never passes proves
+nothing.
+
+**What it does NOT close**, stated in the tool, the manifest, the gate phase and here:
+a **new** policy number introduced **elsewhere** under another name — routes 1 and 2
+above. Those touch other files, which this fence does not inventory. Closing that class
+needs exhaustive statement pinning over all 34 closure members (~623 statements).
+Separate project.
+
+#### Run 1 was RED with a second, unexpected failure — published, not buried
+
+`FAIL GprocT1Opre (cli): 473 diagnostic(s)` on a file with **zero source changes**,
+which passed in the two runs before and the run after. An `smt` failure under the cli
+driver — the load-flake signature this repo already documents for `EncoderBridge.pow8`.
+**Cause not established:** I ran probes in the same container during run 1 and none
+during run 2, which is suggestive but one trial per arm, not a controlled measurement.
+Both receipts are vendored (`scratch/gate_run1_fence.log` RED,
+`scratch/gate_run2_fence.log` GREEN). Write-up:
+`scratch/FINDING-gate-cli-phase-is-load-flaky.md`.
+
+The tempting response was to re-run and keep the green one. That converts the gate into
+a slot machine, and it is the reason both logs are here.
+
+**Method note.** I twice tried to reimplement the gate's `INPUTS_SHA256` locally to
+save a 50-minute run. A known-answer test caught **both** attempts wrong — each
+reproduced the wrong hash for a clean `HEAD` worktree whose identity is committed. I
+stopped after two and used the gate as the authority.

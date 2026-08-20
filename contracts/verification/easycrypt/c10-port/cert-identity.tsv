@@ -524,6 +524,40 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-19 (second).  split bcb2f2956488ac7867cd0fbdb3606eec -> 2fcbf2ef683bb976940715ab59b6b232.
+#   THE POLICY-CAP FENCE BECOMES ENFORCED: new PHASE 1g (POLICY-CAP QUARANTINE)
+#   plus tools/policy_cap_fence.py and cert-quarantine-split.tsv, and EXPECT_PINS
+#   117 -> 135.  All of those are inside the hashed set, so the identity moved.
+#   WHY.  cdrafts-split/C10DeployedScope.ec names the DEPLOYMENT cap
+#   c10_q_s = 65536 = MAX_SLOT_USES.  That it never becomes a HYPOTHESIS held by
+#   INSPECTION and a header comment; a future closure member could `require` the
+#   file and nothing would notice.
+#   THE FIRST DESIGN WAS WRONG AND WAS KILLED BEFORE IMPLEMENTATION.  It was three
+#   token-greps (no inbound require / identifier confined / no `=>` in lemmas
+#   naming it).  A 54-agent adversarial review confirmed 33 bypasses.  Decisive,
+#   each re-verified by me: (a) RE-DECLARE THE VALUE under another name in the file
+#   that wants it -- the HOUSE IDIOM, C10DeployedGeometry.ec:66 and
+#   C10DeployedInstance.ec:44 both define c10_n = 16 and neither requires the
+#   other; (b) spell it in MODEL SYMBOLS as `l %/ 4`, since this very file proves
+#   l = 4 * c10_q_s, defeating token grep, literal grep AND human review; (c)
+#   `declare axiom` in a section, which carries no `=>`.  A grep keys on a NAME;
+#   the object of concern is a NUMBER IN A PREMISE POSITION.
+#   SO THE FENCE IS AN INVENTORY, in this gate's own ADDITIONS-ARE-FATAL idiom:
+#   the file's complete declaration set (24) and require set (3) are committed in
+#   cert-quarantine-split.tsv, and every one of its 24 declarations is now pinned
+#   by digest (it was 6 of 18 lemmas and 0 of 6 ops -- a value swap
+#   `c10_p_tgts : int = 262656 -> 65536` moved NO pin).
+#   NOT CLOSED, STATED IN THE TOOL AND THE MANIFEST: a NEW policy number introduced
+#   ELSEWHERE under another name.  That needs exhaustive statement pinning over all
+#   34 members (~623 statements) and is a separate project.
+#   THE FENCE'S OWN FILES ARE HASHED, in BOTH the start and end-of-run computations
+#   -- updating only one would make them disagree and spuriously trip "inputs
+#   CHANGED DURING THE RUN".  Without this the check could be blinded with no
+#   identity delta, which is the attack the run-10 comment above records.
+#   CONTROLS: experiments/ptgts-pin/fence_controls.sh -- five MUST-FAIL controls
+#   (inbound require, require-set drift, section hypothesis, declaration added,
+#   magnitude elsewhere), each asserted to fail FOR THE DECLARED REASON against a
+#   green baseline.
 # 2026-08-19.  split 45b788a6a623c698531c06c05a5c0e2b -> bcb2f2956488ac7867cd0fbdb3606eec.
 #   A FILE ENTERS THE CERTIFIED CLOSURE: cdrafts-split/C10DeployedScope.ec, the
 #   DEPLOYED-SCOPE facts.  closure-c10-split.txt 33 -> 34, EXPECT_PINS 111 -> 117
@@ -653,5 +687,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	bcb2f2956488ac7867cd0fbdb3606eec
+split	2fcbf2ef683bb976940715ab59b6b232
 fork	7ab20d2ab0ba2c1f3942408a193b4836
