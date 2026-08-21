@@ -524,6 +524,100 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-21 (eighth).  split 09ad5233e393beb2813aacbc1f4a0c61 -> 6b6cca95c72a262b5727283868e9d885.
+#   *** THE DIAGNOSIS BELOW IS WRONG AND IS CORRECTED AT THE END OF THIS ENTRY. ***
+#   The CHANGE (ECFLAGS on the compile driver only) stands; the REASON I gave for it
+#   does not.  Read the correction before quoting any of it.
+#   ECFLAGS REMOVED FROM THE PHASE 1e CLI LEG.  It now applies to the COMPILE DRIVER ONLY.
+#   WHY: I kept it on the cli leg on a driver-comparability argument and priced it with a
+#   CONTROLLED A/B THAT WAS NOT REPRESENTATIVE.  My four sampled files were GprocT1Opre
+#   plus three TINY ones (GprocQBound, DarkSideC10, C10DeployedGeometry), giving +123 s,
+#   and I called that "the trustworthy number".  The real leg contains base/FORS_ES
+#   (2191 cmds), base/WOTS_TW_ES (2153) and WOTS_C_Interactive (744).
+#   MEASURED ON THE REAL GATE: 12 of 38 cli files in ~3 h 56 m, projecting ~12 h for the
+#   leg, against 87 min for the ENTIRE gate beforehand.  Run aborted at 4 h 20 m;
+#   scratch/gate_run_defn_ABORTED.log is that receipt, published rather than discarded.
+#   THE ERROR CLASS IS NEW AND WORTH NAMING SEPARATELY: the earlier three mistakes in this
+#   arc were UNCONTROLLED (varying two things at once).  This one was properly controlled
+#   -- same machine, alternating arms, one flag -- and still wrong, because the SAMPLE was
+#   not representative of the population it was used to predict.  Controlling the
+#   comparison and sampling the population are two different requirements.
+#   The comparability argument was also weaker than when I made it: GprocT1Opre's marginal
+#   step is now a named rewrite (has_predC), so the cli leg no longer needs a shared budget
+#   to agree with the compile driver.
+#
+#   CORRECTION, SAME DAY, BEFORE ANY OF THE ABOVE WAS PUSHED.  I attributed the aborted
+#   run's slowness to ECFLAGS on the cli leg and to an "unrepresentative A/B sample".
+#   BOTH CLAIMS ARE FALSE, and the disproof was already in the tree:
+#     * The 87-minute run (commit 1414c4c, cert_gate_split.sh:291) HAD `$ECFLAGS` on the
+#       cli leg and completed ALL 38 cli files in __WALL_S=5228.  The aborted run had the
+#       IDENTICAL cli configuration and managed 12 of 38 in ~3 h 46 m.  Same flag, ~10x
+#       different throughput -- so the flag cannot be the cause.
+#     * MEASURED COST OF THE CLI FLAG, instrumented on both sides: 5228 s (with) vs
+#       4728 s (without) = ~8 MINUTES.  That is consistent with the original A/B's
+#       +123 s on four files, so the A/B was NOT unrepresentative and the "sampling"
+#       error class I invented for it did not occur.
+#   WHAT ACTUALLY CAUSED THE ABORTED RUN'S SLOWNESS IS UNEXPLAINED.  I am not naming a
+#   cause: I have named four in this arc already (cli-leg non-determinism, gate-load
+#   contention, marginal default budget -- that one held -- and now sampling), and three
+#   were wrong.  Recording it as unexplained is the honest state.
+#   THE CHANGE STILL STANDS, on a smaller and now-measured basis: removing ECFLAGS from
+#   the cli leg saves ~8 min, and the driver-comparability argument for keeping it weakened
+#   once GprocT1Opre's marginal step became a named rewrite.  It was NOT worth aborting a
+#   run over, and I should have checked the previous receipt -- which was sitting in
+#   scratch/ -- before concluding.
+# 2026-08-21 (seventh).  split c474ae8e703333aff3dbf68d9dd0e07b -> 09ad5233e393beb2813aacbc1f4a0c61.
+#   THE BODIED-DEFINITION HOLE IS CLOSED ACROSS ALL 45 CONE FILES.  tools/cert_cone.py
+#   SKIPPED any op/const/type whose declaration had a body ("a definition, not a
+#   parameter"), PHASE 1h enumerates only STATEMENTS, and a statement naming a definition
+#   digests only the TOKEN -- so a bodied definition's logical content was watched by
+#   NOTHING.  MEASURED: redefining cdrafts-split/FORS_C.ec::predC_fors -- the FORS+C GATE
+#   PREDICATE -- to `true` left the carrying lemma's digest IDENTICAL and PHASE 1h green.
+#   FIX: bodied definitions now emit `defined-<kind>:<body-digest>` rows, the same idiom
+#   the census already uses for modules -- the digest is IN THE KIND FIELD, so a body edit
+#   is simultaneously a removed row and an added row, and PHASE 2 is fatal on both, while
+#   a NEW definition is an added row.  That closes BOTH directions with no per-declaration
+#   manifest, and -- unlike a pin -- covers the 90 declarations stmt_digest.py cannot
+#   resolve (84 None, 6 genuinely AMBIGUOUS).  `abbrev` and `pred` joined the scanner
+#   alternation; neither was in it at all, which is why `pred` bodies were invisible.
+#   census 1193 -> 1613 rows.  LEDGER STAYS 242: a definition is CONTENT, not an
+#   assumption, so DEFINITIONS is reported as a separate fifth class (422).  Folding it in
+#   would inflate the headline assumption count to 664 and make the honest number
+#   unreadable -- the same distinction the run-10 comment draws for modules.
+#   TWO REGRESSIONS CAUGHT BY ADVERSARIAL REVIEW BEFORE THE FIRST GATE RUN, both verified
+#   by me at source, and the first would have made this change ACTIVELY HARMFUL:
+#     (1) THE KEYWORD->NAME SEPARATOR WAS `\s*` -- zero whitespace accepted -- so any
+#         identifier whose prefix is a keyword and which sits at a line start or right
+#         after a dot parsed as a DECLARATION: `M.F.predC_fors` -> pred `C_fors`,
+#         `O.opened(i)` -> op `ened`, `op_registration =>` -> op `_registration`.  60 such
+#         artefacts across these trees.  They were mostly INVISIBLE while bodied matches
+#         were dropped by the `continue`; emitting rows would have promoted them to LIVE
+#         rows, and since PHASE 2 is fatal on additions AND removals, ordinary TACTIC edits
+#         would then red-light the gate naming declarations that do not exist.  Tightened
+#         to `\s+`; annotated ops (`op [lossless] dmkey`) still match because the required
+#         space precedes the `[`.  0 genuine declarations lost.  NOTE: this bug was ALREADY
+#         producing 2 bogus `abstract-op:...  en` rows in the COMMITTED baseline, which is
+#         why PARAMETERS drops 217 -> 215.
+#     (2) CLONE WITH-CLAUSE OPERANDS written `name <= value` have no `<-` in their head and
+#         their `<=` supplies the `=`, so they were classified as DEFINITIONS -- and
+#         _decl_span then ran from the operand name to the CLONE's terminating dot,
+#         swallowing later bindings and the `proof ...` clause.  27 in this cone.  Now
+#         suppressed by tracking clone statement spans; they are already censused by the
+#         `operand:` rows.
+#   CONTROLS (experiments/ptgts-pin/census_defn_controls.sh), 3/3 and in BOTH directions:
+#     CD1 predC_fors -> true moves a row (1 removed, 1 added) -- the attack is caught;
+#     CD2 a NEW bodied definition ADDS a row -- it is FORCED, not merely caught;
+#     CD3 NO-OP LEG: internal reformatting moves NOTHING.  CD3 initially FAILED and the
+#         TEST was at fault, not the design -- my "cosmetic" reflow appended whitespace
+#         BEFORE the terminating dot, turning `0.` into `0 .`.  Residual churn surface,
+#         documented: whitespace immediately before a terminator does move a digest.
+#   FORK BASELINE: cert-baseline.tsv regenerated MECHANICALLY (349 added, 2 removed)
+#   because tools/cert_cone.py is SHARED with cert_gate_fork.sh.  It is explicitly marked
+#   NOT GATE-VERIFIED in its own header -- regenerated so the fork gate does not go RED for
+#   a reason unrelated to its proofs, NOT because anyone confirmed it green.
+#   STILL OPEN, NAMED NOT IMPLIED CLOSED: the `operand:` rows digest the binding text but
+#   the reviewer showed parameterised bindings (`op f x y <= e`) are not fully captured;
+#   +21 rows would follow from widening that scanner.  A separate unit.
 # 2026-08-20/21 (sixth).  split e1bcca4dc6498db569bafb184889b449 -> c474ae8e703333aff3dbf68d9dd0e07b.
 #   ECFLAGS SCOPED, AND THIS TIME THE COST IS MEASURED RATHER THAN ASSERTED.  I had
 #   applied EC_TIMEOUT=60 to the compile driver, the PHASE 1e cli leg AND the PHASE 3
@@ -858,5 +952,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	c474ae8e703333aff3dbf68d9dd0e07b
+split	6b6cca95c72a262b5727283868e9d885
 fork	7ab20d2ab0ba2c1f3942408a193b4836

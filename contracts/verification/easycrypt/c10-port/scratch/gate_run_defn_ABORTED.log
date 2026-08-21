@@ -1,0 +1,62 @@
+### INPUTS_SHA256 09ad5233e393beb2813aacbc1f4a0c61
+OK   INPUTS_SHA256 matches the committed identity
+### TOOLCHAIN GIT hash: r2026.02
+### PROVERS 0a5b3d54dcce300e 25 configurations
+OK   no dual-extension theory names on the include path
+### ECO_PURGED=0
+### ECO_REMAINING=0
+### PHASE 1 — TARGETS
+OK   base/WOTS_TW_ES
+OK   base/FL_SL_XMSS_MT_ES
+OK   base/FORS_ES
+OK   base/SPHINCS_PLUS
+OK   Grind
+OK   STCR_C
+OK   WOTS_C_Real
+OK   WOTS_C_Scheme
+OK   XMSSMT_C_Scheme
+OK   WOTS_C_Reduction
+OK   WOTS_C_Multi
+OK   WOTS_C_Interactive
+OK   XmssmtCC_All
+OK   RtopCSoundness
+OK   FxChain
+OK   FORS_C10
+OK   FORS_C10_Multi
+OK   GprocFORSC10
+OK   FORS_C_TreePort
+OK   GprocVI
+OK   SphincsC10CapstoneWired
+OK   SphincsC10Content
+OK   C10DeployedGeometry
+OK   C10DeployedScope
+OK   GFailCharged
+OK   XmssmtCCCharged
+OK   SphincsC10CapstoneCharged
+OK   C10DeployedInstance
+OK   C10DeployedCapstone
+OK   C10SpecControls
+OK   GprocT1Opre
+OK   GprocT2Trh
+OK   GprocT3Trco
+OK   GprocQBound
+OK   GprocQWired
+OK   DarkSide
+OK   DarkSideC10
+OK   GprocChargedQWired
+### CLOSURE_COMPILED=34 EXPECTED=34
+### PHASE 1d — EVERY CLOSURE FILE MUST BE REQUIRABLE (not merely compilable)
+OK   all closure files are requirable
+### PHASE 1e — BOTH DRIVERS (compile AND cli)
+OK   base/WOTS_TW_ES (cli, 2153 cmds)
+OK   base/FL_SL_XMSS_MT_ES (cli, 679 cmds)
+OK   base/FORS_ES (cli, 2191 cmds)
+OK   base/SPHINCS_PLUS (cli, 456 cmds)
+OK   Grind (cli, 59 cmds)
+OK   STCR_C (cli, 37 cmds)
+OK   WOTS_C_Real (cli, 115 cmds)
+OK   WOTS_C_Scheme (cli, 41 cmds)
+OK   XMSSMT_C_Scheme (cli, 58 cmds)
+OK   WOTS_C_Reduction (cli, 204 cmds)
+OK   WOTS_C_Multi (cli, 164 cmds)
+OK   WOTS_C_Interactive (cli, 744 cmds)

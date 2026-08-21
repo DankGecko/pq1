@@ -274,7 +274,18 @@ cli_run=0
 cli_one() { # $1 = label, $2..= easycrypt cli args, stdin = the file
   local lbl="$1"; shift
   local out d pr
-  # SAME COMMITTED BUDGET AS THE COMPILE DRIVER -- KEPT, AND THE COST IS MEASURED.
+  # NO $ECFLAGS ON THIS LEG -- REMOVED 2026-08-21 AFTER IT COST ~12 HOURS.
+  # I had it here, argued for it on driver comparability, and priced it with a
+  # CONTROLLED A/B that was NOT REPRESENTATIVE: my four sampled files were
+  # GprocT1Opre plus three TINY ones, giving +123 s.  The real leg contains
+  # base/FORS_ES (2191 cmds), base/WOTS_TW_ES (2153) and WOTS_C_Interactive (744).
+  # Measured on the real gate: 12 of 38 files in ~3 h 56 m, projecting ~12 h for the
+  # leg, against 87 min for the ENTIRE gate beforehand.  Run aborted;
+  # scratch/gate_run_defn_ABORTED.log is that receipt.
+  # The comparability argument was also weaker than when I made it: GprocT1Opre's
+  # marginal step is now a named rewrite, so the cli leg no longer needs the budget to
+  # agree with the compile driver.
+  # (superseded) SAME COMMITTED BUDGET AS THE COMPILE DRIVER.
   # The first observed failure of GprocT1Opre was on THIS leg (473 diagnostics), and
   # leaving the two drivers on different budgets would mean a reported "driver
   # disagreement" could be nothing but a BUDGET disagreement -- precisely the
@@ -288,7 +299,7 @@ cli_one() { # $1 = label, $2..= easycrypt cli args, stdin = the file
   # GprocT1Opre OTHER than the one just made deterministic are still budget-
   # sensitive under the cli driver.  Not chased here; not load-bearing, since the
   # leg passes at either budget.
-  out=$(easycrypt cli -iterate $ECFLAGS "$@" 2>&1 | tr '\r' '\n')
+  out=$(easycrypt cli -iterate "$@" 2>&1 | tr '\r' '\n')
   d=$(printf '%s\n' "$out" | grep -c '^<tty>:' || true)
   pr=$(printf '%s\n' "$out" | grep -c '^\[[0-9]*|' || true)
   cli_run=$((cli_run+1))
@@ -601,12 +612,22 @@ if [ -f cert-baseline-split.tsv ]; then
   # TWO CLASSES, REPORTED SEPARATELY (run 10).  `module`/`module-type` rows are
   # MEANING-carriers, not assumptions; folding them into the ledger would be a
   # seventh wrong assumption total.  Both classes are equally fatal on change.
+  # DEFINITIONS is a FIFTH class, added 2026-08-21 with the defined-* rows.  It is
+  # reported SEPARATELY and deliberately NOT folded into the ledger: a bodied definition
+  # is not an assumption, it is content -- exactly the distinction the run-10 comment
+  # above draws for module/module-type.  Folding it in would inflate the headline
+  # assumption count from 242 to 716 and make the honest number unreadable.
+  # abstract-abbrev / abstract-pred joined PARAMETERS when the scanner alternation was
+  # widened to cover abbrev and pred (+6 rows).
+  # WITHOUT THIS EDIT the printed total would be 1199 against 1673 actual rows -- the
+  # classifier would silently drop every new row into no bucket at all.
   awk '{k=$3; sub(/:.*/,"",k); n[k]+=$1}
        END{ led=n["admit"]+n["axiom"]+n["declare-axiom"]+n["refined-const"]+n["clone-discharge"]+n["op-annotation"]+n["clone-obligation"];
-            par=n["abstract-const"]+n["abstract-op"]+n["abstract-type"];
+            par=n["abstract-const"]+n["abstract-op"]+n["abstract-type"]+n["abstract-abbrev"]+n["abstract-pred"];
           bind=n["operand"]+n["rename"];
           mean=n["module"]+n["module-type"];
-            printf "  ledger=%d  parameters=%d  bindings=%d  meaning=%d  total=%d\n", led, par, bind, mean, led+par+bind+mean }' "$TMPD/cone_now.tsv"
+           dfn=n["defined-op"]+n["defined-const"]+n["defined-type"]+n["defined-abbrev"]+n["defined-pred"];
+            printf "  ledger=%d  parameters=%d  bindings=%d  meaning=%d  definitions=%d  total=%d\n", led, par, bind, mean, dfn, led+par+bind+mean+dfn }' "$TMPD/cone_now.tsv"
   if [ "$add" -ne 0 ]; then
     echo "FAIL cone census GREW -- new assumption(s) entered the cone:"
     comm -23 "$TMPD/cone_now.tsv" "$TMPD/cone_base.tsv" | sed 's/^/       /'

@@ -149,6 +149,7 @@ def census(files):
     out = []
     for p, text in sorted(files.items()):
         body = strip_comments(text)
+        clone_spans = []   # (start, end) of each clone STATEMENT -- see the operand note below
         def line_of(off):
             return body.count('\n', 0, off) + 1
         # admit / admitted terminator, any amount of whitespace before the dot
@@ -230,6 +231,10 @@ def census(files):
             # The clone STATEMENT ends at its own depth-0 terminating dot; the
             # proof clause is inside it or does not exist.
             stmt = _decl_span(body, m.start(1))
+            # Record the clone STATEMENT's extent so the declaration scanner below can
+            # tell an operand BINDING from a real definition.  Reuses the span already
+            # computed here rather than re-deriving it.
+            clone_spans.append((m.start(1), m.start(1) + len(stmt)))
             # ...and stop at `rename`, which follows `proof` in the clone grammar:
             # taking everything to the statement end pulled the rename clause into
             # the discharged-obligation list (`rename "word" as "emsgWOTS"` ->
@@ -324,12 +329,58 @@ def census(files):
         # `op` immediately, so every `op [lossless] name : t.` -- 61 of them --
         # carried only its op-annotation row (name + tag) and NO declaration
         # digest, i.e. its TYPE was unpinned by the census.
-        for m in re.finditer(r"(?:^|\.)\s*(?:local\s+)?(const|op|type)\s*(?:\[[^\]]*\]\s*)?"
+        # `abbrev` and `pred` ADDED 2026-08-21: both carry BODIES and neither was in
+        # this alternation at all, so a `pred`'s logical content sat outside every gate
+        # surface -- see the defined-* comment below for the measured consequence.
+        # SEPARATOR IS `\s+`, NOT `\s*` -- ONE REQUIRED SPACE.  With `\s*` the keyword
+        # need not be followed by ANY whitespace, so every identifier whose prefix happens
+        # to be a keyword and which sits at a line start or right after a dot parsed as a
+        # DECLARATION: `M.F.predC_fors` -> pred `C_fors`; `O.opened(i)` -> op `ened`; a
+        # continuation line `op_registration =>` -> op `_registration`.  60 such artefacts
+        # exist across these trees.  They were mostly INVISIBLE while bodied matches were
+        # dropped by the `continue` below -- emitting defined-* rows would have promoted
+        # them to LIVE census rows, and since PHASE 2 is fatal on additions AND removals,
+        # ordinary TACTIC edits would then red-light the gate naming declarations that do
+        # not exist.  Found by adversarial review before the first gate run.
+        # `\s+` keeps annotated ops (`op [lossless] dmkey`): the required space is before
+        # the `[`.  Measured: 0 genuine declarations lost.
+        for m in re.finditer(r"(?:^|\.)\s*(?:local\s+)?(const|op|type|abbrev|pred)\s+(?:\[[^\]]*\]\s*)?"
                              r"([A-Za-z_][A-Za-z0-9_']*)", body, re.M | re.S):
             decl = _decl_span(body, m.start(2))
             head = decl.split('=')[0]
+            # A `with`-clause operand written `name <= value` has NO `<-` in its head, and
+            # its `<=` supplies the first `=`, so the bodied test below would classify it as
+            # a DEFINITION -- and `_decl_span` would then run from the operand name to the
+            # CLONE's terminating dot, swallowing every later binding plus the `proof ...`
+            # clause.  53 such matches exist in this cone (`type t <= input.`,
+            # `op enum <= map ...`).  Emitting them would mis-kind a clone instantiation as
+            # a definition AND make one edit produce several add/remove pairs, all but one
+            # mis-attributed.  Operand bindings are already censused by the `operand:` rows
+            # above; they are not declarations.  Found by adversarial review.
+            if any(a <= m.start(2) < z for a, z in clone_spans):
+                continue
             if '=' in decl and '<-' not in head:
-                continue                      # has a body: a definition, not a parameter
+                # BODIED DEFINITIONS ARE NOW EMITTED, NOT SKIPPED (2026-08-21).
+                # This `continue` was the hole.  A bodied definition is PURE LOGICAL
+                # CONTENT, and nothing watched it: no census row (here), no coverage row
+                # (PHASE 1h enumerates statements), and a statement naming it digests only
+                # the TOKEN -- so its pin is invariant under any rewrite of the body.
+                # MEASURED IN-TREE, not hypothesised: redefining
+                # cdrafts-split/FORS_C.ec::predC_fors -- the FORS+C GATE PREDICATE -- to
+                # `true` left the digest of the lemma carrying it (mco_C_predC) IDENTICAL
+                # and PHASE 1h fully green.  NOTHING MOVED.
+                # Same idiom as modules below: THE DIGEST GOES IN THE KIND FIELD, so a body
+                # edit is simultaneously a removed row and an added row and PHASE 2 is fatal
+                # on both, while a NEW definition is an added row.  That covers both
+                # directions without a per-declaration manifest, and -- unlike a pin --
+                # covers the 90 declarations tools/stmt_digest.py cannot resolve (84 return
+                # None, 6 are genuinely AMBIGUOUS, e.g. `P` declared four times in
+                # FL_SL_XMSS_MT_ES.ec).
+                # Whitespace is normalised before hashing, so reformatting a body does NOT
+                # fire; comments are already stripped upstream (strip_comments at :151).
+                dgd = hashlib.sha256(re.sub(r'\s+', ' ', decl).strip().encode()).hexdigest()[:12]
+                out.append((p, 'defined-' + m.group(1) + ':' + dgd, m.group(2), line_of(m.start(2))))
+                continue
             if '<-' in head:
                 continue                      # clone with-clause operand binding
             dg = hashlib.sha256(re.sub(r'\s+', ' ', decl).strip().encode()).hexdigest()[:12]

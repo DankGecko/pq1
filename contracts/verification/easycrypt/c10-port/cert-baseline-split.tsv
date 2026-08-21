@@ -1,143 +1,23 @@
-# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-05 (run 26: GprocVI admitted);
-# every change since is an APPENDED dated note plus its rows, at the end of this file.
-# LEDGER=242  PARAMETERS=217  BINDINGS=345  MEANING=389  TOTAL=1193   (LIVE, 2026-08-18)
-#   The line above read 239/217/341/362/1159 until 2026-08-18 -- run 26's values,
-#   carried unchanged through three later re-baselines.  Nothing reads it (PHASE 2
-#   strips ^# before comparing), which is precisely why it drifted; it is a summary
-#   for humans and it was wrong for humans.  The authority is the row set below plus
-#   cert_gate_split.sh's own class tally, not this line.
-#
-# 2026-08-05 (run 26) -- +3 ROWS, ALL MEANING, LEDGER UNCHANGED AT 239.
-# cdrafts-split/GprocVI.ec admitted to the closure: the V->VI hop for Gproc,
-# ADMIT-FREE.  The three rows are the module bodies GprocTreeVI, GprocKgVI and
-# EUF_CMA_Gproc_VI.  Nine theorems entered the cone and NOT ONE new assumption --
-# no admit, axiom, abstract parameter, clone obligation.  That is the number to
-# check on this commit.
-#
-# 2026-08-04 (run 24) -- +1 ROW, AND IT IS A MEANING ROW, NOT A LEDGER ROW.
-# module:EUF_CMA_Gproc_V, the instrumented three-flag Gproc game (option (a)).
-# LEDGER IS UNCHANGED AT 239: the new game and its three lemmas introduce NO
-# assumption -- no admit, axiom, abstract parameter, clone obligation.  Only
-# MEANING moves, 358 -> 359, because there is one more module body to pin.
-#
-# 2026-08-04 (run 23) -- WHY THIS GREW BY 100 ROWS.  cdrafts-split/FORS_C_TreePort.ec
-# (1733 lines, the tree-layer reduction port) was in NEITHER closure, so nothing
-# in it was gate-enforced: its "proved" claims were checked only by its own prose.
-# Admitting it to the split closure is a deliberate INCREASE in the recorded
-# assumption set, not a regression -- the assumptions were always there, they were
-# simply invisible.  Deltas: LEDGER 228->239, PARAMETERS 169->217, BINDINGS
-# 334->341, MEANING 324->358, TOTAL 1055->1155.
-#
-# THE ONE NEW ADMIT IS THE POINT.  cdrafts-split/FORS_C_TreePort.ec::extract_op
-# (admit:3b102492d8ec) is the OpenPRE branch of the FORS bad-event cascade.  Its
-# own comment records four un-discharged parts -- R-KEY, R-SIM, actual-oracle
-# R-INDEX, R-OPEN -- and states it "requires exposed randomized leaf keygen +
-# faithful simulator", i.e. an UPSTREAM INTERFACE CHANGE, not more proof effort.
-# It is now a pinned ledger row so that status cannot drift silently.
-# The neighbouring TRH branch (extract_trh) is a real byequiv; the file's second
-# apparent "admit" at :1701 is PROSE inside a comment, and the surrounding text
-# records TRCO as CLOSED and machine-checked.
-#
-# NOTE the 7 new `axiom` rows from FORS_C10.ec are the SAME axioms already in the
-# cone via other paths; they are counted per (file, kind, name) key, and TreePort
-# reaches FORS_C10 by a route the previous roots did not cover.
-#
-# THREE CLASSES OF ROW, REPORTED SEPARATELY SO THE HONEST NUMBER STAYS HONEST.
-#
-#   LEDGER rows (what the theorem ASSUMES):
-#       admit:<statement-digest>, axiom, declare-axiom,
-#       refined-const:<predicate-digest>, clone-discharge:<mode>|realize:<names>,
-#       op-annotation:<tag>
-#   PARAMETER rows (what the theorem assumes EXISTS -- added run 11):
-#       abstract-const:<decl>, abstract-op:<decl>, abstract-type:<decl>
-#   MEANING rows (what the theorem MEANS):
-#       module:<body-digest>, module-type:<body-digest>
-#
-# PARAMETER rows exist because run 11 (Kimi K3) showed the census pinned a
-# claim and left its SUBJECTS free:
-#       axiom dist_adrstypes : uniq [chtype; pkcotype; trhxtype; trhftype; trcotype]
-# was pinned, while `const pkcotype : int.` (SPHINCS_PLUS.ec:142) appeared in
-# ZERO pins and ZERO rows.  Giving it a body -- `const pkcotype : int = chtype.`
-# -- makes that pinned axiom FALSE, so `false` is derivable in every file
-# requiring SPHINCS_PLUS and all three capstones become theorems of an
-# inconsistent theory.  MEASURED: it compiles (all four base files), `false`
-# becomes provable, and compile time collapses (FL_SL 555s->55s, SPHINCS_PLUS
-# 169s->8s) because every smt goal closes instantly once the theory is
-# inconsistent.  The gate DID go red on it -- through PHASE 3's two-sided
-# vacuity control, not through the census; these rows close the census half.
-# A parameter that acquires a body stops being a parameter, so its row is
-# REMOVED, and removals have been fatal since run 5.
-#
-# LEDGER row content digests (runs 10-11), each closing a DEMONSTRATED bypass:
-#   admit:<statement-digest>          -- the single admitted lemma's premise could
-#     be replaced by `true` with the row byte-identical; the mutated tree compiles
-#     the WHOLE 22-file closure.  Reproduce: bash tools/repro_killshot1.sh
-#   refined-const:<predicate-digest>  -- `{ int | 0 <= p_tgts }` -> `{ int | p_tgts = 0 }`
-#     makes the deployed capstone's premise `c <= p_tgts` unsatisfiable.  Census
-#     blindness measured; compilation NOT measured.
-#   module:/module-type:<body-digest> -- tool-blindness measured; the exploit does
-#     NOT compile.
-#
-# CLONE DISCHARGE MODES were misparsed until run 11: the tail overran into a
-# later declaration's `proof.` inside indented theories, so Grind.ec:62 and
-# STCR_C.ec:65 -- which discharge NOTHING -- were recorded as `empty` instead of
-# `none`, the most assumption-heavy mode labelled as the emptiest.  Qualified
-# names were also truncated (`proof Alphabet.enum_spec` -> `list:Alphabet`).
-# Modes now (computed from the rows below): 57 star, 12 list, 11 none.
-# previous hand-edited tally said "54 star, 12 list, 11 none, 0 empty", summing
-# to 77 against 80 clone rows, INSIDE the identity hash): 57 star, 12 list, 11 none.
-#
-# THE ASSUMPTION TOTAL HAS BEEN REPORTED WRONGLY SEVEN TIMES.  DO NOT QUOTE IT AS
-# COMPLETE.  EasyCrypt has no `#print axioms`; this is a textual + require-graph
-# census and a LOWER BOUND.  The two run-11 reviewers recount it differently
-# [CORRECTED run 13: it is NOT A LOWER BOUND EITHER.  Rows are counted at the
-#  DECLARATION site regardless of discharge at the unique instantiation --
-#  FL_SL_XMSS_MT_ES.ec:342 valid_xidxvals_idxvals is fully realized at
-#  SPHINCS_PLUS.ec:671-675 and still occupies a LEDGER row -- so fact rows
-#  OVER-count, while the 80 clone-site markers stand for 0-or-more installed
-#  obligations apiece and UNDER-count.  216 / 239 / 293 are row-populations of
-#  three syntactic scans in different units; "which is right" is ill-posed.
-#  Operands settled at exactly 349 (321 `<-` + 28 `<=`); the "321" below was
-#  the undercount.  No textual census can be made sound in either direction
-#  without EasyCrypt's own cloning semantics.]
-# again (143 real assumptions + 102 carriers vs >= 165), and they disagree with
-# each other.  Still uncounted: obligations generated INSIDE nested clones (18
-# Subtype + 6 FinType sites; one row per site regardless of how many the mode
-# leaves installed) and clone `with`-clause operands (321 by one count).
-#
-# ADDITIONS AND REMOVALS ARE BOTH FATAL, compared AS MULTISETS.
-#
-#
-# LEDGER GREW BY 3 (split) / 4 (fork) THIS ROUND, AND THAT IS AN HONEST
-# INCREASE, NOT A REGRESSION: `local clone` matched no pattern until run 12,
-# so those sites -- OpenPRE_From_TCR_DSPR_THF.eca:720, FORS_ES.ec:2826,
-# WOTS_TW_ES.ec:3176 -- carried no row at all.  Eighth time the total has
-# moved.  It is a LOWER BOUND; the run-12 reviewer put it at 239, or 293
-# counting raw axiom instances rather than clone sites.
-#
-# PARAMETERS jumped 106 -> 169 in run 13b: the abstract pattern required the name
-# to follow `op` IMMEDIATELY, so every annotated declaration (`op [lossless] d :
-# ...`) carried its tag row and NO declaration digest -- its TYPE was unpinned.
-#
-# RUN 13c ADDED THREE ROW CLASSES, closing the categories every recent round
-# listed as uncounted:
-#   operand:<digest>          one per clone `with` binding (328 here).  A rebinding
-#                             changes what every theorem in the clone MEANS and the
-#                             census saw nothing.
-#   rename:<digest>           one per rename pair (6).
-#   clone-obligation:<source> one per stdlib obligation a clone leaves INSTALLED
-#                             (12).  A clone-discharge row is one marker standing
-#                             for 0-or-more axioms; this names them.  DOCUMENTED
-#                             HEURISTIC over r2026.02: Subtype declares
-#                             insubN/insubT/valP/valK/inhabited, FinType enum_spec.
-#                             Sites with `proof *` install nothing and get no rows,
-#                             which is why this is 12 and not the 76 one reviewer
-#                             projected by counting every site's axioms.
-#
-# OPERAND COUNT, AND A DISAGREEMENT LEFT OPEN: this census emits 328 operand rows
-# (308 `<-`, 20 `<=`), reproduced by an independent scan of clone-statement heads.
-# Two reviewers reported 349 by methods I could not reproduce.  The row population
-# is the auditable figure; the discrepancy is recorded, not resolved.
+# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-21: bodied DEFINITIONS now carry
+# census rows (defined-<kind>:<body-digest>), closing the hole where a bodied
+# op/const/type/abbrev/pred was watched by NOTHING -- no census row (cert_cone.py
+# skipped it), no coverage row (PHASE 1h enumerates statements), and a statement
+# naming it digested only the TOKEN.  MEASURED: redefining FORS_C.ec::predC_fors,
+# the FORS+C gate predicate, to `true` moved NOTHING before this change.
+# TWO REGRESSIONS FOUND BY ADVERSARIAL REVIEW BEFORE THE FIRST GATE RUN AND FIXED
+# HERE: the keyword->name separator was `\s*` (zero space), so 60 non-declarations
+# such as `M.F.predC_fors` -> pred `C_fors` would have become LIVE rows and
+# ordinary TACTIC edits would red-light the gate; and clone with-clause operands
+# written `name <= value` were classified as definitions with spans over-running
+# into neighbouring bindings (27 in this cone).
+# LEDGER=242 PARAMETERS=215 BINDINGS=345 MEANING=389 DEFINITIONS=422 TOTAL=1613   (LIVE, 2026-08-21)
+base-c10-split/BinaryTrees.ec	defined-op:7ad6319948b8	height	# line 16
+base-c10-split/BinaryTrees.ec	defined-op:ddd3b90ca64e	fully_balanced	# line 39
+base-c10-split/BinaryTrees.ec	defined-op:c0ebb6c47688	sub_bt	# line 66
+base-c10-split/BinaryTrees.ec	defined-op:81f3786cad76	val_lf	# line 81
+base-c10-split/BinaryTrees.ec	defined-op:7d9e763d0d13	vallf_subbt	# line 89
+base-c10-split/BinaryTrees.ec	defined-op:c0a148c36bb2	list2tree_pred	# line 104
+base-c10-split/BinaryTrees.ec	defined-op:cff26da08d85	list2tree	# line 151
 base-c10-split/FL_SL_XMSS_MT_ES.ec	axiom	dist_adrstypes	# line 92
 base-c10-split/FL_SL_XMSS_MT_ES.ec	axiom	valid_xidxvals_idxvals	# line 342
 base-c10-split/FL_SL_XMSS_MT_ES.ec	refined-const:654a63582c64	ge6_adrslen	# line 20
@@ -214,18 +94,84 @@ base-c10-split/FL_SL_XMSS_MT_ES.ec	clone-discharge:star|realize:inhabited	SAPDL	
 base-c10-split/FL_SL_XMSS_MT_ES.ec	op-annotation:lossless	dpseed	# line 360
 base-c10-split/FL_SL_XMSS_MT_ES.ec	op-annotation:lossless	ddgstblock	# line 363
 base-c10-split/FL_SL_XMSS_MT_ES.ec	op-annotation:lossless	dmsgFLSLXMSSMTTW	# line 648
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:457914d7eacd	adrs_len	# line 20
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:0c529f654b73	n	# line 26
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:ad40301b75f1	log2_w	# line 32
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:35adbeb29f31	w	# line 35
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:27b301d1d738	len	# line 51
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:aaeeb8676edb	h'	# line 56
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:50459afcff6b	l'	# line 59
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:dedee74e0917	d	# line 62
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:0ecaa4621286	h	# line 67
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-const:3a4c6783370a	l	# line 73
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-const:d163299b205a	chtype	# line 78
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-const:af8cedec425d	pkcotype	# line 84
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-const:9a7d2a4ac444	trhtype	# line 87
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:1b7b9108cb4d	index	# line 118
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-type:621a7eeca2cb	sseed	# line 121
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-type:57d2e2e460a5	pseed	# line 124
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:790c6fe78f90	dgst	# line 127
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:54a454abb2c5	dgstblock	# line 137
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:7ff2d646a97e	nr_nodes	# line 170
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:231dcf6d4044	nr_trees	# line 181
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:01a3e29630c2	nr_nodes_ht	# line 187
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:656348f01f09	valid_lidx	# line 228
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:38616dd5cae9	valid_tidx	# line 235
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:f7048fe7a439	valid_kpidx	# line 245
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:15d54af0c289	valid_thidx	# line 249
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:da7f96ecdfca	valid_tbidx	# line 253
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:bd9f26cd66b0	valid_chidx	# line 257
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:e08772e8fff6	valid_hidx	# line 261
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:166d876cefea	valid_xidxvalslpch	# line 265
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:c54294169be9	valid_xidxvalslppkco	# line 274
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:78a66268b087	valid_xidxvalslptrh	# line 283
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:2608942a84fa	valid_xidxvalslp	# line 292
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-op:6dbb0ea4a14c	valid_idxvals	# line 302
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:ef35e8317c42	valid_adrsidxs	# line 308
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-op:a7b1af0c680f	valid_xidxvalsgp	# line 317
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:73a499075093	valid_xidxvals	# line 325
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:385ea60a0ba2	valid_xadrsidxs	# line 333
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-op:1812d5a783dc	dpseed	# line 360
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-op:28f87dcba256	ddgstblock	# line 363
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:ae689d7fe842	adrs	# line 383
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-op:9ea0c6bc6850	thfc	# line 393
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:7892c3204639	pkco	# line 399
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:39fb7c6b0e52	trh	# line 437
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:368cde85e0b2	valid_xidxchvals	# line 474
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:477b46599766	valid_xidxpkcovals	# line 477
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:0c297054bd1f	valid_xidxtrhvals	# line 480
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:a89e340fb300	valid_xadrschidxs	# line 483
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:e1684efd9b23	valid_xadrspkcoidxs	# line 486
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:31c1d3cd072c	valid_xadrstrhidxs	# line 489
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:1820fcc02cc5	valid_xadrsch	# line 498
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:683719bd8fe5	valid_xadrspkco	# line 501
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:615613298fe0	valid_xadrstrh	# line 504
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:4f2e6af00ddf	valid_xadrs	# line 507
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-const:59dea97b2627	adz	# line 517
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:900d1f7345d2	set_lidx	# line 521
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:f60e719f2816	set_tidx	# line 524
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:7bd7d9975b82	set_ltidx	# line 527
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:5e2645b30c97	set_typeidx	# line 530
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:5ee52b0309f0	set_kpidx	# line 533
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:dfeae612de17	set_thtbidx	# line 536
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:3dc89a55cc42	get_typeidx	# line 541
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:2255a355fa32	pkFLXMSSMTTW	# line 610
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:23f573130a75	pkFLSLXMSSMTTW	# line 611
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:183dd5f25463	skFLSLXMSSMTTW	# line 614
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:42d78de3ce84	msgFLXMSSMTTW	# line 617
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:ef6d42efcfc5	msgFLSLXMSSMTTW	# line 618
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:6e35c17a7cab	apFLXMSSTW	# line 629
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-type:bbd62a3ee4a7	sigFLSLXMSSMTTW	# line 642
 base-c10-split/FL_SL_XMSS_MT_ES.ec	abstract-op:eec808699c37	dmsgFLSLXMSSMTTW	# line 648
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:cb366a9f308f	updhbidx	# line 655
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:036c6a9d1e62	trhi	# line 662
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:e698eed056bb	val_bt_trh_gen	# line 669
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:2b4b1bce25a9	cons_ap_trh_gen	# line 677
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:fc401f1c4677	val_ap_trh_gen	# line 685
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:85cac00e409c	val_bt_trh	# line 693
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:1595be773c7a	cons_ap_trh	# line 703
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:1fc02039aa1c	val_ap_trh	# line 714
+base-c10-split/FL_SL_XMSS_MT_ES.ec	defined-op:eab5077140f9	extract_coll_bt_ap_trh	# line 723
 base-c10-split/FL_SL_XMSS_MT_ES.ec	module-type:2b5abdd09335	Adv_EUFNAGCMA_FLSLXMSSMTTWESNPRF	# line 1526
 base-c10-split/FORS_ES.ec	axiom	dist_adrstypes	# line 62
 base-c10-split/FORS_ES.ec	axiom	valid_fidxvals_idxvals	# line 289
@@ -326,24 +272,80 @@ base-c10-split/FORS_ES.ec	op-annotation:lossless	dpseed	# line 313
 base-c10-split/FORS_ES.ec	op-annotation:lossless	ddgstblock	# line 316
 base-c10-split/FORS_ES.ec	op-annotation:full	ddgstblock	# line 316
 base-c10-split/FORS_ES.ec	op-annotation:uniform	ddgstblock	# line 316
+base-c10-split/FORS_ES.ec	defined-const:5ce27689141d	adrs_len	# line 19
+base-c10-split/FORS_ES.ec	defined-const:0c529f654b73	n	# line 22
+base-c10-split/FORS_ES.ec	defined-const:7eb0c787ae27	k	# line 25
+base-c10-split/FORS_ES.ec	defined-const:562f8f69e0c4	a	# line 28
+base-c10-split/FORS_ES.ec	defined-const:b29d8e4acbd9	t	# line 31
 base-c10-split/FORS_ES.ec	abstract-const:9a7d2a4ac444	trhtype	# line 34
 base-c10-split/FORS_ES.ec	abstract-const:80a8e51cc748	trcotype	# line 37
+base-c10-split/FORS_ES.ec	defined-const:16c00facb41a	l	# line 45
+base-c10-split/FORS_ES.ec	defined-const:0852c982f6a1	s	# line 51
+base-c10-split/FORS_ES.ec	defined-const:3218fef937a1	d	# line 57
+base-c10-split/FORS_ES.ec	defined-type:1b7b9108cb4d	index	# line 87
 base-c10-split/FORS_ES.ec	abstract-type:3e487ee9f1f3	mseed	# line 90
 base-c10-split/FORS_ES.ec	abstract-type:915af8e092a1	mkey	# line 93
 base-c10-split/FORS_ES.ec	abstract-type:621a7eeca2cb	sseed	# line 96
 base-c10-split/FORS_ES.ec	abstract-type:57d2e2e460a5	pseed	# line 99
 base-c10-split/FORS_ES.ec	abstract-type:8751c1902df4	msg	# line 102
+base-c10-split/FORS_ES.ec	defined-type:790c6fe78f90	dgst	# line 108
+base-c10-split/FORS_ES.ec	defined-type:54a454abb2c5	dgstblock	# line 118
+base-c10-split/FORS_ES.ec	defined-type:0f7bb2234dec	pkFORS	# line 148
+base-c10-split/FORS_ES.ec	defined-type:f9418df0e43c	skFORS	# line 160
+base-c10-split/FORS_ES.ec	defined-type:a8b91bbb5ecc	msgFORSTW	# line 169
+base-c10-split/FORS_ES.ec	defined-type:f9249be0dcba	apFORSTW	# line 180
+base-c10-split/FORS_ES.ec	defined-type:5a4f39ece9b1	sigFORSTW	# line 191
+base-c10-split/FORS_ES.ec	defined-op:6bbe602c99cf	nr_nodes	# line 198
+base-c10-split/FORS_ES.ec	defined-op:11837789cba5	valid_tidx	# line 203
+base-c10-split/FORS_ES.ec	defined-op:e5095935206c	valid_kpidx	# line 207
+base-c10-split/FORS_ES.ec	defined-op:52ce4b77b4e6	valid_thidx	# line 211
+base-c10-split/FORS_ES.ec	defined-op:bae7dc31b488	valid_tbidx	# line 228
 base-c10-split/FORS_ES.ec	abstract-op:6dbb0ea4a14c	valid_idxvals	# line 232
+base-c10-split/FORS_ES.ec	defined-op:ef35e8317c42	valid_adrsidxs	# line 238
 base-c10-split/FORS_ES.ec	abstract-op:c4e20f13e404	valid_fidxvalsgp	# line 245
+base-c10-split/FORS_ES.ec	defined-op:c804c5751428	valid_fidxvalslptrh	# line 248
+base-c10-split/FORS_ES.ec	defined-op:9a06de592c09	valid_fidxvalslptrco	# line 256
+base-c10-split/FORS_ES.ec	defined-op:338ea004b86e	valid_fidxvalslp	# line 267
+base-c10-split/FORS_ES.ec	defined-op:8771ad2415ed	valid_fidxvals	# line 275
+base-c10-split/FORS_ES.ec	defined-op:f808e91586f2	valid_fadrsidxs	# line 282
 base-c10-split/FORS_ES.ec	abstract-op:1dc2a1c68df8	dmseed	# line 307
 base-c10-split/FORS_ES.ec	abstract-op:8173d7db4a13	dmkey	# line 310
 base-c10-split/FORS_ES.ec	abstract-op:1812d5a783dc	dpseed	# line 313
 base-c10-split/FORS_ES.ec	abstract-op:28f87dcba256	ddgstblock	# line 316
+base-c10-split/FORS_ES.ec	defined-op:33d8b6e48c5f	ddgstblocklift	# line 319
+base-c10-split/FORS_ES.ec	defined-type:ae689d7fe842	adrs	# line 339
+base-c10-split/FORS_ES.ec	defined-type:feeb0a793a6b	pkFORSTW	# line 344
+base-c10-split/FORS_ES.ec	defined-type:17c516065212	skFORSTW	# line 347
+base-c10-split/FORS_ES.ec	defined-op:7d82fa95fc5c	valid_adrs	# line 354
+base-c10-split/FORS_ES.ec	defined-op:1eb7267fd5aa	valid_fadrs	# line 358
 base-c10-split/FORS_ES.ec	abstract-const:35d3ab08be7d	adz	# line 367
+base-c10-split/FORS_ES.ec	defined-op:f60e719f2816	set_tidx	# line 371
+base-c10-split/FORS_ES.ec	defined-op:5e2645b30c97	set_typeidx	# line 374
+base-c10-split/FORS_ES.ec	defined-op:5ee52b0309f0	set_kpidx	# line 377
+base-c10-split/FORS_ES.ec	defined-op:dfeae612de17	set_thtbidx	# line 380
+base-c10-split/FORS_ES.ec	defined-op:381f5f6fb44f	get_tbidx	# line 385
+base-c10-split/FORS_ES.ec	defined-op:84ec7b7ba6f1	get_thidx	# line 388
+base-c10-split/FORS_ES.ec	defined-op:726dedf24fd2	get_kpidx	# line 391
+base-c10-split/FORS_ES.ec	defined-op:3dc89a55cc42	get_typeidx	# line 394
+base-c10-split/FORS_ES.ec	defined-op:f252365d9d5e	get_tidx	# line 397
 base-c10-split/FORS_ES.ec	abstract-op:61f9689c2f91	skg	# line 404
 base-c10-split/FORS_ES.ec	abstract-op:f4b3366cbdd4	mkg	# line 409
 base-c10-split/FORS_ES.ec	abstract-op:de7cb7aee0d8	mco	# line 412
+base-c10-split/FORS_ES.ec	defined-op:849e230d88d4	g	# line 421
 base-c10-split/FORS_ES.ec	abstract-op:9ea0c6bc6850	thfc	# line 449
+base-c10-split/FORS_ES.ec	defined-op:a5beece57d35	f	# line 455
+base-c10-split/FORS_ES.ec	defined-op:838cbf350937	f'	# line 498
+base-c10-split/FORS_ES.ec	defined-op:39fb7c6b0e52	trh	# line 591
+base-c10-split/FORS_ES.ec	defined-op:d6c3baea1d60	trco	# line 623
+base-c10-split/FORS_ES.ec	defined-op:cb366a9f308f	updhbidx	# line 657
+base-c10-split/FORS_ES.ec	defined-op:036c6a9d1e62	trhi	# line 664
+base-c10-split/FORS_ES.ec	defined-op:e698eed056bb	val_bt_trh_gen	# line 671
+base-c10-split/FORS_ES.ec	defined-op:2b4b1bce25a9	cons_ap_trh_gen	# line 679
+base-c10-split/FORS_ES.ec	defined-op:20ec162050a3	val_ap_trh_gen	# line 687
+base-c10-split/FORS_ES.ec	defined-op:41206443192d	val_bt_trh	# line 695
+base-c10-split/FORS_ES.ec	defined-op:9f26abfa8a87	cons_ap_trh	# line 707
+base-c10-split/FORS_ES.ec	defined-op:df809b8dc7fa	val_ap_trh	# line 720
+base-c10-split/FORS_ES.ec	defined-op:daacd866052f	extract_collision_bt_ap_trh	# line 729
 base-c10-split/FORS_ES.ec	module:e5aab56882e9	FL_FORS_ES	# line 1523
 base-c10-split/FORS_ES.ec	module:5f6b1acc8435	M_FORS_ES	# line 1684
 base-c10-split/FORS_ES.ec	module:2cad8d786a1d	FL_FORS_ES_NPRF	# line 1798
@@ -379,8 +381,15 @@ base-c10-split/HashAddresses.eca	clone-obligation:Subtype	Adrs.valP	# line 13
 base-c10-split/HashAddresses.eca	clone-obligation:Subtype	Adrs.valK	# line 13
 base-c10-split/HashAddresses.eca	clone-obligation:Subtype	Adrs.inhabited	# line 13
 base-c10-split/HashAddresses.eca	clone-discharge:none	Adrs	# line 13
+base-c10-split/HashAddresses.eca	defined-const:16c00facb41a	l	# line 4
 base-c10-split/HashAddresses.eca	abstract-type:e75b1b47e7ea	index	# line 6
 base-c10-split/HashAddresses.eca	abstract-op:459e7d5cefb1	valid_idxvals	# line 8
+base-c10-split/HashAddresses.eca	defined-op:37dfd6de7165	valid_adrsidxs	# line 10
+base-c10-split/HashAddresses.eca	defined-type:1c5ad761863a	adrs	# line 17
+base-c10-split/HashAddresses.eca	defined-op:17f69cbb5bb3	get_idx	# line 19
+base-c10-split/HashAddresses.eca	defined-op:4637c69391d2	set_idx	# line 22
+base-c10-split/HashAddresses.eca	defined-op:1c878428b50c	valid_setidx	# line 25
+base-c10-split/HashAddresses.eca	defined-op:e021f067efd5	eq_idx	# line 28
 base-c10-split/KeyedHashFunctions.eca	refined-const:8f94a1ed66c4	ge1_tsmpre	# line 121
 base-c10-split/KeyedHashFunctions.eca	refined-const:6d9a60837c9d	ge1_tmmpre	# line 178
 base-c10-split/KeyedHashFunctions.eca	refined-const:6b5bcc36bcb2	ge1_tsmspr	# line 356
@@ -435,15 +444,19 @@ base-c10-split/KeyedHashFunctions.eca	abstract-type:d4ee19e50478	key_t	# line 65
 base-c10-split/KeyedHashFunctions.eca	abstract-op:53b5d457ce2a	f	# line 70
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 84
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 87
+base-c10-split/KeyedHashFunctions.eca	defined-const:5f56844bab7a	t_smpre	# line 121
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 124
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 127
+base-c10-split/KeyedHashFunctions.eca	defined-const:e2625109e6bf	t_mmpre	# line 178
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 181
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 184
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 244
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 319
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 322
+base-c10-split/KeyedHashFunctions.eca	defined-const:2462b983a018	t_smspr	# line 356
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 359
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 362
+base-c10-split/KeyedHashFunctions.eca	defined-const:8cc838c88737	t_mmspr	# line 409
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 412
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 415
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 473
@@ -451,19 +464,24 @@ base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 542
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 575
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 612
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 653
+base-c10-split/KeyedHashFunctions.eca	defined-abbrev:a63c9aed1266	spexists	# line 757
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 763
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 766
+base-c10-split/KeyedHashFunctions.eca	defined-const:f7c0d9e8f297	t_smdspr	# line 822
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 825
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 828
+base-c10-split/KeyedHashFunctions.eca	defined-const:ca91eeb944ef	t_mmdspr	# line 927
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 930
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 933
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 1046
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 1178
 base-c10-split/KeyedHashFunctions.eca	abstract-op:91d4fbd4cae2	dout	# line 1181
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 1184
+base-c10-split/KeyedHashFunctions.eca	defined-const:0bc8fbf87470	t_smud	# line 1231
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 1234
 base-c10-split/KeyedHashFunctions.eca	abstract-op:91d4fbd4cae2	dout	# line 1237
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 1240
+base-c10-split/KeyedHashFunctions.eca	defined-const:9c8cedb5fa5a	t_mmud	# line 1294
 base-c10-split/KeyedHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 1297
 base-c10-split/KeyedHashFunctions.eca	abstract-op:91d4fbd4cae2	dout	# line 1300
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 1303
@@ -472,6 +490,7 @@ base-c10-split/KeyedHashFunctions.eca	abstract-op:91d4fbd4cae2	dout	# line 1363
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 1366
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 1450
 base-c10-split/KeyedHashFunctions.eca	abstract-op:2222632d9b51	g	# line 1456
+base-c10-split/KeyedHashFunctions.eca	defined-op:f4f58d5c85bd	h	# line 1476
 base-c10-split/KeyedHashFunctions.eca	abstract-op:e21a6c1fae0f	dkey	# line 1587
 base-c10-split/KeyedHashFunctions.eca	abstract-op:416ba2ca7b36	doutm	# line 1590
 base-c10-split/KeyedHashFunctions.eca	module-type:0946879f20bf	Adv_PRE	# line 90
@@ -529,6 +548,10 @@ base-c10-split/KeyedHashFunctions.eca	module-type:d54827bf211f	Oracle_PRF	# line
 base-c10-split/KeyedHashFunctions.eca	module-type:4ea8c9cfe697	Adv_PRF	# line 1599
 base-c10-split/KeyedHashFunctions.eca	module:1aea48e93d1a	O_PRF_Default	# line 1604
 base-c10-split/KeyedHashFunctions.eca	module:dc7439628e34	PRF	# line 1645
+base-c10-split/MerkleTrees.ec	defined-op:d9ddf96f96f4	val_bt	# line 4
+base-c10-split/MerkleTrees.ec	defined-op:4a395104c95c	cons_ap	# line 12
+base-c10-split/MerkleTrees.ec	defined-op:d6e6acde303f	val_ap	# line 24
+base-c10-split/MerkleTrees.ec	defined-op:b3aad25d7602	extract_collision_bt_ap	# line 107
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	declare-axiom	A_pick_ll	# line 284
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	declare-axiom	A_find_ll	# line 287
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	refined-const:10741be82594	ge0_t	# line 16
@@ -556,6 +579,7 @@ base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	op-annotation:lossless	dpp	# line 3
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	op-annotation:lossless	din	# line 33
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	op-annotation:full	din	# line 33
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	op-annotation:uniform	din	# line 33
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	defined-const:d1543d44e79c	t	# line 16
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	abstract-type:8e0b37c5f3a7	pp_t	# line 20
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	abstract-type:e42a43044120	tw_t	# line 21
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	abstract-type:366b4cce178c	in_t	# line 22
@@ -563,6 +587,8 @@ base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	abstract-type:ec5fe8295274	out_t	# 
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	abstract-op:3ccca65f9a8a	dpp	# line 32
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	abstract-op:00dcfe6c6085	din	# line 33
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	abstract-op:532b940c25be	f	# line 38
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	defined-op:8564566c0a18	is_pre_f	# line 219
+base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	defined-op:aee002ab1177	pre_f_l	# line 222
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	module:d756fc764c8d	R_TCR_OpenPRE	# line 78
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	module:4be8aa6c4ed4	O_SMDTOpenPRE	# line 83
 base-c10-split/OpenPRE_From_TCR_DSPR_THF.eca	module:ed15ab4e3ce1	R_DSPR_OpenPRE	# line 131
@@ -725,31 +751,75 @@ base-c10-split/SPHINCS_PLUS.ec	op-annotation:lossless	dmkey	# line 377
 base-c10-split/SPHINCS_PLUS.ec	op-annotation:lossless	dpseed	# line 380
 base-c10-split/SPHINCS_PLUS.ec	op-annotation:lossless	dsseed	# line 383
 base-c10-split/SPHINCS_PLUS.ec	op-annotation:lossless	ddgstblock	# line 386
+base-c10-split/SPHINCS_PLUS.ec	defined-const:f3e8dd5e3980	adrs_len	# line 19
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:62a2142d472b	n	# line 43
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:dae4b70ff693	k	# line 52
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:89763f469bbd	a	# line 59
+base-c10-split/SPHINCS_PLUS.ec	defined-const:b29d8e4acbd9	t	# line 65
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:296e2f2b4f93	log2_w	# line 72
+base-c10-split/SPHINCS_PLUS.ec	defined-const:35adbeb29f31	w	# line 78
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:bdb21a84626e	len	# line 96
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:709868275c5a	h'	# line 105
+base-c10-split/SPHINCS_PLUS.ec	defined-const:50459afcff6b	l'	# line 111
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:e2ce1bd5f0b5	d	# line 115
+base-c10-split/SPHINCS_PLUS.ec	defined-const:0ecaa4621286	h	# line 124
+base-c10-split/SPHINCS_PLUS.ec	defined-const:3a4c6783370a	l	# line 131
 base-c10-split/SPHINCS_PLUS.ec	abstract-const:d163299b205a	chtype	# line 136
 base-c10-split/SPHINCS_PLUS.ec	abstract-const:af8cedec425d	pkcotype	# line 142
 base-c10-split/SPHINCS_PLUS.ec	abstract-const:ef80726d9ecb	trhxtype	# line 148
 base-c10-split/SPHINCS_PLUS.ec	abstract-const:242400f085bc	trhftype	# line 154
 base-c10-split/SPHINCS_PLUS.ec	abstract-const:80a8e51cc748	trcotype	# line 160
+base-c10-split/SPHINCS_PLUS.ec	defined-type:1b7b9108cb4d	index	# line 195
 base-c10-split/SPHINCS_PLUS.ec	abstract-type:3e487ee9f1f3	mseed	# line 198
 base-c10-split/SPHINCS_PLUS.ec	abstract-type:915af8e092a1	mkey	# line 201
 base-c10-split/SPHINCS_PLUS.ec	abstract-type:621a7eeca2cb	sseed	# line 204
 base-c10-split/SPHINCS_PLUS.ec	abstract-type:57d2e2e460a5	pseed	# line 207
 base-c10-split/SPHINCS_PLUS.ec	abstract-type:8751c1902df4	msg	# line 210
+base-c10-split/SPHINCS_PLUS.ec	defined-type:790c6fe78f90	dgst	# line 216
+base-c10-split/SPHINCS_PLUS.ec	defined-type:54a454abb2c5	dgstblock	# line 226
+base-c10-split/SPHINCS_PLUS.ec	defined-op:2d8ebb476965	nr_nodesx	# line 258
+base-c10-split/SPHINCS_PLUS.ec	defined-op:434dfaf7ee4c	nr_nodesf	# line 261
+base-c10-split/SPHINCS_PLUS.ec	defined-op:231dcf6d4044	nr_trees	# line 272
+base-c10-split/SPHINCS_PLUS.ec	defined-op:656348f01f09	valid_lidx	# line 277
+base-c10-split/SPHINCS_PLUS.ec	defined-op:38616dd5cae9	valid_tidx	# line 285
+base-c10-split/SPHINCS_PLUS.ec	defined-op:f7048fe7a439	valid_kpidx	# line 289
+base-c10-split/SPHINCS_PLUS.ec	defined-op:e4eca296b70d	valid_thxidx	# line 293
+base-c10-split/SPHINCS_PLUS.ec	defined-op:e3279cc2b8fa	valid_tbxidx	# line 297
+base-c10-split/SPHINCS_PLUS.ec	defined-op:beaca44e698e	valid_thfidx	# line 301
+base-c10-split/SPHINCS_PLUS.ec	defined-op:076720345673	valid_tbfidx	# line 305
+base-c10-split/SPHINCS_PLUS.ec	defined-op:bd9f26cd66b0	valid_chidx	# line 309
+base-c10-split/SPHINCS_PLUS.ec	defined-op:e08772e8fff6	valid_hidx	# line 313
+base-c10-split/SPHINCS_PLUS.ec	defined-op:6a89bc6a77bd	valid_idxvalsch	# line 317
+base-c10-split/SPHINCS_PLUS.ec	defined-op:013cc3b0eaf8	valid_idxvalspkco	# line 326
+base-c10-split/SPHINCS_PLUS.ec	defined-op:4f47f6f9c505	valid_idxvalstrhx	# line 335
+base-c10-split/SPHINCS_PLUS.ec	defined-op:5fc6de770de8	valid_idxvalstrhf	# line 344
+base-c10-split/SPHINCS_PLUS.ec	defined-op:af82b5d8cce9	valid_idxvalstrco	# line 353
+base-c10-split/SPHINCS_PLUS.ec	defined-op:cbe07e9fbf84	valid_idxvals	# line 362
+base-c10-split/SPHINCS_PLUS.ec	defined-op:6b34c33a1091	valid_adrsidxs	# line 367
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:1dc2a1c68df8	dmseed	# line 374
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:8173d7db4a13	dmkey	# line 377
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:1812d5a783dc	dpseed	# line 380
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:4047655c9bf7	dsseed	# line 383
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:28f87dcba256	ddgstblock	# line 386
+base-c10-split/SPHINCS_PLUS.ec	defined-type:ae689d7fe842	adrs	# line 409
+base-c10-split/SPHINCS_PLUS.ec	defined-const:3785379824e3	adz	# line 412
+base-c10-split/SPHINCS_PLUS.ec	defined-op:900d1f7345d2	set_lidx	# line 418
+base-c10-split/SPHINCS_PLUS.ec	defined-op:f60e719f2816	set_tidx	# line 421
+base-c10-split/SPHINCS_PLUS.ec	defined-op:7bd7d9975b82	set_ltidx	# line 424
+base-c10-split/SPHINCS_PLUS.ec	defined-op:5e2645b30c97	set_typeidx	# line 427
+base-c10-split/SPHINCS_PLUS.ec	defined-op:5ee52b0309f0	set_kpidx	# line 430
+base-c10-split/SPHINCS_PLUS.ec	defined-op:dfeae612de17	set_thtbidx	# line 433
+base-c10-split/SPHINCS_PLUS.ec	defined-op:3dc89a55cc42	get_typeidx	# line 438
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:61f9689c2f91	skg	# line 444
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:f4b3366cbdd4	mkg	# line 463
 base-c10-split/SPHINCS_PLUS.ec	abstract-op:9ea0c6bc6850	thfc	# line 488
+base-c10-split/SPHINCS_PLUS.ec	defined-op:a5beece57d35	f	# line 494
+base-c10-split/SPHINCS_PLUS.ec	defined-op:39fb7c6b0e52	trh	# line 497
+base-c10-split/SPHINCS_PLUS.ec	defined-op:7892c3204639	pkco	# line 500
+base-c10-split/SPHINCS_PLUS.ec	defined-op:d6c3baea1d60	trco	# line 503
+base-c10-split/SPHINCS_PLUS.ec	defined-type:449aafbd4c68	pkSPHINCSPLUSTW	# line 712
+base-c10-split/SPHINCS_PLUS.ec	defined-type:2bbc94932c1d	skSPHINCSPLUSTW	# line 715
+base-c10-split/SPHINCS_PLUS.ec	defined-type:7b521300eabe	sigSPHINCSPLUSTW	# line 718
 base-c10-split/TweakableHashFunctions.eca	axiom	in_collection	# line 567
 base-c10-split/TweakableHashFunctions.eca	refined-const:149b2338b6aa	ge0_tsmdtpre	# line 52
 base-c10-split/TweakableHashFunctions.eca	refined-const:468b9bcf3e03	ge0_tsmdtopenpre	# line 143
@@ -772,15 +842,20 @@ base-c10-split/TweakableHashFunctions.eca	abstract-type:366b4cce178c	in_t	# line
 base-c10-split/TweakableHashFunctions.eca	abstract-type:ec5fe8295274	out_t	# line 29
 base-c10-split/TweakableHashFunctions.eca	abstract-op:532b940c25be	f	# line 34
 base-c10-split/TweakableHashFunctions.eca	abstract-op:3ccca65f9a8a	dpp	# line 39
+base-c10-split/TweakableHashFunctions.eca	defined-const:c4f5e981f2e5	t_smdtpre	# line 52
 base-c10-split/TweakableHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 55
+base-c10-split/TweakableHashFunctions.eca	defined-const:85c62ef239c8	t_smdtopenpre	# line 143
 base-c10-split/TweakableHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 146
-base-c10-split/TweakableHashFunctions.eca	abstract-op:7951f9da00ff	en	# line 160
+base-c10-split/TweakableHashFunctions.eca	defined-const:a3256c78fd4e	t_smdttcr	# line 259
+base-c10-split/TweakableHashFunctions.eca	defined-abbrev:1014a89f6a37	spexists	# line 344
+base-c10-split/TweakableHashFunctions.eca	defined-const:d12a2b28bfdb	t_smdtdspr	# line 348
+base-c10-split/TweakableHashFunctions.eca	defined-const:7f339bc4acf8	t_smdtud	# line 462
 base-c10-split/TweakableHashFunctions.eca	abstract-op:00dcfe6c6085	din	# line 465
 base-c10-split/TweakableHashFunctions.eca	abstract-op:91d4fbd4cae2	dout	# line 468
+base-c10-split/TweakableHashFunctions.eca	defined-abbrev:537ec34930e7	disj_lists	# line 550
 base-c10-split/TweakableHashFunctions.eca	abstract-type:657bb4a06cb4	diff_t	# line 558
 base-c10-split/TweakableHashFunctions.eca	abstract-op:b4819df32d23	get_diff	# line 561
 base-c10-split/TweakableHashFunctions.eca	abstract-op:cb516e072a6e	fc	# line 564
-base-c10-split/TweakableHashFunctions.eca	abstract-op:7951f9da00ff	en	# line 662
 base-c10-split/TweakableHashFunctions.eca	module-type:97dc114bb56f	Oracle_SMDTPRE	# line 57
 base-c10-split/TweakableHashFunctions.eca	module-type:989bf0e68d27	Adv_SMDTPRE	# line 66
 base-c10-split/TweakableHashFunctions.eca	module:d39e95a2f9bc	O_SMDTPRE_Default	# line 71
@@ -893,17 +968,93 @@ base-c10-split/WOTS_TW_ES.ec	operand:5d70b641dcf4	DListSample.d	# line 3176
 base-c10-split/WOTS_TW_ES.ec	clone-discharge:star	DListSample	# line 3176
 base-c10-split/WOTS_TW_ES.ec	op-annotation:lossless	dpseed	# line 302
 base-c10-split/WOTS_TW_ES.ec	op-annotation:lossless	ddgstblock	# line 305
+base-c10-split/WOTS_TW_ES.ec	defined-const:3a59ec8cd1b1	adrs_len	# line 20
+base-c10-split/WOTS_TW_ES.ec	defined-const:0c529f654b73	n	# line 28
+base-c10-split/WOTS_TW_ES.ec	defined-op:5fe63a9b173f	n_m	# line 46
+base-c10-split/WOTS_TW_ES.ec	defined-const:ad40301b75f1	log2_w	# line 55
+base-c10-split/WOTS_TW_ES.ec	defined-const:35adbeb29f31	w	# line 58
+base-c10-split/WOTS_TW_ES.ec	defined-const:27b301d1d738	len	# line 74
+base-c10-split/WOTS_TW_ES.ec	defined-const:e56cacf20fb3	c	# line 79
+base-c10-split/WOTS_TW_ES.ec	defined-type:e22b8394de7d	baseW	# line 167
 base-c10-split/WOTS_TW_ES.ec	abstract-type:621a7eeca2cb	sseed	# line 170
 base-c10-split/WOTS_TW_ES.ec	abstract-type:57d2e2e460a5	pseed	# line 173
+base-c10-split/WOTS_TW_ES.ec	defined-type:790c6fe78f90	dgst	# line 179
+base-c10-split/WOTS_TW_ES.ec	defined-type:54a454abb2c5	dgstblock	# line 189
+base-c10-split/WOTS_TW_ES.ec	defined-type:765fbe7ac0c7	mdgstblock	# line 197
+base-c10-split/WOTS_TW_ES.ec	defined-op:a4395a3d5e26	join_dgst	# line 203
+base-c10-split/WOTS_TW_ES.ec	defined-type:67b244b172df	dgstblocklenlist	# line 259
+base-c10-split/WOTS_TW_ES.ec	defined-type:3dd7a43045c4	pkWOTS	# line 264
+base-c10-split/WOTS_TW_ES.ec	defined-type:63b93ad0bcdf	skWOTS	# line 267
+base-c10-split/WOTS_TW_ES.ec	defined-type:b5ab994c8da9	msgWOTS	# line 270
+base-c10-split/WOTS_TW_ES.ec	defined-type:8180baaa2993	sigWOTS	# line 273
 base-c10-split/WOTS_TW_ES.ec	abstract-op:1812d5a783dc	dpseed	# line 302
 base-c10-split/WOTS_TW_ES.ec	abstract-op:28f87dcba256	ddgstblock	# line 305
+base-c10-split/WOTS_TW_ES.ec	defined-op:c631fe0bf89d	ddgstblockl	# line 311
+base-c10-split/WOTS_TW_ES.ec	defined-op:eedd0ed78d82	dskWOTS	# line 323
+base-c10-split/WOTS_TW_ES.ec	defined-op:33d8b6e48c5f	ddgstblocklift	# line 333
+base-c10-split/WOTS_TW_ES.ec	defined-op:bd9f26cd66b0	valid_chidx	# line 344
+base-c10-split/WOTS_TW_ES.ec	defined-op:e08772e8fff6	valid_hidx	# line 348
 base-c10-split/WOTS_TW_ES.ec	abstract-op:6dbb0ea4a14c	valid_idxvals	# line 352
+base-c10-split/WOTS_TW_ES.ec	defined-op:ef35e8317c42	valid_adrsidxs	# line 355
 base-c10-split/WOTS_TW_ES.ec	abstract-op:d823371a1b67	valid_widxvalsgp	# line 362
+base-c10-split/WOTS_TW_ES.ec	defined-op:a48d1347ea92	valid_widxvalslp	# line 368
+base-c10-split/WOTS_TW_ES.ec	defined-op:7edd089c7452	valid_widxvals	# line 376
+base-c10-split/WOTS_TW_ES.ec	defined-op:6b516363aa6a	valid_wadrsidxs	# line 383
+base-c10-split/WOTS_TW_ES.ec	defined-type:ae689d7fe842	adrs	# line 415
+base-c10-split/WOTS_TW_ES.ec	defined-op:89fb0d65789f	set_chidx	# line 425
+base-c10-split/WOTS_TW_ES.ec	defined-op:34d33682769d	set_hidx	# line 432
+base-c10-split/WOTS_TW_ES.ec	defined-op:a530b3e6d5bb	get_wgpidxs	# line 440
+base-c10-split/WOTS_TW_ES.ec	defined-op:244661f8a8ca	eq_gp	# line 449
+base-c10-split/WOTS_TW_ES.ec	defined-op:eb9b4b47af51	uniq_wgpidxs	# line 456
+base-c10-split/WOTS_TW_ES.ec	defined-op:e3f14b0bd37e	disj_wgpidxs	# line 465
+base-c10-split/WOTS_TW_ES.ec	defined-op:575338729a80	valid_wadrs	# line 469
 base-c10-split/WOTS_TW_ES.ec	abstract-op:61f9689c2f91	skg	# line 474
 base-c10-split/WOTS_TW_ES.ec	abstract-op:9ea0c6bc6850	thfc	# line 482
+base-c10-split/WOTS_TW_ES.ec	defined-op:a5beece57d35	f	# line 489
 base-c10-split/WOTS_TW_ES.ec	abstract-op:6f50c8a26941	ch	# line 553
+base-c10-split/WOTS_TW_ES.ec	defined-op:63b4c4c8f194	cf	# line 556
 base-c10-split/WOTS_TW_ES.ec	abstract-op:67ee97446fd4	encode_msgWOTS	# line 624
+base-c10-split/WOTS_TW_ES.ec	defined-op:b2aa5a3d227a	digitsum	# line 637
 base-c10-split/WOTS_TW_ES.ec	abstract-const:862ae09c68d1	tgt_witness	# line 645
+base-c10-split/WOTS_TW_ES.ec	defined-op:8cfec367739f	target_sum	# line 647
+base-c10-split/WOTS_TW_ES.ec	defined-op:ffc1d84248f9	P	# line 654
+base-c10-split/WOTS_TW_ES.ec	defined-op:636be758558d	is_chwcoll	# line 763
+base-c10-split/WOTS_TW_ES.ec	defined-op:3c7a98072f9d	has_chwcoll	# line 771
+base-c10-split/WOTS_TW_ES.ec	defined-op:0201ea6eb484	find_chwcollidx	# line 775
+base-c10-split/WOTS_TW_ES.ec	defined-op:d23f7375468d	is_coll	# line 779
+base-c10-split/WOTS_TW_ES.ec	defined-op:811c28d39a52	has_coll	# line 784
+base-c10-split/WOTS_TW_ES.ec	defined-op:3e3ab720f28f	find_collidx_l	# line 788
+base-c10-split/WOTS_TW_ES.ec	defined-op:e864a7f40e8c	find_collidx_r	# line 792
+base-c10-split/WOTS_TW_ES.ec	defined-op:51f23af5405b	extr_coll_l	# line 796
+base-c10-split/WOTS_TW_ES.ec	defined-op:50ec046091df	extr_coll_r	# line 801
+base-c10-split/WOTS_TW_ES.ec	defined-op:65fd2e991bd2	is_chwpre	# line 808
+base-c10-split/WOTS_TW_ES.ec	defined-op:fad12e8906ea	has_chwpre	# line 816
+base-c10-split/WOTS_TW_ES.ec	defined-op:0e2889540656	find_chwpreidx	# line 820
+base-c10-split/WOTS_TW_ES.ec	defined-op:3d980790b1b3	extr_pre	# line 824
+base-c10-split/WOTS_TW_ES.ec	defined-op:deace42f8d22	relcqsad_udi	# line 830
+base-c10-split/WOTS_TW_ES.ec	defined-op:330c07004711	relcqsad_udi_outer	# line 839
+base-c10-split/WOTS_TW_ES.ec	defined-op:8ad0a62643d7	reltqsad_udi	# line 847
+base-c10-split/WOTS_TW_ES.ec	defined-op:f4cd1c5aad2f	relcqsad_tcr	# line 863
+base-c10-split/WOTS_TW_ES.ec	defined-op:b36ee03c2b0d	relcqsad_tcr_outer	# line 876
+base-c10-split/WOTS_TW_ES.ec	defined-op:ab034d3d7309	relcqsad_tcr_inner	# line 887
+base-c10-split/WOTS_TW_ES.ec	defined-op:9679007372e9	relcqsdg_tcr	# line 895
+base-c10-split/WOTS_TW_ES.ec	defined-op:a67e9e6d7f7b	relcqsdg_tcr_outer	# line 908
+base-c10-split/WOTS_TW_ES.ec	defined-op:c762ae78aa71	relcqsdg_tcr_inner	# line 919
+base-c10-split/WOTS_TW_ES.ec	defined-op:d7e1b64f579f	relcqsad_pre	# line 927
+base-c10-split/WOTS_TW_ES.ec	defined-op:018cf7ea29f9	relcqsad_pre_outer	# line 934
+base-c10-split/WOTS_TW_ES.ec	defined-op:2d31daf74b81	relcqsdg_pre	# line 940
+base-c10-split/WOTS_TW_ES.ec	defined-op:c1992c988fc1	relcqsdg_pre_outer	# line 947
+base-c10-split/WOTS_TW_ES.ec	defined-op:10b43a97b097	reltqsad_pre	# line 953
+base-c10-split/WOTS_TW_ES.ec	defined-op:e53510262e6d	reltqsad_pre_outer	# line 961
+base-c10-split/WOTS_TW_ES.ec	defined-op:8ed14eccc04c	reltqsad_pre_inner	# line 968
+base-c10-split/WOTS_TW_ES.ec	defined-op:2538022d648b	qs_idx	# line 972
+base-c10-split/WOTS_TW_ES.ec	defined-op:7e70f3436cc9	qsadtcr_idx	# line 976
+base-c10-split/WOTS_TW_ES.ec	defined-op:420715f7793d	qsdgtcr_idx	# line 989
+base-c10-split/WOTS_TW_ES.ec	defined-op:aa59276979aa	qsadpre_idx	# line 1003
+base-c10-split/WOTS_TW_ES.ec	defined-op:39173dc2c5e7	qsdgpre_idx	# line 1011
+base-c10-split/WOTS_TW_ES.ec	defined-type:44f7cb14c3a8	wadrs	# line 1039
+base-c10-split/WOTS_TW_ES.ec	defined-type:18feb6e8a61b	pkWOTSTW	# line 1045
+base-c10-split/WOTS_TW_ES.ec	defined-type:23137f3896ae	skWOTSTW	# line 1048
 base-c10-split/WOTS_TW_ES.ec	module:d74bf9751f3f	WOTS_TW_ES	# line 2241
 base-c10-split/WOTS_TW_ES.ec	module:28b2a6a8f825	WOTS_TW_ES_NPRF	# line 2380
 base-c10-split/WOTS_TW_ES.ec	module-type:df1d3a4d5242	Oracle_MEUFGCMA_WOTSTWESNPRF	# line 2506
@@ -972,6 +1123,37 @@ base-c10-split/WOTS_TW_ES.ec	module:87c4f34fd130	O_DistRCHi	# line 4560
 base-c10-split/WOTS_TW_ES.ec	module:94dfa2312ace	R	# line 4592
 base-c10-split/WOTS_TW_ES.ec	module:e21cf1d8598b	SM_DT_UD_Ci	# line 4686
 base-c10-split/WOTS_TW_ES.ec	module:1a0289cf30ad	SM_DT_UD_Cir	# line 4713
+cdrafts-split/C10DeployedGeometry.ec	defined-op:9fb98081dd8d	c10_n	# line 66
+cdrafts-split/C10DeployedGeometry.ec	defined-op:51a2b549384e	c10_log2_w	# line 67
+cdrafts-split/C10DeployedGeometry.ec	defined-op:e19e9578444e	c10_w	# line 68
+cdrafts-split/C10DeployedGeometry.ec	defined-op:347be05202ab	c10_len	# line 69
+cdrafts-split/C10DeployedGeometry.ec	defined-op:0628627911e5	c10_target_sum	# line 70
+cdrafts-split/C10DeployedGeometry.ec	defined-op:ecdbb5c4f406	c10_k	# line 370
+cdrafts-split/C10DeployedInstance.ec	defined-op:9fb98081dd8d	c10_n	# line 44
+cdrafts-split/C10DeployedInstance.ec	defined-op:a55296373aec	c10_n_m	# line 45
+cdrafts-split/C10DeployedInstance.ec	defined-op:51a2b549384e	c10_log2_w	# line 46
+cdrafts-split/C10DeployedInstance.ec	defined-op:e19e9578444e	c10_w	# line 47
+cdrafts-split/C10DeployedInstance.ec	defined-op:347be05202ab	c10_len	# line 48
+cdrafts-split/C10DeployedInstance.ec	defined-op:0628627911e5	c10_target_sum	# line 49
+cdrafts-split/C10DeployedInstance.ec	defined-op:80e13bd3981e	c10_witness_digits	# line 190
+cdrafts-split/C10DeployedInstance.ec	defined-op:ec131faa2703	c10_witness_word	# line 233
+cdrafts-split/C10DeployedInstance.ec	defined-op:ecdbb5c4f406	c10_k	# line 280
+cdrafts-split/C10DeployedInstance.ec	defined-op:833f420ccdb5	c10_r	# line 281
+cdrafts-split/C10DeployedInstance.ec	defined-op:86535e747145	c10_embg	# line 313
+cdrafts-split/C10DeployedInstance.ec	defined-op:ec3c58535522	c10_digit_at	# line 382
+cdrafts-split/C10DeployedInstance.ec	defined-op:4f20a2f3a1fb	c10_witness_bits	# line 422
+cdrafts-split/C10DeployedScope.ec	defined-op:e85bca859c3b	c10_hp	# line 118
+cdrafts-split/C10DeployedScope.ec	defined-op:cd2da22f40b9	c10_d	# line 119
+cdrafts-split/C10DeployedScope.ec	defined-op:43d4826d1a44	c10_h	# line 120
+cdrafts-split/C10DeployedScope.ec	defined-op:dc71c43fb583	c10_c	# line 151
+cdrafts-split/C10DeployedScope.ec	defined-op:1d9d950d2a7e	c10_p_tgts	# line 231
+cdrafts-split/C10DeployedScope.ec	defined-op:110c8d43e510	c10_q_s	# line 347
+cdrafts-split/DarkSide.ec	refined-const:038162b8e18e	ge1_t	# line 93
+cdrafts-split/DarkSide.ec	defined-const:9489708db8aa	t	# line 93
+cdrafts-split/DarkSide.ec	defined-op:ca884f7d56ca	dleaf	# line 96
+cdrafts-split/DarkSide.ec	defined-op:4cc4c959f6f4	DS	# line 108
+cdrafts-split/DarkSideC10.ec	operand:42a30d8df381	DS_C10.t	# line 32
+cdrafts-split/DarkSideC10.ec	clone-discharge:star|realize:ge1_t	DS_C10	# line 32
 cdrafts-split/FORS_C.ec	refined-const:56e286cdcc5d	ge1_k	# line 147
 cdrafts-split/FORS_C.ec	refined-const:66521e84933f	ge1_a	# line 148
 cdrafts-split/FORS_C.ec	operand:688967576dba	G.pp_t	# line 190
@@ -984,6 +1166,9 @@ cdrafts-split/FORS_C.ec	operand:4e9ac24060fd	G.prop	# line 190
 cdrafts-split/FORS_C.ec	clone-discharge:none	G	# line 190
 cdrafts-split/FORS_C.ec	op-annotation:lossless	dmkey	# line 166
 cdrafts-split/FORS_C.ec	op-annotation:lossless	dpseed	# line 167
+cdrafts-split/FORS_C.ec	defined-const:7eb0c787ae27	k	# line 147
+cdrafts-split/FORS_C.ec	defined-const:562f8f69e0c4	a	# line 148
+cdrafts-split/FORS_C.ec	defined-const:b29d8e4acbd9	t	# line 149
 cdrafts-split/FORS_C.ec	abstract-type:915af8e092a1	mkey	# line 154
 cdrafts-split/FORS_C.ec	abstract-type:8751c1902df4	msg	# line 155
 cdrafts-split/FORS_C.ec	abstract-type:ec5fe8295274	out_t	# line 156
@@ -998,9 +1183,15 @@ cdrafts-split/FORS_C.ec	abstract-op:1812d5a783dc	dpseed	# line 167
 cdrafts-split/FORS_C.ec	abstract-op:9038b82ed1c2	adz	# line 170
 cdrafts-split/FORS_C.ec	abstract-op:b8df9ab2a6e4	mco	# line 176
 cdrafts-split/FORS_C.ec	abstract-op:2222632d9b51	g	# line 177
+cdrafts-split/FORS_C.ec	defined-op:4c3412277cdb	predC_fors	# line 182
+cdrafts-split/FORS_C.ec	defined-op:840c3728e6e9	gc	# line 200
+cdrafts-split/FORS_C.ec	defined-op:55ff120c1cb1	mco_C	# line 203
+cdrafts-split/FORS_C.ec	defined-op:0bb04e32d071	hC	# line 238
+cdrafts-split/FORS_C.ec	defined-type:87ac633f3054	sigFORSC	# line 322
 cdrafts-split/FORS_C.ec	abstract-op:7e6eab22980e	fkeygen	# line 324
 cdrafts-split/FORS_C.ec	abstract-op:33c823f1dd3f	fsign	# line 327
 cdrafts-split/FORS_C.ec	abstract-op:4ddef1d08e3a	fverify	# line 330
+cdrafts-split/FORS_C.ec	defined-op:d4fc95f3dc4c	verifyC	# line 334
 cdrafts-split/FORS_C.ec	module-type:584708cfc301	Oracle_ITSRC	# line 241
 cdrafts-split/FORS_C.ec	module:26ecc1174808	O_ITSRC_Default	# line 247
 cdrafts-split/FORS_C.ec	module-type:adca8b3c5298	Adv_ITSRC	# line 272
@@ -1014,48 +1205,58 @@ cdrafts-split/FORS_C.ec	module:3cec104d2102	R_ITSRC_FORSC	# line 428
 cdrafts-split/FORS_C.ec	module:384c4841df0b	O_CMA	# line 435
 cdrafts-split/FORS_C.ec	module:73243a1f870b	O_CMA_FORSC_I	# line 534
 cdrafts-split/FORS_C.ec	module:8231aa213a82	EUF_CMA_FORSC_I	# line 579
-cdrafts-split/FORS_C10.ec	axiom	dmkey_ll	# line 149
-cdrafts-split/FORS_C10.ec	axiom	size_g	# line 166
-cdrafts-split/FORS_C10.ec	axiom	eqiks_g	# line 168
-cdrafts-split/FORS_C10.ec	axiom	neqisvs_g	# line 171
-cdrafts-split/FORS_C10.ec	axiom	rng_g	# line 174
-cdrafts-split/FORS_C10.ec	axiom	uniq_g	# line 192
-cdrafts-split/FORS_C10.ec	axiom	good_pos	# line 208
-cdrafts-split/FORS_C10.ec	refined-const:56e286cdcc5d	ge1_k	# line 138
-cdrafts-split/FORS_C10.ec	refined-const:66521e84933f	ge1_a	# line 139
-cdrafts-split/FORS_C10.ec	abstract-type:915af8e092a1	mkey	# line 142
-cdrafts-split/FORS_C10.ec	abstract-type:8751c1902df4	msg	# line 143
-cdrafts-split/FORS_C10.ec	abstract-type:ec5fe8295274	out_t	# line 144
-cdrafts-split/FORS_C10.ec	abstract-op:8173d7db4a13	dmkey	# line 148
-cdrafts-split/FORS_C10.ec	abstract-op:89052d216546	mco	# line 152
-cdrafts-split/FORS_C10.ec	abstract-op:2222632d9b51	g	# line 163
-cdrafts-split/FORS_C10.ec	module-type:bf78e34bcd95	Oracle_ITSRC10	# line 218
-cdrafts-split/FORS_C10.ec	module:f7e540b3e47e	O_ITSRC10_Default	# line 224
-cdrafts-split/FORS_C10.ec	module-type:fc30efedc344	Adv_ITSRC10	# line 267
-cdrafts-split/FORS_C10.ec	module:a9c4cc11b224	ITSRC10	# line 276
-cdrafts-split/FORS_C10.ec	module:97c8fa33080a	ITSRC10_noC	# line 301
-cdrafts-split/FORS_C10_Multi.ec	refined-const:26ecc28a0664	ge1_d	# line 114
-cdrafts-split/FORS_C10_Multi.ec	clone-discharge:none	F	# line 89
-cdrafts-split/FORS_C10_Multi.ec	op-annotation:lossless	dpseed	# line 108
-cdrafts-split/FORS_C10_Multi.ec	abstract-type:57d2e2e460a5	pseed	# line 98
-cdrafts-split/FORS_C10_Multi.ec	abstract-type:473caf9371ea	adrs	# line 99
-cdrafts-split/FORS_C10_Multi.ec	abstract-type:f3c7a62eb06e	pkFORS	# line 100
-cdrafts-split/FORS_C10_Multi.ec	abstract-type:283becc57670	skFORS	# line 101
-cdrafts-split/FORS_C10_Multi.ec	abstract-type:c5267f48e62b	sigFORSTW	# line 102
-cdrafts-split/FORS_C10_Multi.ec	abstract-op:1812d5a783dc	dpseed	# line 108
-cdrafts-split/FORS_C10_Multi.ec	abstract-op:9038b82ed1c2	adz	# line 109
-cdrafts-split/FORS_C10_Multi.ec	abstract-op:7e486b69c3d6	mkeygen	# line 129
-cdrafts-split/FORS_C10_Multi.ec	abstract-op:33c823f1dd3f	fsign	# line 132
-cdrafts-split/FORS_C10_Multi.ec	abstract-op:4ddef1d08e3a	fverify	# line 133
-cdrafts-split/FORS_C10_Multi.ec	module-type:dbba3f31ea15	SOracle_CMA_MFORSC10	# line 149
-cdrafts-split/FORS_C10_Multi.ec	module-type:8ae341ccbf8b	Oracle_CMA_MFORSC10	# line 153
-cdrafts-split/FORS_C10_Multi.ec	module-type:45d805ad3450	Adv_EUFCMA_MFORSC10	# line 159
-cdrafts-split/FORS_C10_Multi.ec	module:e0b6b362cef7	O_CMA_MFORSC10	# line 167
-cdrafts-split/FORS_C10_Multi.ec	module:0b4eb2bf8398	EUF_CMA_MFORSC10	# line 198
-cdrafts-split/FORS_C10_Multi.ec	module:ef28fa75ce97	R_ITSRC10_MFORSC10	# line 231
-cdrafts-split/FORS_C10_Multi.ec	module:7f0392034deb	O_CMA	# line 237
-cdrafts-split/FORS_C10_Multi.ec	module:daa3e6a96775	O_CMA_MFORSC10_I	# line 290
-cdrafts-split/FORS_C10_Multi.ec	module:492371521514	EUF_CMA_MFORSC10_I	# line 324
+cdrafts-split/FORS_C10.ec	axiom	dmkey_ll	# line 160
+cdrafts-split/FORS_C10.ec	axiom	size_g	# line 177
+cdrafts-split/FORS_C10.ec	axiom	eqiks_g	# line 179
+cdrafts-split/FORS_C10.ec	axiom	neqisvs_g	# line 182
+cdrafts-split/FORS_C10.ec	axiom	rng_g	# line 185
+cdrafts-split/FORS_C10.ec	axiom	uniq_g	# line 203
+cdrafts-split/FORS_C10.ec	axiom	good_pos	# line 219
+cdrafts-split/FORS_C10.ec	refined-const:56e286cdcc5d	ge1_k	# line 149
+cdrafts-split/FORS_C10.ec	refined-const:66521e84933f	ge1_a	# line 150
+cdrafts-split/FORS_C10.ec	defined-const:7eb0c787ae27	k	# line 149
+cdrafts-split/FORS_C10.ec	defined-const:562f8f69e0c4	a	# line 150
+cdrafts-split/FORS_C10.ec	defined-const:b29d8e4acbd9	t	# line 151
+cdrafts-split/FORS_C10.ec	abstract-type:915af8e092a1	mkey	# line 153
+cdrafts-split/FORS_C10.ec	abstract-type:8751c1902df4	msg	# line 154
+cdrafts-split/FORS_C10.ec	abstract-type:ec5fe8295274	out_t	# line 155
+cdrafts-split/FORS_C10.ec	abstract-op:8173d7db4a13	dmkey	# line 159
+cdrafts-split/FORS_C10.ec	abstract-op:89052d216546	mco	# line 163
+cdrafts-split/FORS_C10.ec	abstract-op:2222632d9b51	g	# line 174
+cdrafts-split/FORS_C10.ec	defined-op:4c3412277cdb	predC_fors	# line 208
+cdrafts-split/FORS_C10.ec	defined-op:462694a3a140	good	# line 212
+cdrafts-split/FORS_C10.ec	defined-op:1970d57daf89	hC	# line 222
+cdrafts-split/FORS_C10.ec	module-type:bf78e34bcd95	Oracle_ITSRC10	# line 229
+cdrafts-split/FORS_C10.ec	module:f7e540b3e47e	O_ITSRC10_Default	# line 235
+cdrafts-split/FORS_C10.ec	module-type:fc30efedc344	Adv_ITSRC10	# line 278
+cdrafts-split/FORS_C10.ec	module:a9c4cc11b224	ITSRC10	# line 287
+cdrafts-split/FORS_C10.ec	module:97c8fa33080a	ITSRC10_noC	# line 312
+cdrafts-split/FORS_C10_Multi.ec	refined-const:26ecc28a0664	ge1_d	# line 125
+cdrafts-split/FORS_C10_Multi.ec	clone-discharge:none	F	# line 100
+cdrafts-split/FORS_C10_Multi.ec	op-annotation:lossless	dpseed	# line 119
+cdrafts-split/FORS_C10_Multi.ec	abstract-type:57d2e2e460a5	pseed	# line 109
+cdrafts-split/FORS_C10_Multi.ec	abstract-type:473caf9371ea	adrs	# line 110
+cdrafts-split/FORS_C10_Multi.ec	abstract-type:f3c7a62eb06e	pkFORS	# line 111
+cdrafts-split/FORS_C10_Multi.ec	abstract-type:283becc57670	skFORS	# line 112
+cdrafts-split/FORS_C10_Multi.ec	abstract-type:c5267f48e62b	sigFORSTW	# line 113
+cdrafts-split/FORS_C10_Multi.ec	abstract-op:1812d5a783dc	dpseed	# line 119
+cdrafts-split/FORS_C10_Multi.ec	abstract-op:9038b82ed1c2	adz	# line 120
+cdrafts-split/FORS_C10_Multi.ec	defined-const:dedee74e0917	d	# line 125
+cdrafts-split/FORS_C10_Multi.ec	defined-op:f3afcf5f2aed	idx_of	# line 132
+cdrafts-split/FORS_C10_Multi.ec	defined-type:3e7a5a74a4b5	sigFORSC10	# line 137
+cdrafts-split/FORS_C10_Multi.ec	abstract-op:7e486b69c3d6	mkeygen	# line 140
+cdrafts-split/FORS_C10_Multi.ec	abstract-op:33c823f1dd3f	fsign	# line 143
+cdrafts-split/FORS_C10_Multi.ec	abstract-op:4ddef1d08e3a	fverify	# line 144
+cdrafts-split/FORS_C10_Multi.ec	defined-op:0ddc5b0207e1	mverifyC	# line 150
+cdrafts-split/FORS_C10_Multi.ec	module-type:dbba3f31ea15	SOracle_CMA_MFORSC10	# line 160
+cdrafts-split/FORS_C10_Multi.ec	module-type:8ae341ccbf8b	Oracle_CMA_MFORSC10	# line 164
+cdrafts-split/FORS_C10_Multi.ec	module-type:45d805ad3450	Adv_EUFCMA_MFORSC10	# line 170
+cdrafts-split/FORS_C10_Multi.ec	module:e0b6b362cef7	O_CMA_MFORSC10	# line 178
+cdrafts-split/FORS_C10_Multi.ec	module:0b4eb2bf8398	EUF_CMA_MFORSC10	# line 209
+cdrafts-split/FORS_C10_Multi.ec	module:ef28fa75ce97	R_ITSRC10_MFORSC10	# line 242
+cdrafts-split/FORS_C10_Multi.ec	module:7f0392034deb	O_CMA	# line 248
+cdrafts-split/FORS_C10_Multi.ec	module:daa3e6a96775	O_CMA_MFORSC10_I	# line 301
+cdrafts-split/FORS_C10_Multi.ec	module:492371521514	EUF_CMA_MFORSC10_I	# line 335
 cdrafts-split/FORS_C_TreePort.ec	admit:3b102492d8ec	extract_op	# line 1511
 cdrafts-split/FORS_C_TreePort.ec	refined-const:244382273ddd	ge1_t_op	# line 142
 cdrafts-split/FORS_C_TreePort.ec	refined-const:a3102ca83068	ge1_t_tcr	# line 213
@@ -1069,7 +1270,11 @@ cdrafts-split/FORS_C_TreePort.ec	abstract-op:1a03de82d62d	trh	# line 113
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:28e755152d79	trco	# line 114
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:81c672f9f188	recompute	# line 120
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:2cde3cf7dadc	root_of	# line 125
+cdrafts-split/FORS_C_TreePort.ec	defined-pred:77e8ce916bb1	fverify_structural	# line 130
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:2e78615aa0c1	dop_in	# line 141
+cdrafts-split/FORS_C_TreePort.ec	defined-const:0304b0bd1fbf	t_op	# line 142
+cdrafts-split/FORS_C_TreePort.ec	defined-const:fc18be387092	t_tcr	# line 213
+cdrafts-split/FORS_C_TreePort.ec	defined-op:5f2d46210b69	disj_lists	# line 215
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:7447180390fe	all_leaf_tweaks	# line 339
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:5af464ee3d06	opened_leaf_idxs	# line 340
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:3d2f7e17ee6c	sim_sig_op	# line 341
@@ -1082,17 +1287,30 @@ cdrafts-split/FORS_C_TreePort.ec	abstract-op:d92c0557aff7	froots_of	# line 383
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:545ad6110322	croots_of	# line 384
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:c52c34e16021	roots_dgst	# line 385
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:64a3f742c048	leaf_div	# line 386
+cdrafts-split/FORS_C_TreePort.ec	defined-op:8215bf8dc030	extract_trco	# line 405
+cdrafts-split/FORS_C_TreePort.ec	defined-pred:5df5d408d949	enum_nondegen	# line 470
+cdrafts-split/FORS_C_TreePort.ec	defined-pred:21e9d9097d92	brk_structural	# line 498
+cdrafts-split/FORS_C_TreePort.ec	defined-pred:6dc2aa502265	roots_dgst_inj	# line 542
+cdrafts-split/FORS_C_TreePort.ec	defined-const:ee2cd869dc60	H_tree	# line 656
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:945c6bd43c20	frun	# line 696
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:66cb5f74aa5f	crun	# line 697
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:07e1c2fac5da	inode_tw	# line 698
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:dde757923955	fin_at	# line 699
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:1b1f8b6ff877	cin_at	# line 700
+cdrafts-split/FORS_C_TreePort.ec	defined-pred:1804cc316a90	trh_interior_structural	# line 726
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:c03d51499217	honest_nodes	# line 835
+cdrafts-split/FORS_C_TreePort.ec	defined-op:3a61d03dec23	div_level	# line 841
+cdrafts-split/FORS_C_TreePort.ec	defined-pred:0bc3f3a52b39	trh_registration	# line 861
+cdrafts-split/FORS_C_TreePort.ec	defined-op:1465de288e72	extract_trh	# line 932
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:a68b09c91e34	leaf_tw	# line 1042
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:f04ac6a2957a	fleaf_in	# line 1043
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:0a699b50e07b	cleaf_out	# line 1044
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:870a9e0667ea	croot_from_leaf	# line 1045
 cdrafts-split/FORS_C_TreePort.ec	abstract-op:04efbf3393c0	leaf_targets	# line 1049
+cdrafts-split/FORS_C_TreePort.ec	defined-pred:793fd0b9d000	leaf_openpre_structural	# line 1071
+cdrafts-split/FORS_C_TreePort.ec	defined-pred:8ab16fbf6732	op_registration	# line 1130
+cdrafts-split/FORS_C_TreePort.ec	defined-op:858d256178f6	extract_op	# line 1148
+cdrafts-split/FORS_C_TreePort.ec	defined-pred:e5d04c2e2845	sim_sig_op_fidelity	# line 1227
 cdrafts-split/FORS_C_TreePort.ec	module-type:6ab23f913e5a	OP_Oracle	# line 144
 cdrafts-split/FORS_C_TreePort.ec	module:fff86fda80dd	O_OP_Default	# line 154
 cdrafts-split/FORS_C_TreePort.ec	module-type:a3b7b756ca15	Adv_OP	# line 181
@@ -1119,6 +1337,21 @@ cdrafts-split/FxChain.ec	operand:43f7ad571014	DSSC.sk_t	# line 142
 cdrafts-split/FxChain.ec	operand:522e163feb88	DSSC.msg_t	# line 142
 cdrafts-split/FxChain.ec	operand:65ee424781ad	DSSC.sig_t	# line 142
 cdrafts-split/FxChain.ec	clone-discharge:star	DSSC	# line 142
+cdrafts-split/FxChain.ec	defined-op:c51efbcc4bf3	fors_leaves_op	# line 570
+cdrafts-split/FxChain.ec	defined-op:22703484bcf0	fors_sig_op	# line 597
+cdrafts-split/FxChain.ec	defined-op:9134d19b2fd7	fors_leaves_op_cube	# line 725
+cdrafts-split/FxChain.ec	defined-op:a08a434b18c9	fors_sig_op_cube	# line 761
+cdrafts-split/FxChain.ec	defined-op:50751bdb6739	fidx	# line 864
+cdrafts-split/FxChain.ec	defined-op:e8480e3cf071	tree_leaves_s	# line 969
+cdrafts-split/FxChain.ec	defined-op:55cf9868b696	tree_root_s	# line 976
+cdrafts-split/FxChain.ec	defined-op:dd5073b46d5c	rt_cf_s	# line 979
+cdrafts-split/FxChain.ec	defined-op:6cd82c543451	sig_cf_elem_s	# line 982
+cdrafts-split/FxChain.ec	defined-op:fd603fdb7c99	ap_cf_elem_s	# line 991
+cdrafts-split/FxChain.ec	defined-op:f31ff2e6223e	tree_leaves_c	# line 1170
+cdrafts-split/FxChain.ec	defined-op:4b79a621c0a9	tree_root_c	# line 1177
+cdrafts-split/FxChain.ec	defined-op:a4a2a826ee62	rt_cf_c	# line 1180
+cdrafts-split/FxChain.ec	defined-op:53a22408e220	sig_cf_elem_c	# line 1183
+cdrafts-split/FxChain.ec	defined-op:0c610a136fae	ap_cf_elem_c	# line 1192
 cdrafts-split/FxChain.ec	module:dd2df797c2ae	SPHINCS_PLUS_C10	# line 158
 cdrafts-split/FxChain.ec	module:fa683c394052	EUFCMA_C10	# line 255
 cdrafts-split/FxChain.ec	module:f9c663ef3e94	SPHINCS_PLUS_C10_FS	# line 273
@@ -1126,6 +1359,7 @@ cdrafts-split/FxChain.ec	module:40e59b9d590c	O_CMA_SPHINCSPLUSTWC_FS	# line 439
 cdrafts-split/FxChain.ec	module:bfcce9d1385f	EUF_CMA_SPHINCSPLUSTWC_FS_PRFPRF	# line 506
 cdrafts-split/FxChain.ec	module:4e8de12d256e	EUF_CMA_SPHINCSPLUSTWC_FS_NPRFPRF	# line 527
 cdrafts-split/FxChain.ec	module:c8a927efcfc3	R_SKGPRF_EUFCMA_C	# line 2268
+cdrafts-split/GFailCharged.ec	defined-op:c7c8f6a4b9cc	gfail_of	# line 63
 cdrafts-split/GprocFORSC10.ec	operand:dd9d3ae1f775	M.F.mkey	# line 122
 cdrafts-split/GprocFORSC10.ec	operand:522e163feb88	M.F.msg	# line 122
 cdrafts-split/GprocFORSC10.ec	operand:d01ae9bb134a	M.F.out_t	# line 122
@@ -1143,6 +1377,9 @@ cdrafts-split/GprocFORSC10.ec	operand:a2ba6bb81603	M.dpseed	# line 122
 cdrafts-split/GprocFORSC10.ec	operand:12884bfe931b	M.adz	# line 122
 cdrafts-split/GprocFORSC10.ec	operand:038e3d6360bb	M.d	# line 122
 cdrafts-split/GprocFORSC10.ec	clone-discharge:list:F.dmkey_ll,F.eqiks_g,F.ge1_a,F.ge1_k,F.neqisvs_g,F.rng_g,F.size_g,F.uniq_g,dpseed_ll,ge1_d|realize:F.dmkey_ll,F.eqiks_g,F.ge1_a,F.ge1_k,F.neqisvs_g,F.rng_g,F.size_g,F.uniq_g,dpseed_ll,ge1_d	M	# line 122
+cdrafts-split/GprocFORSC10.ec	defined-type:1d32ac339884	sigGproc	# line 168
+cdrafts-split/GprocFORSC10.ec	defined-op:135dc7bd838b	pkFORS_cf	# line 648
+cdrafts-split/GprocFORSC10.ec	defined-op:b6f129e1c1e5	pkfors_of	# line 1102
 cdrafts-split/GprocFORSC10.ec	module-type:7562f4b226b5	SOracle_CMA_Gproc	# line 171
 cdrafts-split/GprocFORSC10.ec	module-type:b38245ca92d0	Oracle_CMA_Gproc	# line 175
 cdrafts-split/GprocFORSC10.ec	module-type:b9988bdfe916	Adv_EUFCMA_Gproc	# line 181
@@ -1156,6 +1393,45 @@ cdrafts-split/GprocFORSC10.ec	module:4113dcb608e8	O_CMA	# line 487
 cdrafts-split/GprocFORSC10.ec	module:0544d6e8b89e	R_fors_p	# line 588
 cdrafts-split/GprocFORSC10.ec	module:87d729951bcb	O_CMA	# line 595
 cdrafts-split/GprocFORSC10.ec	module:fbc0ec28fb21	EUF_CMA_Gproc_V	# line 1369
+cdrafts-split/GprocQWired.ec	module:a32add79d02c	WitnessF	# line 198
+cdrafts-split/GprocT1Opre.ec	operand:efa13d91c0ca	EI_OPRE.t	# line 284
+cdrafts-split/GprocT1Opre.ec	operand:4c4666a82f97	EI_OPRE.c	# line 284
+cdrafts-split/GprocT1Opre.ec	operand:4c4666a82f97	EI_OPRE.step	# line 284
+cdrafts-split/GprocT1Opre.ec	clone-discharge:star|realize:c_gt0,step_gt0	EI_OPRE	# line 284
+cdrafts-split/GprocT1Opre.ec	module:374a264de6a3	R_OPRE_Gproc	# line 122
+cdrafts-split/GprocT1Opre.ec	module:1c05fefe6313	O_CMA	# line 133
+cdrafts-split/GprocT1Opre.ec	module:b416f909ea4b	O_OPRE_LoopBody	# line 293
+cdrafts-split/GprocT1Opre.ec	module:3c1bd5a75aa5	O_OPRE_CL	# line 318
+cdrafts-split/GprocT1Opre.ec	module:2978ce801e6c	O_OPRE_LoopBodyNest1	# line 365
+cdrafts-split/GprocT1Opre.ec	module:0b9c65bdbbcf	O_OPRE_CL2	# line 388
+cdrafts-split/GprocT1Opre.ec	module:1632c3d9e6b7	O_OPRE_LoopBodyNest2	# line 444
+cdrafts-split/GprocT1Opre.ec	module:9c8cea7ca7a4	O_OPRE_CL3	# line 469
+cdrafts-split/GprocT1Opre.ec	module:29ffcc5edab9	O_OPRE_ILN	# line 531
+cdrafts-split/GprocT1Opre.ec	module:c60ed29332ed	SampGame	# line 1144
+cdrafts-split/GprocT2Trh.ec	defined-op:ae5b46424e62	adzf	# line 202
+cdrafts-split/GprocT2Trh.ec	defined-op:a5e38df92b20	t2_span	# line 466
+cdrafts-split/GprocT2Trh.ec	defined-op:57bae817f22c	t2_off	# line 468
+cdrafts-split/GprocT2Trh.ec	defined-op:b63fb90fb4ad	t2_adT	# line 472
+cdrafts-split/GprocT2Trh.ec	defined-op:ff82021a75ca	t2_pre	# line 475
+cdrafts-split/GprocT2Trh.ec	defined-op:b32b3ff6d8d1	t2_entry_lvs	# line 485
+cdrafts-split/GprocT2Trh.ec	defined-op:ed88cc2a7955	t2_entry_sk	# line 490
+cdrafts-split/GprocT2Trh.ec	defined-op:91516bf66391	t2_nodeval	# line 494
+cdrafts-split/GprocT2Trh.ec	defined-op:907c84ff41ba	t2_memA	# line 500
+cdrafts-split/GprocT2Trh.ec	defined-op:b33e7a6d4d8e	t2_memB	# line 506
+cdrafts-split/GprocT2Trh.ec	defined-op:547c8db52129	t2_memC	# line 511
+cdrafts-split/GprocT2Trh.ec	defined-op:07d92a65977a	t2_memD	# line 516
+cdrafts-split/GprocT2Trh.ec	defined-op:9510a3368bfb	t2_memE	# line 521
+cdrafts-split/GprocT2Trh.ec	defined-op:19dea81bf848	t2_nthA	# line 524
+cdrafts-split/GprocT2Trh.ec	defined-op:0a68f4844663	t2_nthB	# line 532
+cdrafts-split/GprocT2Trh.ec	defined-op:c6f405ea2920	t2_nthC	# line 539
+cdrafts-split/GprocT2Trh.ec	defined-op:517fd26a2b17	t2_nthD	# line 545
+cdrafts-split/GprocT2Trh.ec	defined-op:2834f8b56649	t2_nthE	# line 551
+cdrafts-split/GprocT2Trh.ec	defined-op:d6d366ca5243	t2_ndst	# line 557
+cdrafts-split/GprocT2Trh.ec	defined-op:bdbffcb70735	t2_ndscl	# line 563
+cdrafts-split/GprocT2Trh.ec	defined-op:c52673373a48	t2_good	# line 585
+cdrafts-split/GprocT2Trh.ec	module:bcad9d5cc571	R_TRH_Gproc	# line 49
+cdrafts-split/GprocT3Trco.ec	defined-op:ae5b46424e62	adzf	# line 201
+cdrafts-split/GprocT3Trco.ec	module:cdad86973966	R_TRCO_Gproc	# line 28
 cdrafts-split/GprocVI.ec	module:ec464b08d8c1	GprocTreeVI	# line 83
 cdrafts-split/GprocVI.ec	module:a6223d3eddd2	GprocKgVI	# line 222
 cdrafts-split/GprocVI.ec	module:a2778c94915d	EUF_CMA_Gproc_VI	# line 287
@@ -1169,7 +1445,17 @@ cdrafts-split/Grind.ec	abstract-type:ec5fe8295274	out_t	# line 57
 cdrafts-split/Grind.ec	abstract-type:8b0a31e00a4a	cntr	# line 61
 cdrafts-split/Grind.ec	abstract-op:31dbbb2bb00f	f	# line 66
 cdrafts-split/Grind.ec	abstract-op:ff0bfc05749d	prop	# line 69
+cdrafts-split/Grind.ec	defined-op:74a7d5c09a00	good_ctrs	# line 74
+cdrafts-split/Grind.ec	defined-op:108a2bb6ab1c	grind	# line 79
+cdrafts-split/Grind.ec	defined-op:dc7a0a5f1b57	grind_fails	# line 83
 cdrafts-split/Grind.ec	module:e396d13ca29f	GrindSearch	# line 136
+cdrafts-split/RtopCSoundness.ec	defined-op:369bb2533fcf	good_fors	# line 135
+cdrafts-split/RtopCSoundness.ec	defined-op:50751bdb6739	fidx	# line 696
+cdrafts-split/RtopCSoundness.ec	defined-op:297c7d482011	tree_leaves	# line 699
+cdrafts-split/RtopCSoundness.ec	defined-op:d052c3fa6e42	tree_root	# line 706
+cdrafts-split/RtopCSoundness.ec	defined-op:279cb82dfa78	rt_cf	# line 709
+cdrafts-split/RtopCSoundness.ec	defined-op:d3e98d5de1dc	sig_cf_elem	# line 712
+cdrafts-split/RtopCSoundness.ec	defined-op:b8f3172d0930	ap_cf_elem	# line 721
 cdrafts-split/RtopCSoundness.ec	module:5c3b1e4c0548	R_top_C	# line 138
 cdrafts-split/RtopCSoundness.ec	module:9f2841a88434	O_CMA	# line 147
 cdrafts-split/RtopCSoundness.ec	module:5585c3e7b845	EUF_CMA_SPHINCSPLUSTWC_NPRFNPRF_V	# line 326
@@ -1204,6 +1490,7 @@ cdrafts-split/STCR_C.ec	abstract-type:ec5fe8295274	out_t	# line 43
 cdrafts-split/STCR_C.ec	abstract-op:7697903cc134	ThC	# line 46
 cdrafts-split/STCR_C.ec	abstract-op:e3ec90463139	predC	# line 49
 cdrafts-split/STCR_C.ec	abstract-op:3ccca65f9a8a	dpp	# line 52
+cdrafts-split/STCR_C.ec	defined-const:cb5c8b7994b2	p_stcr	# line 56
 cdrafts-split/STCR_C.ec	module-type:aa3bef874f1c	Oracle_STCRC	# line 109
 cdrafts-split/STCR_C.ec	module:39cf1159d58a	O_STCRC_Default	# line 118
 cdrafts-split/STCR_C.ec	module-type:d166f7f693f3	Adv_STCRC	# line 173
@@ -1218,6 +1505,11 @@ cdrafts-split/SphincsC10CapstoneWired.ec	operand:c31c3d0ec42d	C.dmkey	# line 448
 cdrafts-split/SphincsC10CapstoneWired.ec	operand:a83762d30dd5	C.mco	# line 448
 cdrafts-split/SphincsC10CapstoneWired.ec	operand:2d7d4786e261	C.g	# line 448
 cdrafts-split/SphincsC10CapstoneWired.ec	clone-discharge:list:dmkey_ll,eqiks_g,ge1_a,ge1_k,neqisvs_g,rng_g,size_g,uniq_g|realize:dmkey_ll,eqiks_g,ge1_a,ge1_k,neqisvs_g,rng_g,size_g,uniq_g	C	# line 448
+cdrafts-split/SphincsC10Content.ec	defined-op:2dd12d49c72f	embg	# line 421
+cdrafts-split/SphincsC10Content.ec	defined-op:c2414c77f6f8	dmsgWOTS	# line 528
+cdrafts-split/WOTS_C_Interactive.ec	defined-op:ac1e7ee583ff	dfC0	# line 407
+cdrafts-split/WOTS_C_Interactive.ec	defined-op:d14b19e63967	dfC1	# line 408
+cdrafts-split/WOTS_C_Interactive.ec	defined-op:9f5e6022d348	projq	# line 1028
 cdrafts-split/WOTS_C_Interactive.ec	module-type:4eb472273b12	Adv_ISTCRC	# line 302
 cdrafts-split/WOTS_C_Interactive.ec	module:a89fc7c00930	S_TCR_C_Int	# line 307
 cdrafts-split/WOTS_C_Interactive.ec	module:0395130c2856	A	# line 308
@@ -1234,6 +1526,22 @@ cdrafts-split/WOTS_C_Interactive.ec	module:cab209dad195	AA	# line 1800
 cdrafts-split/WOTS_C_Interactive.ec	module:47a6eba766a0	O_THFC_MA	# line 2464
 cdrafts-split/WOTS_C_Interactive.ec	module:818530f18eec	S_TCR_C_Int_MA	# line 2497
 cdrafts-split/WOTS_C_Interactive.ec	module:1a393876430d	A	# line 2498
+cdrafts-split/WOTS_C_Multi.ec	defined-type:5afce739f30a	qC	# line 80
+cdrafts-split/WOTS_C_Multi.ec	defined-type:0abc23dd586f	qTW	# line 86
+cdrafts-split/WOTS_C_Multi.ec	module-type:a8554dec8876	Adv_MnaCMA_WOTSC	# line 92
+cdrafts-split/WOTS_C_Multi.ec	module:1e54f0801ee5	M_EUF_NACMA_WOTSC_L	# line 98
+cdrafts-split/WOTS_C_Multi.ec	module:99fb146710d3	AA	# line 99
+cdrafts-split/WOTS_C_Multi.ec	module-type:19e69b4c331a	Adv_MnaCMA_WOTSTW	# line 157
+cdrafts-split/WOTS_C_Multi.ec	module:d9b7a076157d	M_EUF_NACMA_WOTSTW_L	# line 163
+cdrafts-split/WOTS_C_Multi.ec	module:ad102dc6d1ad	AA	# line 164
+cdrafts-split/WOTS_C_Multi.ec	module:71bd977dea4e	R_multi_STCRC	# line 239
+cdrafts-split/WOTS_C_Multi.ec	module:fcf3179dd841	AA	# line 241
+cdrafts-split/WOTS_C_Multi.ec	module:17413eb31712	R_multi_WOTSTW	# line 300
+cdrafts-split/WOTS_C_Multi.ec	module:b60c9a26f35d	AA	# line 302
+cdrafts-split/WOTS_C_Multi.ec	module:db54f499c6a6	GAME1_MULTI	# line 373
+cdrafts-split/WOTS_C_Multi.ec	module:2628b564683e	AA	# line 374
+cdrafts-split/WOTS_C_Multi.ec	module:cf05f7d16d25	G0_MULTI	# line 426
+cdrafts-split/WOTS_C_Multi.ec	module:f41e35ee1cdf	AA	# line 427
 cdrafts-split/WOTS_C_Real.ec	refined-const:720f257d2456	ge0_ptgts	# line 340
 cdrafts-split/WOTS_C_Real.ec	operand:61612567f25d	STCRC_WC.pp_t	# line 345
 cdrafts-split/WOTS_C_Real.ec	operand:9ae7ae045a8e	STCRC_WC.tw_t	# line 345
@@ -1245,9 +1553,19 @@ cdrafts-split/WOTS_C_Real.ec	operand:818189939749	STCRC_WC.predC	# line 345
 cdrafts-split/WOTS_C_Real.ec	operand:a2ba6bb81603	STCRC_WC.dpp	# line 345
 cdrafts-split/WOTS_C_Real.ec	operand:b2418f94f880	STCRC_WC.p_stcr	# line 345
 cdrafts-split/WOTS_C_Real.ec	clone-discharge:list:dpp_ll,ge0_pstcr|realize:dpp_ll,ge0_pstcr	STCRC_WC	# line 345
+cdrafts-split/WOTS_C_Real.ec	defined-op:6077a96cf01a	c	# line 41
 cdrafts-split/WOTS_C_Real.ec	abstract-type:8b0a31e00a4a	cntr	# line 48
+cdrafts-split/WOTS_C_Real.ec	defined-op:22a6cabc5a01	emb_tw	# line 80
 cdrafts-split/WOTS_C_Real.ec	abstract-op:f718c0661391	emb_in	# line 164
+cdrafts-split/WOTS_C_Real.ec	defined-op:bf3dbe347db4	emb_in0	# line 194
+cdrafts-split/WOTS_C_Real.ec	defined-op:0b699d75c914	emb_in1	# line 195
+cdrafts-split/WOTS_C_Real.ec	defined-op:8e592d26ee68	ThC	# line 214
+cdrafts-split/WOTS_C_Real.ec	defined-op:ed1d5c7f137b	cw_sum	# line 252
+cdrafts-split/WOTS_C_Real.ec	defined-op:c1cd383d3435	predC	# line 279
+cdrafts-split/WOTS_C_Real.ec	defined-op:52d308813ba4	TargetSumReachable	# line 286
+cdrafts-split/WOTS_C_Real.ec	defined-const:8cd1f778f243	p_tgts	# line 340
 cdrafts-split/WOTS_C_Real.ec	abstract-op:f9542be91ac8	encode_msgWOTS_C	# line 377
+cdrafts-split/WOTS_C_Real.ec	defined-op:75a1f84afa2f	grindC	# line 380
 cdrafts-split/WOTS_C_Reduction.ec	module-type:c07b516ee250	Adv_EUFNACMA_WOTSC	# line 32
 cdrafts-split/WOTS_C_Reduction.ec	module:c3da2ecae1f2	EUF_NACMA_WOTSC	# line 37
 cdrafts-split/WOTS_C_Reduction.ec	module:c1ea25a2aebb	AA	# line 38
@@ -1268,10 +1586,19 @@ cdrafts-split/WOTS_C_Scheme.ec	module-type:0c4deb7cfdec	Adv_MEUFGCMA_WOTSC	# lin
 cdrafts-split/WOTS_C_Scheme.ec	module:6cf450ad3eeb	O_MEUFGCMA_WOTSC_Default	# line 146
 cdrafts-split/WOTS_C_Scheme.ec	module:ab8159cf959c	M_EUF_GCMA_WOTSC_NPRF	# line 183
 cdrafts-split/WOTS_C_Scheme.ec	module:c65b90c38354	A	# line 184
+cdrafts-split/XMSSMT_C_Scheme.ec	defined-type:a6e13e430231	sigFLSLXMSSMTTWC	# line 69
 cdrafts-split/XMSSMT_C_Scheme.ec	module:c7f31312e4c7	FL_SL_XMSS_MT_C_ES	# line 71
 cdrafts-split/XmssmtCC_All.ec	operand:4700c5ff2a14	DListSampleC.t	# line 2428
 cdrafts-split/XmssmtCC_All.ec	operand:5d70b641dcf4	DListSampleC.d	# line 2428
 cdrafts-split/XmssmtCC_All.ec	clone-discharge:star	DListSampleC	# line 2428
+cdrafts-split/XmssmtCC_All.ec	defined-op:02b1e4856f02	ht_chad	# line 5198
+cdrafts-split/XmssmtCC_All.ec	defined-op:0a020bd7a9e3	ht_root	# line 5201
+cdrafts-split/XmssmtCC_All.ec	defined-op:56487a93180d	ht_cnt	# line 5204
+cdrafts-split/XmssmtCC_All.ec	defined-op:35c353cd1e6a	ht_sigc	# line 5208
+cdrafts-split/XmssmtCC_All.ec	defined-op:1da56ec1f6e0	ht_sigc_at	# line 5242
+cdrafts-split/XmssmtCC_All.ec	defined-op:a9a5552c448a	mem4	# line 9097
+cdrafts-split/XmssmtCC_All.ec	defined-op:33d3c094629a	in_thfc4	# line 9100
+cdrafts-split/XmssmtCC_All.ec	defined-type:daba08868f84	sigSPHINCSPLUSTWC	# line 9554
 cdrafts-split/XmssmtCC_All.ec	module:29a9b21faf30	FL_SL_XMSS_MT_C_ES_NPRF	# line 190
 cdrafts-split/XmssmtCC_All.ec	module-type:c615be208350	Adv_EUFNAGCMA_FLSLXMSSMTTWCESNPRF	# line 316
 cdrafts-split/XmssmtCC_All.ec	module:4ed527928915	EUF_NAGCMA_FLSLXMSSMTTWCESNPRF	# line 322
@@ -1297,88 +1624,3 @@ cdrafts-split/XmssmtCC_All.ec	module:56b8ab614858	R_top_OC	# line 9916
 cdrafts-split/XmssmtCC_All.ec	module:1404b4722204	O_CMA	# line 9918
 cdrafts-split/XmssmtCC_All.ec	module:db55adac56dc	F_leak	# line 9937
 cdrafts-split/XmssmtCC_All.ec	module:083f75b2c62f	F_triv	# line 10009
-# 2026-08-10.  16 rows ADDED by the PROMOTION of T1/T2/T3 into the closure
-#   (cdrafts-split/GprocT1Opre|GprocT2Trh|GprocT3Trco|GprocQBound.ec).  ALL 16 are
-#   module:/operand:/clone-discharge: MEANING-carriers -- there is NOT ONE new
-#   admit, axiom or declare-axiom row.  That is the precise sense in which the
-#   promotion grounds the Q bound without growing the assumption set: the three
-#   RHS terms are still hardness assumptions, they are merely NAMED now.
-cdrafts-split/GprocT1Opre.ec	operand:efa13d91c0ca	EI_OPRE.t	# line 284
-cdrafts-split/GprocT1Opre.ec	operand:4c4666a82f97	EI_OPRE.c	# line 284
-cdrafts-split/GprocT1Opre.ec	operand:4c4666a82f97	EI_OPRE.step	# line 284
-cdrafts-split/GprocT1Opre.ec	clone-discharge:star|realize:c_gt0,step_gt0	EI_OPRE	# line 284
-cdrafts-split/GprocT1Opre.ec	module:374a264de6a3	R_OPRE_Gproc	# line 122
-cdrafts-split/GprocT1Opre.ec	module:1c05fefe6313	O_CMA	# line 133
-cdrafts-split/GprocT1Opre.ec	module:b416f909ea4b	O_OPRE_LoopBody	# line 293
-cdrafts-split/GprocT1Opre.ec	module:3c1bd5a75aa5	O_OPRE_CL	# line 318
-cdrafts-split/GprocT1Opre.ec	module:2978ce801e6c	O_OPRE_LoopBodyNest1	# line 365
-cdrafts-split/GprocT1Opre.ec	module:0b9c65bdbbcf	O_OPRE_CL2	# line 388
-cdrafts-split/GprocT1Opre.ec	module:1632c3d9e6b7	O_OPRE_LoopBodyNest2	# line 444
-cdrafts-split/GprocT1Opre.ec	module:9c8cea7ca7a4	O_OPRE_CL3	# line 469
-cdrafts-split/GprocT1Opre.ec	module:29ffcc5edab9	O_OPRE_ILN	# line 531
-cdrafts-split/GprocT1Opre.ec	module:c60ed29332ed	SampGame	# line 1144
-cdrafts-split/GprocT2Trh.ec	module:bcad9d5cc571	R_TRH_Gproc	# line 49
-cdrafts-split/GprocT3Trco.ec	module:cdad86973966	R_TRCO_Gproc	# line 28
-# 2026-08-11.  +1 row: the WitnessF adversary in GprocQWired.ec.  MEANING-class
-#   (module:), not ledger -- and this time say it precisely, because the
-#   2026-08-10 promotion note got exactly this wrong: one of ITS 16 rows was a
-#   ledger-class clone-discharge (ledger 239 -> 240), which that note called a
-#   meaning-carrier.  See the correction there.
-cdrafts-split/GprocQWired.ec	module:a32add79d02c	WitnessF	# line 197
-# 2026-08-11 (second).  +1 row from PROMOTING cdrafts-split/DarkSide.ec into the
-#   closure.  It is a LEDGER-class row -- refined-const -- and saying so up front
-#   this time, because the 2026-08-10 promotion note got exactly this wrong.
-#   The assumption is ge1_t: `const t : { int | 1 <= t }`, a FORS tree has at
-#   least one leaf.  LEDGER 240 -> 241.  It is benign and trivially true at C10
-#   (t = 2^11 = 2048), but it is an assumption row and is counted as one.
-cdrafts-split/DarkSide.ec	refined-const:038162b8e18e	ge1_t	# line 82
-# 2026-08-11 (third).  +2 rows from cdrafts-split/DarkSideC10.ec, which CLONES
-#   the DarkSide theory at SPHINCS_PLUS.t.  ONE OF THE TWO IS LEDGER-CLASS and
-#   that is stated before the run, not discovered after it:
-#     clone-discharge:star|realize:ge1_t  DS_C10   <- LEDGER (241 -> 242)
-#     operand:...                         DS_C10.t <- bindings
-#   The clone-discharge row REALIZES its obligation (ge1_t, from the proven
-#   ge2_t at SPHINCS_PLUS.ec:180), so no axiom is installed -- but it is counted
-#   in the ledger by cert_gate_split.sh:503 and is reported as such.
-cdrafts-split/DarkSideC10.ec	operand:42a30d8df381	DS_C10.t	# line 32
-cdrafts-split/DarkSideC10.ec	clone-discharge:star|realize:ge1_t	DS_C10	# line 32
-#
-# 2026-08-18.  +14 ROWS, ALL MEANING, LEDGER UNCHANGED AT 242.
-#   cdrafts-split/WOTS_C_Multi.ec (Thm D.1, the MULTI-instance WOTS+C
-#   d-EU-naCMA lift) admitted to the closure, so the gate finally builds the
-#   lemma that justifies the SHAPE of the `c <= p_tgts` premise carried by 11
-#   closure members in 48 places: D1_reduce, "the reduction places one S-TCR(+C)
-#   target per committed query".  That file was in NEITHER closure-c10-split.txt
-#   NOR any cert-*.tsv, so nothing enforced it.
-#   ledger 242->242, parameters 217->217, bindings 345->345, meaning 375->389,
-#   TOTAL 1179->1193 (keys 1099->1113), added=14 removed=0, CONE_FILES 43->44.
-#   NOT ONE LEDGER-CLASS ROW: no admit, axiom, declare-axiom, refined-const,
-#   clone-discharge, op-annotation or clone-obligation.  That is the fact that
-#   made this re-baseline defensible and it was checked BEFORE it was performed.
-#   The file's own ledger is zero -- scratch/sweep.py reports admit=0 axiom=0
-#   sorry=0 (comment-stripped, word-boundary), with FORS_C_TreePort.ec reporting
-#   1 as a positive control, so the tool discriminates.
-#   The 14 rows are EXHAUSTIVELY the file's own declarations: 8 top-level
-#   (2 module type + 6 module) and 6 inner `module AA = A(OC)` at :99 :164 :241
-#   :302 :374 :427.  Predicted "13 rows, five AA" before the run; it is 14 with
-#   SIX AA.  The miscount was in the enumeration, not in the class -- nothing
-#   unexplained appeared -- and it is recorded rather than quietly corrected.
-#   THE SUMMARY LINE AT THE TOP OF THIS FILE WAS STALE and is corrected in the
-#   same commit: it still carried run 26's LEDGER=239 PARAMETERS=217
-#   BINDINGS=341 MEANING=362 TOTAL=1159 through three later re-baselines,
-#   because no script reads it (PHASE 2 strips ^# before comparing).  A number
-#   nothing checks is exactly the one that drifts.
-cdrafts-split/WOTS_C_Multi.ec	module-type:a8554dec8876	Adv_MnaCMA_WOTSC	# line 92
-cdrafts-split/WOTS_C_Multi.ec	module:1e54f0801ee5	M_EUF_NACMA_WOTSC_L	# line 98
-cdrafts-split/WOTS_C_Multi.ec	module:99fb146710d3	AA	# line 99
-cdrafts-split/WOTS_C_Multi.ec	module-type:19e69b4c331a	Adv_MnaCMA_WOTSTW	# line 157
-cdrafts-split/WOTS_C_Multi.ec	module:d9b7a076157d	M_EUF_NACMA_WOTSTW_L	# line 163
-cdrafts-split/WOTS_C_Multi.ec	module:ad102dc6d1ad	AA	# line 164
-cdrafts-split/WOTS_C_Multi.ec	module:71bd977dea4e	R_multi_STCRC	# line 239
-cdrafts-split/WOTS_C_Multi.ec	module:fcf3179dd841	AA	# line 241
-cdrafts-split/WOTS_C_Multi.ec	module:17413eb31712	R_multi_WOTSTW	# line 300
-cdrafts-split/WOTS_C_Multi.ec	module:b60c9a26f35d	AA	# line 302
-cdrafts-split/WOTS_C_Multi.ec	module:db54f499c6a6	GAME1_MULTI	# line 373
-cdrafts-split/WOTS_C_Multi.ec	module:2628b564683e	AA	# line 374
-cdrafts-split/WOTS_C_Multi.ec	module:cf05f7d16d25	G0_MULTI	# line 426
-cdrafts-split/WOTS_C_Multi.ec	module:f41e35ee1cdf	AA	# line 427

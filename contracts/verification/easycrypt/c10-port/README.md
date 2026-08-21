@@ -1552,3 +1552,61 @@ trustworthy ones. The run is now instrumented, so future comparisons are measure
 **Residual noted, not chased:** that +123 s concentration means goals in `GprocT1Opre`
 *other* than the one just made deterministic remain budget-sensitive under the cli driver.
 Not load-bearing — the leg passes at either budget.
+
+### UPDATE 2026-08-22 — the bodied-definition hole is closed across all 45 cone files
+
+`cert_cone.py` **skipped** any `op`/`const`/`type` whose declaration had a body ("a
+definition, not a parameter"); PHASE 1h enumerates only **statements**; and a statement
+naming a definition digests only the **token**. So a bodied definition's logical content
+was watched by nothing. Measured: redefining `FORS_C.ec::predC_fors` — the FORS+C gate
+predicate — to `true` left the carrying lemma's digest identical and coverage green.
+
+**Fix:** bodied definitions now emit `defined-<kind>:<body-digest>` rows — the idiom the
+census already uses for modules, with **the digest in the KIND field**, so a body edit is
+simultaneously a removed row and an added row (PHASE 2 fatal on both) and a new definition
+is an added row. That closes both directions with no per-declaration manifest, and unlike
+a pin it covers the 90 declarations `stmt_digest.py` cannot resolve. `abbrev` and `pred`
+joined the scanner alternation — neither was in it at all, which is why `pred` bodies were
+invisible.
+
+```
+GATE: GREEN (RC=0)   identity 09ad5233 -> 6b6cca95   __WALL_S=4728
+  cone: keys 1534=1534 | ROWS 1613=1613 | added=0 removed=0
+  ledger=242  parameters=215  bindings=345  meaning=389  definitions=422  total=1613
+  34/34 compiled · 1068/1068 pins · coverage 984/984 · quarantine intact
+```
+
+`ledger` stays **242**: a definition is *content*, not an assumption, so `DEFINITIONS` is a
+separate fifth class. Folding 422 rows into the assumption count would inflate the headline
+to 664 and make the honest number unreadable.
+
+**Two regressions caught by adversarial review before the first gate run**, the first of
+which would have made this change *actively harmful*:
+
+1. The keyword→name separator was `\s*` — **zero whitespace** — so `M.F.predC_fors` parsed
+   as `pred C_fors`, `O.opened(i)` as `op ened`. **60 artefacts.** Invisible while bodied
+   matches were dropped; emitting rows would have made them live, and PHASE 2 is fatal on
+   additions *and* removals — so ordinary **tactic edits** would red-light the gate naming
+   declarations that don't exist. Tightened to `\s+`. This bug was already producing **two
+   bogus rows in the committed baseline**, hence PARAMETERS 217 → 215.
+2. Clone with-clause operands written `name <= value` have no `<-` in their head, so the
+   `<=` supplied the `=` and they were classified as definitions — with spans running to
+   the *clone's* terminating dot, swallowing later bindings and the `proof` clause. 27 in
+   this cone. Now suppressed; they're already `operand:` rows.
+
+Controls 3/3 in both directions: `predC_fors → true` moves a row; a new definition **adds**
+a row (forced, not merely caught); internal reformatting moves **nothing**.
+
+#### And a diagnosis of mine, corrected in the same change
+
+I aborted a 4h20m run and blamed `ECFLAGS` on the cli leg plus an "unrepresentative A/B
+sample". **Both false.** The 87-minute run (`1414c4c:291`) had the *same* cli flag and
+finished all 38 files; the instrumented cost of that flag is 5228 vs 4728 = **~8 minutes**,
+consistent with the original A/B. So the A/B was fine and the sampling error I invented for
+it never happened.
+
+**The aborted run's slowness is unexplained, and I am not naming a cause.** I have named
+four in this arc — cli-leg non-determinism, gate-load contention, a marginal default budget
+(that one held), and sampling — and three were wrong. The change stands on the ~8 minute
+saving; it was not worth aborting a run over, and the disproving receipt was already
+sitting in `scratch/`.
