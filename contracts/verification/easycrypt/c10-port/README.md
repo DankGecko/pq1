@@ -1445,3 +1445,59 @@ reviewed decision.
 different flags from the treatment arm is not a control. The receipt now commits the
 budget, so "was that a proof failure or a budget failure?" is answerable from the
 manifest instead of from someone's memory of which flags they used.
+
+### UPDATE 2026-08-21 — the better fix, taken: the marginal `smt` call is now a named rewrite
+
+`GprocT1Opre.ec:1427`, inside `lemma find_fresh`:
+
+```diff
+-  by smt(allP hasP).
++  by rewrite -/(predC _) has_predC.
+```
+
+A **proof-only** edit. That `smt` call discharged the `all`/`has` duality **by search** and
+was marginal at the toolchain default; `has_predC` (`List.ec:568`) states exactly that
+duality, so there is now **no search for a budget to run out of**.
+
+**Measured at the default budget** — deliberately no `-timeout`, because the point is that
+the file should no longer *depend* on the budget:
+
+| configuration | reliability | wall |
+|---|---|---|
+| `smt`, default | **7/10** | 104–155s |
+| `smt`, `-timeout 60` | 8/8 | ~300s |
+| `has_predC` rewrite, default | **5/5** | **103–136s** |
+
+Reliable **and** ~3× faster than funding the search.
+
+**Proof-only — proven, and the gate agrees.** `find_fresh`'s statement digest is
+`2726bead2cc6cbb00819af0d6de19c2b` before the edit, after it, and in the GREEN receipt
+(`OK statement pinned: cdrafts-split/GprocT1Opre.ec::find_fresh`). With 1068 statement
+pins live, a digest move there would have meant the *theorem* changed, not its proof.
+
+**Negative control run before adopting it** (`scratch/_dupprobe_ctl.ec`): the same tactic
+with the hypothesis `hna` **deleted** fails — "cannot close goals", `RC=1`, no `.eco`. A
+tactic that compiles is not the same as a tactic that uses its hypothesis, which is
+exactly how a control of mine passed vacuously earlier in this arc.
+
+```
+GATE: GREEN (RC=0)   identity 4af03fe0 -> e1bcca4d
+  OK GprocT1Opre (compile)  ·  OK GprocT1Opre (cli, 880 cmds)  ·  CLI_DISAGREEMENTS=0
+  1068/1068 pins · coverage 984/984 across 45 cone files · quarantine intact
+  cone added=0 · ledger=242 · inputs unchanged across the run
+```
+
+#### And my "cost ~nil" claim for `EC_TIMEOUT` was wrong in two places
+
+Both from generalising a measurement taken on **one file**. `ECFLAGS` was applied to:
+
+- the **PHASE 1e cli leg**, which runs 38 files and inherits the larger budget for any
+  marginal goal anywhere in that set; and
+- **`cert_gate_split.sh:703`, the PHASE 3 control runner** — where most controls are
+  **MUST-FAIL** and a larger budget is actively counterproductive, since it only makes
+  them take longer to fail.
+
+This run took **~110 minutes** against ~75 for previous ones. `EC_TIMEOUT=60` is kept —
+committing the budget is independently valuable, and it is no longer load-bearing for this
+file — but the honest follow-up is to **scope `ECFLAGS` to the compile driver and measure
+the difference**, rather than assert a cost a third time.

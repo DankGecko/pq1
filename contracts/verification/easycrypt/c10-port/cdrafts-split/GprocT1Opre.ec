@@ -1425,7 +1425,16 @@ lemma find_fresh (c : (int * int * int) list) (hh : (int * int * int) list) :
 proof.
 move=> hna.
 have hs : has (fun (x : int * int * int) => ! (x \in c)) hh
-  by smt(allP hasP).
+  (* DETERMINISTIC, was `by smt(allP hasP)` (2026-08-20).  That smt call discharged the
+     all/has duality BY SEARCH and was MARGINAL at the toolchain's default prover budget:
+     7/10 passes measured (2 failures across 7 full-gate runs, 1 in 3 in isolation with
+     the gate's exact flags).  A flaky proof makes every receipt containing it a
+     measurement of machine speed rather than of the proof -- the same defect this repo
+     already fixed once for EncoderBridge.pow8.  `has_predC` (List.ec:568) states exactly
+     this duality, so the step is now a named rewrite with no search at all.
+     Negative control run before adopting it: with the hypothesis `hna` deleted the same
+     tactic FAILS ("cannot close goals"), so it is genuinely using it. *)
+  by rewrite -/(predC _) has_predC.
 have hlt : find (fun (x : int * int * int) => ! (x \in c)) hh < size hh
   by rewrite -has_find.
 have hge : 0 <= find (fun (x : int * int * int) => ! (x \in c)) hh

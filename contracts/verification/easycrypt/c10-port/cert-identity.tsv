@@ -524,6 +524,29 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-20 (fifth).  split 4af03fe0f00f1f6520165012c58753ea -> e1bcca4dc6498db569bafb184889b449.
+#   THE BETTER FIX, TAKEN: cdrafts-split/GprocT1Opre.ec:1427 `by smt(allP hasP)` ->
+#   `by rewrite -/(predC _) has_predC.`  A PROOF-ONLY edit inside a certified file.
+#   WHY: that smt call discharged the all/has duality BY SEARCH and was MARGINAL at the
+#   toolchain default -- 7/10 passes measured.  `has_predC` (List.ec:568) states exactly
+#   the duality, so there is now NO SEARCH for a budget to run out of.
+#   MEASURED AT THE DEFAULT BUDGET (deliberately no -timeout -- the point is that the file
+#   should no longer DEPEND on the budget):
+#       smt, default          7/10 pass   104-155s
+#       smt, -timeout 60      8/8  pass   ~300s
+#       rewrite, default      5/5  pass   103-136s
+#   So it is both reliable AND ~3x faster than funding the search.
+#   PROOF-ONLY, PROVEN NOT ASSERTED: the statement digest of `find_fresh` is UNCHANGED
+#   (2726bead2cc6cbb00819af0d6de19c2b before and after).  With 1068 statement pins live,
+#   a digest move here would have meant I changed the THEOREM, not its proof.
+#   NEGATIVE CONTROL RUN BEFORE ADOPTING IT (scratch/_dupprobe_ctl.ec): the same tactic
+#   with the hypothesis `hna` DELETED FAILS ("cannot close goals", RC=1, no .eco).  A
+#   tactic that compiles is not the same as a tactic that uses its hypothesis.
+#   EC_TIMEOUT=60 IS KEPT, and is no longer load-bearing for this file.  It stays because
+#   committing the budget is independently valuable: without it the gate runs at whatever
+#   the toolchain default happens to be, and "proof failure or budget failure?" becomes
+#   unanswerable from the receipt.  Its cost is now ~nil, since -timeout is per prover
+#   call and this file no longer struggles.
 # 2026-08-20 (fourth).  split 3986daa80bd31722e051b65ba8f67251 -> 4af03fe0f00f1f6520165012c58753ea.
 #   THE PROVER BUDGET IS NOW A COMMITTED CONSTANT: EC_TIMEOUT=60, applied to every
 #   certified-file `easycrypt compile` AND to the PHASE 1e `cli` leg.  Before this the
@@ -807,5 +830,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	4af03fe0f00f1f6520165012c58753ea
+split	e1bcca4dc6498db569bafb184889b449
 fork	7ab20d2ab0ba2c1f3942408a193b4836
