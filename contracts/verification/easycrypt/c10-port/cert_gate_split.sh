@@ -274,11 +274,20 @@ cli_run=0
 cli_one() { # $1 = label, $2..= easycrypt cli args, stdin = the file
   local lbl="$1"; shift
   local out d pr
-  # SAME COMMITTED BUDGET AS THE COMPILE DRIVER.  The first observed failure of
-  # GprocT1Opre was on THIS leg (473 diagnostics), and leaving the two drivers on
-  # different budgets would mean a "driver disagreement" could be nothing but a
-  # budget disagreement -- which is precisely the confusion the comment above says
-  # this phase already caused once with -iterate.
+  # SAME COMMITTED BUDGET AS THE COMPILE DRIVER -- KEPT, AND THE COST IS MEASURED.
+  # The first observed failure of GprocT1Opre was on THIS leg (473 diagnostics), and
+  # leaving the two drivers on different budgets would mean a reported "driver
+  # disagreement" could be nothing but a BUDGET disagreement -- precisely the
+  # confusion the comment above records this phase already causing once, with
+  # -iterate.  That is a correctness argument, so it needs a cost to weigh against:
+  # controlled A/B on four closure members (ecflags_ab.sh) gives default 125 s vs
+  # -timeout 60 248 s, and the ENTIRE +123 s sits on GprocT1Opre (119->242 s); the
+  # other three are unchanged to within noise (two are marginally FASTER).  ~2 min
+  # on the whole leg buys driver comparability, so it stays.
+  # NOTE for whoever reads this next: that residual concentration means goals in
+  # GprocT1Opre OTHER than the one just made deterministic are still budget-
+  # sensitive under the cli driver.  Not chased here; not load-bearing, since the
+  # leg passes at either budget.
   out=$(easycrypt cli -iterate $ECFLAGS "$@" 2>&1 | tr '\r' '\n')
   d=$(printf '%s\n' "$out" | grep -c '^<tty>:' || true)
   pr=$(printf '%s\n' "$out" | grep -c '^\[[0-9]*|' || true)
@@ -705,7 +714,18 @@ while IFS=$'\t' read -r path kind reason; do
     echo "FAIL control $path: MUST-FAIL with no declared reason (would accept any failure)"; fail=$((fail+1)); continue
   fi
   ran="$ran $path"
-  out=$(easycrypt compile $ECFLAGS $INC "$path" 2>&1); rc=$?
+  # NO $ECFLAGS HERE -- MEASURED, NOT ASSUMED.  Four of the five controls are
+  # MUST-FAIL: they exist to be REJECTED, so a larger per-prover-call budget cannot
+  # make them more correct, it can only make them take longer to fail.  Controlled
+  # A/B on this exact invocation (experiments/wots-badenc/ecflags_ab.sh, alternating
+  # arms on one machine, 2 reps):
+  #     default      361 s        -timeout 60   7830 s      = 21.7x slower
+  #     vac_probe_full   55 s ->  1271 s ; probe_len46   38 s -> 687 s
+  #     c10_spec_vacuity 41 s ->  1107 s ; tier0_degen   46 s -> 750 s
+  #     (C10SpecControls, the sole MUST-PASS, is unaffected: 159 ms -> 151 ms)
+  # I had applied ECFLAGS here and asserted the cost was "~nil" from a measurement
+  # taken on ONE FILE in a different phase.  It was ~2 HOURS.
+  out=$(easycrypt compile $INC "$path" 2>&1); rc=$?
   msg=$(printf '%s' "$out" | tr '\r' '\n' | grep -a '^\[critical\]' | head -1)
   if [ $rc -eq 0 ]; then
     if [ "$kind" = MUST-PASS ]; then echo "OK   control $path (MUST-PASS)"

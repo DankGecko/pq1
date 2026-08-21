@@ -1501,3 +1501,54 @@ This run took **~110 minutes** against ~75 for previous ones. `EC_TIMEOUT=60` is
 committing the budget is independently valuable, and it is no longer load-bearing for this
 file — but the honest follow-up is to **scope `ECFLAGS` to the compile driver and measure
 the difference**, rather than assert a cost a third time.
+
+### UPDATE 2026-08-21 (later) — `ECFLAGS` scoped, and this time the cost is measured
+
+I had applied `EC_TIMEOUT=60` to the compile driver, the PHASE 1e cli leg **and** the
+PHASE 3 control runner, and claimed the cost was "~nil" — generalising from a measurement
+taken on **one file in a different phase**. That was the third cost/cause I asserted from
+a single-file measurement in this arc, and the third one that was wrong.
+
+**Controlled A/B** (`experiments/wots-badenc/ecflags_ab.sh`): same machine, same files,
+**alternating arms** so ambient drift is shared rather than loaded onto one side, arms
+differing in exactly one flag. Deliberately *not* a comparison of two full gate runs —
+that confounds the flag with everything else that differs between runs, which is the exact
+mistake behind the retracted "contention" diagnosis.
+
+| leg | default | `-timeout 60` | |
+|---|---|---|---|
+| **PHASE 3 controls** (2 reps) | 361 s | **7830 s** | **21.7×** → removed |
+| **PHASE 1e cli** (4 files) | 125 s | 248 s | +123 s → kept |
+
+```
+vac_probe_full    55s -> 1271s      probe_len46   38s -> 687s
+c10_spec_vacuity  41s -> 1107s      tier0_degen   46s -> 750s
+C10SpecControls (the sole MUST-PASS)      159ms -> 151ms
+```
+
+**The controls result is semantic, not just numeric.** Four of the five controls are
+**MUST-FAIL** — they exist to be *rejected*. A larger per-prover-call budget cannot make a
+must-fail control more correct; it can only make it slower to fail. That the one MUST-PASS
+control is unaffected is exactly what that diagnosis predicts.
+
+**The cli leg is a genuine trade, so it stays.** The entire +123 s sits on `GprocT1Opre`
+(119 → 242 s); the other three files are unchanged to within noise, two marginally
+*faster*. ~2 minutes buys driver comparability — without a shared budget, a reported
+"driver disagreement" could be nothing but a *budget* disagreement, which this phase
+already caused once with `-iterate`.
+
+```
+GATE: GREEN (RC=0)   identity e1bcca4d -> c474ae8e   __WALL_S=5228 (87 min)
+  34/34 compiled · 1068/1068 pins · coverage 984/984 across 45 cone files
+  quarantine intact · cone added=0 · ledger=242 · CLI_DISAGREEMENTS=0 · inputs unchanged
+```
+
+**On the wall-clock comparison, stated honestly:** `5228 s` is an *instrumented*
+measurement. The ~75 min (pre-`EC_TIMEOUT`) and ~110 min (`EC_TIMEOUT` everywhere)
+figures I quoted earlier were **estimated from log mtimes**, not instrumented — so "saved
+~23 min" would be an estimate against estimates. The A/B numbers above are the
+trustworthy ones. The run is now instrumented, so future comparisons are measurements.
+
+**Residual noted, not chased:** that +123 s concentration means goals in `GprocT1Opre`
+*other* than the one just made deterministic remain budget-sensitive under the cli driver.
+Not load-bearing — the leg passes at either budget.

@@ -524,6 +524,34 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-20/21 (sixth).  split e1bcca4dc6498db569bafb184889b449 -> c474ae8e703333aff3dbf68d9dd0e07b.
+#   ECFLAGS SCOPED, AND THIS TIME THE COST IS MEASURED RATHER THAN ASSERTED.  I had
+#   applied EC_TIMEOUT=60 to the compile driver, the PHASE 1e cli leg AND the PHASE 3
+#   control runner, and claimed the cost was "~nil" -- generalising from a measurement
+#   taken on ONE FILE in a DIFFERENT phase.  That was the third cost/cause I asserted
+#   from a single-file measurement in this arc, and the third one that was wrong.
+#   CONTROLLED A/B (experiments/wots-badenc/ecflags_ab.sh): same machine, same files,
+#   ALTERNATING arms so ambient drift is shared rather than loaded onto one side; the two
+#   arms differ in exactly one flag.  Deliberately NOT a comparison of two full gate runs,
+#   which would confound the flag with everything else that differs between runs -- the
+#   exact mistake that produced the retracted "contention" diagnosis.
+#     PHASE 3 CONTROLS (2 reps):     default  361 s   -timeout 60  7830 s   = 21.7x
+#         vac_probe_full   55 s -> 1271 s     probe_len46    38 s ->  687 s
+#         c10_spec_vacuity 41 s -> 1107 s     tier0_degen    46 s ->  750 s
+#         C10SpecControls (the sole MUST-PASS) unaffected: 159 ms -> 151 ms
+#       CAUSE, and it is semantic not just numeric: FOUR OF FIVE CONTROLS ARE MUST-FAIL.
+#       They exist to be REJECTED.  A larger per-prover-call budget cannot make a
+#       must-fail control more correct -- it can only make it take longer to fail.
+#       REMOVED from the control runner.
+#     PHASE 1e CLI (4 closure members): default 125 s   -timeout 60  248 s
+#       The ENTIRE +123 s sits on GprocT1Opre (119 -> 242 s); the other three are
+#       unchanged to within noise, two marginally FASTER.  ~2 min on the whole leg buys
+#       driver comparability -- without a shared budget a reported "driver disagreement"
+#       could be nothing but a budget disagreement, which this phase already caused once
+#       with -iterate.  KEPT.
+#   RESIDUAL NOTED, NOT CHASED: that +123 s concentration means goals in GprocT1Opre OTHER
+#   than the one just made deterministic remain budget-sensitive under the cli driver.
+#   Not load-bearing -- the leg passes at either budget.
 # 2026-08-20 (fifth).  split 4af03fe0f00f1f6520165012c58753ea -> e1bcca4dc6498db569bafb184889b449.
 #   THE BETTER FIX, TAKEN: cdrafts-split/GprocT1Opre.ec:1427 `by smt(allP hasP)` ->
 #   `by rewrite -/(predC _) has_predC.`  A PROOF-ONLY edit inside a certified file.
@@ -830,5 +858,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	e1bcca4dc6498db569bafb184889b449
+split	c474ae8e703333aff3dbf68d9dd0e07b
 fork	7ab20d2ab0ba2c1f3942408a193b4836
