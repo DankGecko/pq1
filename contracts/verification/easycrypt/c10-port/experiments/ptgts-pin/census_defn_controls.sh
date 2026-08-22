@@ -56,6 +56,29 @@ c=$(comm -3 "$T/before.tsv" "$T/cos.tsv" | wc -l)
 [ "$c" -eq 0 ] && echo "OK   CD3 no-op leg: internal reformatting moves NOTHING (whitespace-immune)" \
               || { echo "FAIL CD3 no-op leg: reformatting moved $c row(s) -- churn surface"; bad=$((bad+1)); }
 
+# CD4 -- PARAMETERISED CLONE OPERAND.  Both the operand matcher and its TERMINATOR
+# required the name to sit immediately before `<-`/`<=`, so `op P i <= ...` matched
+# NEITHER: the binding carried no row, AND -- worse -- it could not end its PREDECESSOR's
+# value, so that predecessor's digest over-reached into it.  21 such bindings in the split
+# cone.  This control edits the VALUE of a parameterised binding and asserts a row moves.
+FX=base-c10-split/FL_SL_XMSS_MT_ES.ec
+cp "$FX" "$T/fx.ec"
+census > "$T/p_before.tsv"
+python3 - "$FX" <<'PY'
+import re,sys
+p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+# `op valid_widxvalsgp adidxswgp <= <value>` -- perturb the VALUE only
+m=re.search(r'(op\s+valid_widxvalsgp\s+adidxswgp\s*<=\s*)([^,\n]*)', s)
+open(p,'w',encoding='utf-8').write(s[:m.start(2)]+'(true /\\ '+m.group(2).strip()+')'+s[m.end(2):])
+PY
+census > "$T/p_after.tsv"; cp "$T/fx.ec" "$FX"
+a=$(comm -13 "$T/p_before.tsv" "$T/p_after.tsv" | wc -l); r=$(comm -23 "$T/p_before.tsv" "$T/p_after.tsv" | wc -l)
+if [ "$a" -ge 1 ] && [ "$r" -ge 1 ]; then
+  echo "OK   CD4 parameterised operand value edited: census moves ($r removed, $a added)"
+else
+  echo "FAIL CD4 parameterised operand edit moved nothing ($r removed, $a added)"; bad=$((bad+1))
+fi
+
 echo
 echo "defined-census controls: failures=$bad"
 [ "$bad" -eq 0 ] && { echo "RESULT: OK"; exit 0; } || { echo "RESULT: BAD"; exit 1; }

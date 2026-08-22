@@ -1,16 +1,11 @@
-# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-21: bodied DEFINITIONS now carry
-# census rows (defined-<kind>:<body-digest>), closing the hole where a bodied
-# op/const/type/abbrev/pred was watched by NOTHING -- no census row (cert_cone.py
-# skipped it), no coverage row (PHASE 1h enumerates statements), and a statement
-# naming it digested only the TOKEN.  MEASURED: redefining FORS_C.ec::predC_fors,
-# the FORS+C gate predicate, to `true` moved NOTHING before this change.
-# TWO REGRESSIONS FOUND BY ADVERSARIAL REVIEW BEFORE THE FIRST GATE RUN AND FIXED
-# HERE: the keyword->name separator was `\s*` (zero space), so 60 non-declarations
-# such as `M.F.predC_fors` -> pred `C_fors` would have become LIVE rows and
-# ordinary TACTIC edits would red-light the gate; and clone with-clause operands
-# written `name <= value` were classified as definitions with spans over-running
-# into neighbouring bindings (27 in this cone).
-# LEDGER=242 PARAMETERS=215 BINDINGS=345 MEANING=389 DEFINITIONS=422 TOTAL=1613   (LIVE, 2026-08-21)
+# CONE BASELINE -- SPLIT tree.  REGENERATED 2026-08-22.
+# Bodied DEFINITIONS carry defined-<kind>:<body-digest> rows (2026-08-21), and
+# PARAMETERISED clone operands are now captured (2026-08-22): both the operand
+# matcher and its TERMINATOR required the name to sit immediately before `<-`/`<=`,
+# so `op P i <= ...` matched NEITHER -- the binding carried no row AND could not end
+# its PREDECESSOR value, whose digest therefore over-reached into it.  21 such
+# bindings in the split cone; +21 new rows and 21 predecessor digests corrected.
+# LEDGER=242 PARAMETERS=215 BINDINGS=366 MEANING=389 DEFINITIONS=422 TOTAL=1634   (LIVE)
 base-c10-split/BinaryTrees.ec	defined-op:7ad6319948b8	height	# line 16
 base-c10-split/BinaryTrees.ec	defined-op:ddd3b90ca64e	fully_balanced	# line 39
 base-c10-split/BinaryTrees.ec	defined-op:c0ebb6c47688	sub_bt	# line 66
@@ -27,9 +22,11 @@ base-c10-split/FL_SL_XMSS_MT_ES.ec	refined-const:d24524489e58	ge2_len	# line 51
 base-c10-split/FL_SL_XMSS_MT_ES.ec	refined-const:00c9041732c5	ge1_hp	# line 56
 base-c10-split/FL_SL_XMSS_MT_ES.ec	refined-const:26ecc28a0664	ge1_d	# line 62
 base-c10-split/FL_SL_XMSS_MT_ES.ec	refined-const:691d176b57e2	valx_adz	# line 517
-base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:2364be8b786e	Index.T	# line 111
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:e65459235ede	Index.T	# line 111
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:d30f3ab84c98	Index.P	# line 111
 base-c10-split/FL_SL_XMSS_MT_ES.ec	clone-discharge:star|realize:inhabited	Index	# line 111
-base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:c51a5fee2b62	DigestBlock.T	# line 130
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:6e3c6852b97b	DigestBlock.T	# line 130
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:9be1935cc7e9	DigestBlock.P	# line 130
 base-c10-split/FL_SL_XMSS_MT_ES.ec	clone-discharge:star|realize:inhabited	DigestBlock	# line 130
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:b49d2d9dc492	DigestBlockFT.t	# line 140
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:0e7dda40bb0b	DigestBlockFT.enum	# line 140
@@ -77,7 +74,8 @@ base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:67f6c8b96278	WTWES.dgst	# line 547
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:034d63e06d27	WTWES.valid_chidx	# line 547
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:718280c4a0c1	WTWES.valid_hidx	# line 547
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:59bfe18199cc	WTWES.valid_idxvals	# line 547
-base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:f557dcd387c3	WTWES.valid_adrsidxs	# line 547
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:3c67f649bb4b	WTWES.valid_adrsidxs	# line 547
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:c3627570a0cd	WTWES.valid_widxvalsgp	# line 547
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:05aba422ee3d	WTWES.thfc	# line 547
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:a2ba6bb81603	WTWES.dpseed	# line 547
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:5d70b641dcf4	WTWES.ddgstblock	# line 547
@@ -87,9 +85,11 @@ base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:375fabbdf366	WTWES.HA	# line 547
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:4700c5ff2a14	WTWES.dgstblock	# line 547
 base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:9ae7ae045a8e	WTWES.adrs	# line 547
 base-c10-split/FL_SL_XMSS_MT_ES.ec	clone-discharge:list:ddgstblock_ll,dpseed_ll,ge1_c,ge1_n,ge2_adrslen,ge2_len,val_log2w,valid_widxvals_idxvals|realize:ddgstblock_ll,dpseed_ll,ge1_c.,ge1_n,ge2_adrslen,ge2_len,val_log2w,valid_widxvals_idxvals.	WTWES	# line 547
-base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:ec5923988127	DBHPL.T	# line 621
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:761b2bbddc1b	DBHPL.T	# line 621
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:473fd5d196ba	DBHPL.P	# line 621
 base-c10-split/FL_SL_XMSS_MT_ES.ec	clone-discharge:star|realize:inhabited	DBHPL	# line 621
-base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:9e765c0d19b1	SAPDL.T	# line 635
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:f2bd1b3c586e	SAPDL.T	# line 635
+base-c10-split/FL_SL_XMSS_MT_ES.ec	operand:6d31a512b862	SAPDL.P	# line 635
 base-c10-split/FL_SL_XMSS_MT_ES.ec	clone-discharge:star|realize:inhabited	SAPDL	# line 635
 base-c10-split/FL_SL_XMSS_MT_ES.ec	op-annotation:lossless	dpseed	# line 360
 base-c10-split/FL_SL_XMSS_MT_ES.ec	op-annotation:lossless	ddgstblock	# line 363
@@ -184,20 +184,26 @@ base-c10-split/FORS_ES.ec	refined-const:57b8683c55d7	ge1_l	# line 45
 base-c10-split/FORS_ES.ec	refined-const:1b698d5d32da	ge1_s	# line 51
 base-c10-split/FORS_ES.ec	refined-const:0202601c0129	dval	# line 57
 base-c10-split/FORS_ES.ec	refined-const:b33d0acb879c	valf_adz	# line 367
-base-c10-split/FORS_ES.ec	operand:0208c978c4bf	Index.T	# line 80
+base-c10-split/FORS_ES.ec	operand:e65459235ede	Index.T	# line 80
+base-c10-split/FORS_ES.ec	operand:67c8566273a4	Index.P	# line 80
 base-c10-split/FORS_ES.ec	clone-discharge:star|realize:inhabited	Index	# line 80
-base-c10-split/FORS_ES.ec	operand:51cc86c8e3d6	DigestBlock.T	# line 111
+base-c10-split/FORS_ES.ec	operand:67f6c8b96278	DigestBlock.T	# line 111
+base-c10-split/FORS_ES.ec	operand:4328c072389f	DigestBlock.P	# line 111
 base-c10-split/FORS_ES.ec	clone-discharge:star|realize:inhabited	DigestBlock	# line 111
 base-c10-split/FORS_ES.ec	operand:b49d2d9dc492	DigestBlockFT.t	# line 121
 base-c10-split/FORS_ES.ec	operand:0e7dda40bb0b	DigestBlockFT.enum	# line 121
 base-c10-split/FORS_ES.ec	clone-discharge:star|realize:enum_spec.	DigestBlockFT	# line 121
-base-c10-split/FORS_ES.ec	operand:513b38d39b6e	DBLLKTL.T	# line 151
+base-c10-split/FORS_ES.ec	operand:d80fcb43e555	DBLLKTL.T	# line 151
+base-c10-split/FORS_ES.ec	operand:68f7a60c9353	DBLLKTL.P	# line 151
 base-c10-split/FORS_ES.ec	clone-discharge:star|realize:inhabited.	DBLLKTL	# line 151
-base-c10-split/FORS_ES.ec	operand:fc888ea184f6	BLKAL.T	# line 162
+base-c10-split/FORS_ES.ec	operand:de0552d1281d	BLKAL.T	# line 162
+base-c10-split/FORS_ES.ec	operand:7f933a558778	BLKAL.P	# line 162
 base-c10-split/FORS_ES.ec	clone-discharge:star|realize:inhabited	BLKAL	# line 162
-base-c10-split/FORS_ES.ec	operand:c6d6a1f29228	DBAL.T	# line 172
+base-c10-split/FORS_ES.ec	operand:efa13d91c0ca	DBAL.T	# line 172
+base-c10-split/FORS_ES.ec	operand:bcf3310ac495	DBAL.P	# line 172
 base-c10-split/FORS_ES.ec	clone-discharge:star|realize:inhabited	DBAL	# line 172
-base-c10-split/FORS_ES.ec	operand:d7d8eca3eaec	DBAPKL.T	# line 183
+base-c10-split/FORS_ES.ec	operand:ae5c59c63df9	DBAPKL.T	# line 183
+base-c10-split/FORS_ES.ec	operand:c5afc348d2a3	DBAPKL.P	# line 183
 base-c10-split/FORS_ES.ec	clone-discharge:star|realize:inhabited	DBAPKL	# line 183
 base-c10-split/FORS_ES.ec	operand:e65459235ede	HA.index	# line 329
 base-c10-split/FORS_ES.ec	operand:5e03634ec1d2	HA.l	# line 329
@@ -374,7 +380,8 @@ base-c10-split/FORS_ES.ec	module:e0c33925baf8	EUF_CMA_MFORSTWESNPRF_C	# line 316
 base-c10-split/FORS_ES.ec	module:448f73ad9b27	EUF_CMA_MFORSTWESNPRF_V	# line 3253
 base-c10-split/FORS_ES.ec	module:65b2bc218b81	EUF_CMA_MFORSTWESNPRF_VI	# line 3381
 base-c10-split/HashAddresses.eca	refined-const:57b8683c55d7	ge1_l	# line 4
-base-c10-split/HashAddresses.eca	operand:6d9fd5ceb40c	Adrs.T	# line 13
+base-c10-split/HashAddresses.eca	operand:a49d224d27bc	Adrs.T	# line 13
+base-c10-split/HashAddresses.eca	operand:d024dc58d29b	Adrs.P	# line 13
 base-c10-split/HashAddresses.eca	clone-obligation:Subtype	Adrs.insubN	# line 13
 base-c10-split/HashAddresses.eca	clone-obligation:Subtype	Adrs.insubT	# line 13
 base-c10-split/HashAddresses.eca	clone-obligation:Subtype	Adrs.valP	# line 13
@@ -618,9 +625,11 @@ base-c10-split/SPHINCS_PLUS.ec	axiom	len_val	# line 97
 base-c10-split/SPHINCS_PLUS.ec	axiom	hp_val	# line 106
 base-c10-split/SPHINCS_PLUS.ec	axiom	d_val	# line 116
 base-c10-split/SPHINCS_PLUS.ec	axiom	dist_adrstypes	# line 165
-base-c10-split/SPHINCS_PLUS.ec	operand:2364be8b786e	Index.T	# line 188
+base-c10-split/SPHINCS_PLUS.ec	operand:e65459235ede	Index.T	# line 188
+base-c10-split/SPHINCS_PLUS.ec	operand:d30f3ab84c98	Index.P	# line 188
 base-c10-split/SPHINCS_PLUS.ec	clone-discharge:star|realize:inhabited	Index	# line 188
-base-c10-split/SPHINCS_PLUS.ec	operand:c51a5fee2b62	DigestBlock.T	# line 219
+base-c10-split/SPHINCS_PLUS.ec	operand:6e3c6852b97b	DigestBlock.T	# line 219
+base-c10-split/SPHINCS_PLUS.ec	operand:9be1935cc7e9	DigestBlock.P	# line 219
 base-c10-split/SPHINCS_PLUS.ec	clone-discharge:star|realize:inhabited	DigestBlock	# line 219
 base-c10-split/SPHINCS_PLUS.ec	operand:b49d2d9dc492	DigestBlockFT.t	# line 229
 base-c10-split/SPHINCS_PLUS.ec	operand:0e7dda40bb0b	DigestBlockFT.enum	# line 229
@@ -635,14 +644,16 @@ base-c10-split/SPHINCS_PLUS.ec	operand:cd7c35bb4d95	SKG.in_t	# line 446
 base-c10-split/SPHINCS_PLUS.ec	operand:4700c5ff2a14	SKG.out_t	# line 446
 base-c10-split/SPHINCS_PLUS.ec	operand:240b886671d6	SKG.f	# line 446
 base-c10-split/SPHINCS_PLUS.ec	clone-discharge:star	SKG	# line 446
-base-c10-split/SPHINCS_PLUS.ec	operand:615d87881172	SKG_PRF.dkey	# line 455
+base-c10-split/SPHINCS_PLUS.ec	operand:83c757ce9a80	SKG_PRF.dkey	# line 455
+base-c10-split/SPHINCS_PLUS.ec	operand:800abf25a7a9	SKG_PRF.doutm	# line 455
 base-c10-split/SPHINCS_PLUS.ec	clone-discharge:star|realize:dkey_ll,doutm_ll	SKG_PRF	# line 455
 base-c10-split/SPHINCS_PLUS.ec	operand:86dabad1c450	MKG.key_t	# line 465
 base-c10-split/SPHINCS_PLUS.ec	operand:522e163feb88	MKG.in_t	# line 465
 base-c10-split/SPHINCS_PLUS.ec	operand:dd9d3ae1f775	MKG.out_t	# line 465
 base-c10-split/SPHINCS_PLUS.ec	operand:1431cf2a7e7c	MKG.f	# line 465
 base-c10-split/SPHINCS_PLUS.ec	clone-discharge:star	MKG	# line 465
-base-c10-split/SPHINCS_PLUS.ec	operand:6cf3a0e8f6a3	MKG_PRF.dkey	# line 474
+base-c10-split/SPHINCS_PLUS.ec	operand:9ee2e85e473e	MKG_PRF.dkey	# line 474
+base-c10-split/SPHINCS_PLUS.ec	operand:4d854035f2b1	MKG_PRF.doutm	# line 474
 base-c10-split/SPHINCS_PLUS.ec	clone-discharge:star|realize:dkey_ll,doutm_ll	MKG_PRF	# line 474
 base-c10-split/SPHINCS_PLUS.ec	operand:5e03634ec1d2	FTWES.adrs_len	# line 509
 base-c10-split/SPHINCS_PLUS.ec	operand:a23e8d24b18b	FTWES.n	# line 509
@@ -667,7 +678,8 @@ base-c10-split/SPHINCS_PLUS.ec	operand:1387a2559d8d	FTWES.valid_kpidx	# line 509
 base-c10-split/SPHINCS_PLUS.ec	operand:847b3abc3d8a	FTWES.valid_thidx	# line 509
 base-c10-split/SPHINCS_PLUS.ec	operand:0260977ad080	FTWES.valid_tbidx	# line 509
 base-c10-split/SPHINCS_PLUS.ec	operand:59bfe18199cc	FTWES.valid_idxvals	# line 509
-base-c10-split/SPHINCS_PLUS.ec	operand:218ef77416ac	FTWES.valid_adrsidxs	# line 509
+base-c10-split/SPHINCS_PLUS.ec	operand:3c67f649bb4b	FTWES.valid_adrsidxs	# line 509
+base-c10-split/SPHINCS_PLUS.ec	operand:5ef5573c26d1	FTWES.valid_fidxvalsgp	# line 509
 base-c10-split/SPHINCS_PLUS.ec	operand:8b3236814fd3	FTWES.set_tidx	# line 509
 base-c10-split/SPHINCS_PLUS.ec	operand:3b257a7ac28b	FTWES.set_typeidx	# line 509
 base-c10-split/SPHINCS_PLUS.ec	operand:41dd6e29ffb4	FTWES.set_kpidx	# line 509
@@ -913,16 +925,20 @@ base-c10-split/WOTS_TW_ES.ec	refined-const:fdf3d5d7834a	ge1_n	# line 28
 base-c10-split/WOTS_TW_ES.ec	refined-const:56725145425c	val_log2w	# line 55
 base-c10-split/WOTS_TW_ES.ec	refined-const:d24524489e58	ge2_len	# line 74
 base-c10-split/WOTS_TW_ES.ec	refined-const:5691c2690a3c	ge1_c	# line 79
-base-c10-split/WOTS_TW_ES.ec	operand:79a949f6302a	BaseW.T	# line 160
+base-c10-split/WOTS_TW_ES.ec	operand:c1e1af0670c8	BaseW.T	# line 160
+base-c10-split/WOTS_TW_ES.ec	operand:b83b21f64590	BaseW.P	# line 160
 base-c10-split/WOTS_TW_ES.ec	clone-discharge:star|realize:inhabited	BaseW	# line 160
-base-c10-split/WOTS_TW_ES.ec	operand:51cc86c8e3d6	DigestBlock.T	# line 182
+base-c10-split/WOTS_TW_ES.ec	operand:67f6c8b96278	DigestBlock.T	# line 182
+base-c10-split/WOTS_TW_ES.ec	operand:4328c072389f	DigestBlock.P	# line 182
 base-c10-split/WOTS_TW_ES.ec	clone-discharge:star|realize:inhabited	DigestBlock	# line 182
-base-c10-split/WOTS_TW_ES.ec	operand:fa277cee57ab	MDigestBlock.T	# line 191
+base-c10-split/WOTS_TW_ES.ec	operand:67f6c8b96278	MDigestBlock.T	# line 191
+base-c10-split/WOTS_TW_ES.ec	operand:22993ab60133	MDigestBlock.P	# line 191
 base-c10-split/WOTS_TW_ES.ec	clone-discharge:star|realize:inhabited	MDigestBlock	# line 191
 base-c10-split/WOTS_TW_ES.ec	operand:b49d2d9dc492	DigestBlockFT.t	# line 227
 base-c10-split/WOTS_TW_ES.ec	operand:0e7dda40bb0b	DigestBlockFT.enum	# line 227
 base-c10-split/WOTS_TW_ES.ec	clone-discharge:star|realize:enum_spec.	DigestBlockFT	# line 227
-base-c10-split/WOTS_TW_ES.ec	operand:2f515b77db11	DBLL.T	# line 252
+base-c10-split/WOTS_TW_ES.ec	operand:efa13d91c0ca	DBLL.T	# line 252
+base-c10-split/WOTS_TW_ES.ec	operand:948bc95c9ebf	DBLL.P	# line 252
 base-c10-split/WOTS_TW_ES.ec	clone-discharge:star|realize:inhabited	DBLL	# line 252
 base-c10-split/WOTS_TW_ES.ec	operand:64d8e4ea6680	EmsgWOTS.Alphabet.t	# line 276
 base-c10-split/WOTS_TW_ES.ec	operand:31052274a18f	EmsgWOTS.Alphabet.enum	# line 276

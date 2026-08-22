@@ -264,13 +264,28 @@ def census(files):
             # the whole statement.  (It happened not to over-count, since operand
             # syntax does not appear after `proof`, but the intent was wrong.)
             head = re.split(r'\bproof\b|\brename\b', stmt_for_ops, maxsplit=1)[0]
-            for om in re.finditer(r"\b(op|type|pred|theory|module)\s+([A-Za-z_][A-Za-z0-9_.']*)\s*(<-|<=)\s*",
+            # PARAMETERISED BINDINGS (2026-08-22).  Both regexes below previously required
+            # the operand NAME to be immediately followed by `<-`/`<=`, so a binding written
+            # with parameters -- `op P i <= ...`, `op valid_widxvalsgp adidxswgp <= ...` --
+            # matched NEITHER.  Two consequences, and the second is the worse one:
+            #   * the binding itself carried NO row at all (21 in the split cone); and
+            #   * because the TERMINATOR had the same gap, a parameterised binding could not
+            #     end its PREDECESSOR's value, so the predecessor's digest over-reached into
+            #     it -- a row whose content was partly another binding's.
+            # The parameter list is INSIDE the digest: it is part of the binding's meaning,
+            # not decoration.  Non-parameterised rows are unaffected -- group(3) is empty and
+            # the whitespace normalisation collapses the extra separator, so their digests
+            # are byte-identical (verified).
+            for om in re.finditer(r"\b(op|type|pred|theory|module)\s+([A-Za-z_][A-Za-z0-9_.']*)"
+                                  r"((?:\s+[A-Za-z_][A-Za-z0-9_']*)*)\s*(<-|<=)\s*",
                                   head, re.S):
                 rest = head[om.end():]
-                # an operand ends at the next `, <kw> name <-` or at the clause end
-                nxt = re.search(r",\s*(?:op|type|pred|theory|module)\s+[A-Za-z_][A-Za-z0-9_.']*\s*(?:<-|<=)", rest, re.S)
+                # an operand ends at the next `, <kw> name [params] <-` or at the clause end
+                nxt = re.search(r",\s*(?:op|type|pred|theory|module)\s+[A-Za-z_][A-Za-z0-9_.']*"
+                                r"(?:\s+[A-Za-z_][A-Za-z0-9_']*)*\s*(?:<-|<=)", rest, re.S)
                 val = rest[:nxt.start()] if nxt else rest
-                dg = hashlib.sha256(re.sub(r'\s+', ' ', om.group(1) + ' ' + om.group(3) + ' ' + val).strip().encode()).hexdigest()[:12]
+                dg = hashlib.sha256(re.sub(r'\s+', ' ', om.group(1) + ' ' + om.group(3) + ' '
+                                           + om.group(4) + ' ' + val).strip().encode()).hexdigest()[:12]
                 out.append((p, 'operand:' + dg, alias + '.' + om.group(2), line_of(m.start(1))))
             for rm in re.finditer(r'"([^"]*)"\s*as\s*"([^"]*)"', stmt_for_ops, re.S):
                 dg = hashlib.sha256((rm.group(1) + '->' + rm.group(2)).encode()).hexdigest()[:12]

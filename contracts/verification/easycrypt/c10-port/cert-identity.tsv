@@ -524,6 +524,28 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-22 (ninth).  split 6b6cca95c72a262b5727283868e9d885 -> f58333ec13efa4da5d9ea23a660c297a.
+#   PARAMETERISED CLONE OPERAND BINDINGS ARE NOW CAPTURED.  Both the operand matcher and
+#   its TERMINATOR required the operand NAME to sit immediately before `<-`/`<=`, so a
+#   binding written with parameters -- `op P i <= ...`, `op valid_widxvalsgp adidxswgp <=
+#   ...` -- matched NEITHER.  Two consequences, the second worse than the first:
+#     * the binding carried NO census row at all (21 in the split cone); and
+#     * because the terminator had the same gap, a parameterised binding could not END its
+#       PREDECESSOR's value, so that predecessor's digest OVER-REACHED into it -- a row
+#       whose content was partly another binding's.
+#   The parameter list is now INSIDE the digest: it is part of the binding's meaning.
+#   MEASURED DELTA, and it decomposes exactly as predicted: census 1613 -> 1634, with
+#   42 rows added and 21 removed.  ALL 21 removed names REAPPEAR as added with a different
+#   digest (those are the predecessors, now shrunk to their true extent), and 21 are
+#   genuinely new -- Index.P, DigestBlock.P, SAPDL.P, DBHPL.P, WTWES.valid_widxvalsgp,
+#   WTWES.valid_fidxvalsgp among them.  BINDINGS 345 -> 366.  LEDGER STAYS 242.
+#   NON-PARAMETERISED ROWS ARE BYTE-UNCHANGED: group(3) is empty for them and the
+#   whitespace normalisation collapses the extra separator, so their digests do not move.
+#   Verified, not assumed -- that is why the removed count is 21 and not 339.
+#   CONTROL CD4: editing the VALUE of a parameterised binding moves a row (1 removed,
+#   1 added).  Suite now 4/4.
+#   Fork baseline regenerated mechanically alongside (shared cert_cone.py), still marked
+#   NOT GATE-VERIFIED.
 # 2026-08-21 (eighth).  split 09ad5233e393beb2813aacbc1f4a0c61 -> 6b6cca95c72a262b5727283868e9d885.
 #   *** THE DIAGNOSIS BELOW IS WRONG AND IS CORRECTED AT THE END OF THIS ENTRY. ***
 #   The CHANGE (ECFLAGS on the compile driver only) stands; the REASON I gave for it
@@ -566,6 +588,18 @@
 #   once GprocT1Opre's marginal step became a named rewrite.  It was NOT worth aborting a
 #   run over, and I should have checked the previous receipt -- which was sitting in
 #   scratch/ -- before concluding.
+#
+#   AND THE "UNEXPLAINED" SLOWNESS IS NOW EXPLAINED -- BY THE OWNER, NOT BY ME.  The
+#   laptop was SUSPENDED (lid closed) during that run.  The 4 h 20 m was WALL-CLOCK
+#   INCLUDING SUSPEND; the gate was not slow, it was not running.  So there was never an
+#   anomaly to diagnose, and every candidate cause I proposed for it -- the cli flag, an
+#   unrepresentative sample -- was an explanation for a phenomenon that did not occur.
+#   THE METHOD ERROR, which is the reusable part: I derived a RATE ("12 of 38 files in
+#   3 h 56 m") from LOG MTIMES and WALL-CLOCK on a laptop.  Wall-clock is not elapsed
+#   compute.  The distinguishing measurement was available and cheap -- cumulative CPU
+#   time of the process (`ps -o times`), which does not advance across suspend -- and I
+#   did not take it.  Any future timing claim in this tree should quote CPU time, or at
+#   minimum be paired with it, before a rate is inferred.
 # 2026-08-21 (seventh).  split c474ae8e703333aff3dbf68d9dd0e07b -> 09ad5233e393beb2813aacbc1f4a0c61.
 #   THE BODIED-DEFINITION HOLE IS CLOSED ACROSS ALL 45 CONE FILES.  tools/cert_cone.py
 #   SKIPPED any op/const/type whose declaration had a body ("a definition, not a
@@ -952,5 +986,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	6b6cca95c72a262b5727283868e9d885
+split	f58333ec13efa4da5d9ea23a660c297a
 fork	7ab20d2ab0ba2c1f3942408a193b4836

@@ -1610,3 +1610,46 @@ four in this arc — cli-leg non-determinism, gate-load contention, a marginal d
 (that one held), and sampling — and three were wrong. The change stands on the ~8 minute
 saving; it was not worth aborting a run over, and the disproving receipt was already
 sitting in `scratch/`.
+
+### UPDATE 2026-08-22 — parameterised clone operand bindings closed; and the "unexplained" run was SUSPEND
+
+Both the operand matcher **and its terminator** required the operand name to sit
+immediately before `<-`/`<=`, so a binding written with parameters — `op P i <= …`,
+`op valid_widxvalsgp adidxswgp <= …` — matched **neither**. Two consequences, the second
+worse:
+
+- the binding carried **no census row at all** (21 in the split cone); and
+- with the same gap in the terminator, a parameterised binding could not **end its
+  predecessor's value**, so that predecessor's digest over-reached into it — a row whose
+  content was partly another binding's.
+
+The parameter list is now inside the digest: it is part of the binding's meaning.
+
+**The delta decomposes exactly as predicted, and was verified rather than assumed:**
+census 1613 → 1634, **42 added, 21 removed**. All 21 removed names reappear with a
+*different* digest — the corrected predecessors — and 21 are genuinely new (`Index.P`,
+`DigestBlock.P`, `SAPDL.P`, `DBHPL.P`, `WTWES.valid_widxvalsgp`). Non-parameterised rows
+are **byte-unchanged**, which is why the removed count is 21 and not 339.
+
+```
+GATE: GREEN (RC=0)   identity 6b6cca95 -> f58333ec   __WALL_S=4705  (vs 4728 baseline)
+  cone: ROWS now=1634 baseline=1634 | added=0 removed=0
+  ledger=242  parameters=215  bindings=366  meaning=389  definitions=422  total=1634
+```
+
+Control CD4 (edit a parameterised binding's value → a row moves) passes; suite 4/4.
+
+#### The "unexplained" 4h20m run was the laptop being suspended
+
+Supplied by the owner, not discovered by me. That 4h20m was **wall-clock including
+suspend** — the gate wasn't slow, it wasn't running. So there was never an anomaly; every
+cause I proposed for it (the cli flag, an unrepresentative A/B sample) explained a
+phenomenon that did not occur, and I **aborted a healthy run** over it.
+
+**The method error is the reusable part.** I derived a *rate* — "12 of 38 files in 3h56m" —
+from log mtimes and wall-clock **on a laptop**. Wall-clock is not elapsed compute. The
+distinguishing measurement was cheap and I was already running `ps` for elapsed time: I
+read the wrong column. `ps -o times` (cumulative CPU) does not advance across suspend.
+This run was checked that way *while in flight* — `etime 08:59` against `CPU 522s`, i.e.
+~97% CPU-bound. That is now a standing rule in `cert-identity.tsv`: quote CPU time, or
+pair it with wall, before inferring a rate.
