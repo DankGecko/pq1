@@ -5,6 +5,11 @@ its commit `0c825ed`**, at which the SPLIT gate is **GREEN — 208 OK, 0 FAIL**
 (`INPUTS_SHA256 eb589caf...`, toolchain r2026.02, 25 prover configurations,
 receipt in `scratch/gate_run.out`).
 
+> **:white_check_mark: UPDATE 2026-08-22 — the fork gate IS now verified.** The scope note
+> below ("its gate was NOT re-run for this snapshot") is superseded: `cert_gate_fork.sh`
+> runs GREEN, `CERT_FAILURES=0`, receipt `scratch/gate_run_fork2.log`. See the final
+> section of this file.
+
 > **Previous snapshot line, kept for history:** taken at `16fe480`
 > (2026-08-05, "run 26"), at which both certification gates were GREEN.
 > **Scope note on this re-snapshot:** the receipt above is for the **split**
@@ -1653,3 +1658,38 @@ read the wrong column. `ps -o times` (cumulative CPU) does not advance across su
 This run was checked that way *while in flight* — `etime 08:59` against `CPU 522s`, i.e.
 ~97% CPU-bound. That is now a standing rule in `cert-identity.tsv`: quote CPU time, or
 pair it with wall, before inferring a rate.
+
+### UPDATE 2026-08-22 (final) — the fork baseline is GATE-VERIFIED
+
+The fork baseline was regenerated **mechanically** on 2026-08-21 (because `cert_cone.py`
+is shared between the two gates) and honestly marked `NOT GATE-VERIFIED` at the time.
+That is now closed.
+
+**Run 1** (`scratch/gate_run_fork.log`, `__WALL_S=2718`): `CERT_FAILURES=1` — and that one
+failure was the `INPUTS_SHA256` drift line, expected since `cert_cone.py` is in the fork
+gate's hashed set. **Everything else passed first time:**
+
+```
+CLOSURE_COMPILED = 19/19
+CONE keys now=1377 baseline=1377 | ROWS now=1456 baseline=1456
+CONE_ADMITS = 2      (the fork's two known admits)
+```
+
+**The census matching exactly is the point.** A regenerated baseline is only as
+trustworthy as the tool that produced it — and I wrote that tool — which is precisely why
+it was marked unverified rather than quietly shipped as fine. The gate independently
+computing the same 1456 rows is what turns *plausible* into *correct*.
+
+**Run 2** (`scratch/gate_run_fork2.log`, `__WALL_S=2731`): `CERT_FAILURES=0`,
+`__GATE_RC=0`, `OK inputs unchanged across the run`. Identity `7ab20d2a -> 9c2d2128`.
+
+So the fork tree was **healthy throughout**; the only thing wrong was an identity that
+hadn't caught up with the shared `cert_cone.py` change. Both receipts are committed — the
+RED one included, since it is the evidence that the census matched *before* the identity
+was touched.
+
+**Incidental finding worth keeping:** the fork gate's cone spans **three** directories —
+`base-c10-fork`, `cdrafts-fork` and `experiments/tcollres-leg` — where the split gate
+spans two. Its own comment records that the split gate "never had this hole because its
+compile set and hashed set are the same two directories." So the fork hashes a *wider* set
+than I assumed when I called the regeneration mechanical.

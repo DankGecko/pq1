@@ -524,6 +524,23 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-22 (fork).  fork 7ab20d2ab0ba2c1f3942408a193b4836 -> 9c2d21280c84d52c30b22111151f1135.
+#   THE FORK BASELINE IS NOW GATE-VERIFIED, which it had not been since the split-side
+#   cert_cone.py changes.  It was regenerated MECHANICALLY on 2026-08-21 (shared
+#   cert_cone.py) and honestly marked NOT GATE-VERIFIED at the time; this closes that.
+#   FIRST RUN (scratch/gate_run_fork.log, __WALL_S=2718): CERT_FAILURES=1, and that ONE
+#   failure was the INPUTS_SHA256 drift line -- expected, since tools/cert_cone.py is in
+#   the fork gate's hashed set and had changed.  EVERYTHING ELSE PASSED:
+#     CLOSURE_COMPILED=19/19; CONE keys now=1377 baseline=1377; ROWS now=1456
+#     baseline=1456; CONE_ADMITS=2 (the fork's two known admits).
+#   THE CENSUS MATCHING EXACTLY IS THE POINT: the gate independently computed the same
+#   1456 rows I had generated, so the mechanical regeneration was CORRECT rather than
+#   merely plausible.  A regenerated baseline is otherwise only as trustworthy as the tool
+#   that produced it, which is precisely why it was marked unverified.
+#   NOTE the fork gate's cone spans THREE directories -- base-c10-fork, cdrafts-fork and
+#   experiments/tcollres-leg -- where the split gate spans two, so it hashes a wider set.
+#   Identity re-baselined here and the run repeated to confirm; receipt
+#   scratch/gate_run_fork2.log.
 # 2026-08-22 (ninth).  split 6b6cca95c72a262b5727283868e9d885 -> f58333ec13efa4da5d9ea23a660c297a.
 #   PARAMETERISED CLONE OPERAND BINDINGS ARE NOW CAPTURED.  Both the operand matcher and
 #   its TERMINATOR required the operand NAME to sit immediately before `<-`/`<=`, so a
@@ -987,4 +1004,4 @@
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
 split	f58333ec13efa4da5d9ea23a660c297a
-fork	7ab20d2ab0ba2c1f3942408a193b4836
+fork	9c2d21280c84d52c30b22111151f1135

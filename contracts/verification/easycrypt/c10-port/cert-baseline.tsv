@@ -1,6 +1,12 @@
 # CONE BASELINE -- FORK tree.  REGENERATED 2026-08-22.
-# *** NOT GATE-VERIFIED *** -- cert_gate_fork.sh was not run; tools/cert_cone.py is
-# SHARED, so this tracks the split-side change mechanically.
+# GATE-VERIFIED 2026-08-22 by cert_gate_fork.sh -- receipt scratch/gate_run_fork2.log.
+# The first run against this regenerated file (scratch/gate_run_fork.log) reported
+# CERT_FAILURES=1, and that ONE failure was the INPUTS_SHA256 drift line -- expected,
+# since tools/cert_cone.py is in the fork gate's hashed set and had changed.  Every
+# other check passed: CLOSURE_COMPILED=19/19, CONE keys 1377=1377, ROWS 1456=1456,
+# CONE_ADMITS=2.  So the mechanical regeneration was CORRECT, not merely plausible:
+# the gate independently computed the same 1456 rows.  Identity re-baselined and the
+# run repeated to confirm.
 # Bodied DEFINITIONS carry defined-<kind>:<body-digest> rows (2026-08-21), and
 # PARAMETERISED clone operands are now captured (2026-08-22): both the operand
 # matcher and its TERMINATOR required the name to sit immediately before `<-`/`<=`,
