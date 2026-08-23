@@ -1,0 +1,75 @@
+### INPUTS_SHA256 9c2d21280c84d52c30b22111151f1135
+OK   INPUTS_SHA256 matches the committed identity
+### TOOLCHAIN GIT hash: r2026.02
+### PROVERS 0a5b3d54dcce300e 25 configurations
+OK   no dual-extension theory names on the include path
+### ECO_REMAINING=0
+### ECO_PURGED=23
+### PHASE 1 — TARGETS
+OK   base/WOTS_TW_ES 117s
+OK   base/FL_SL_XMSS_MT_ES 554s
+OK   base/FORS_ES 381s
+OK   base/SPHINCS_PLUS 170s
+OK   Grind 1s
+OK   STCR_C 1s
+OK   WOTS_C_Real 2s
+OK   WOTS_C_Scheme 2s
+OK   XMSSMT_C_Scheme 3s
+OK   WOTS_C_Reduction 3s
+OK   WOTS_C_Interactive 28s
+OK   XmssmtCC_All 733s
+OK   RtopCSoundness 33s
+OK   FxChain 68s
+OK   FORS_C10 1s
+OK   FORS_C10_Multi 1s
+OK   GprocFORSC10 11s
+OK   SphincsC10CapstoneWired 4s
+OK   SphincsC10Content 4s
+OK   C10DeployedGeometry 2s
+OK   GFailCharged 4s
+OK   XmssmtCCCharged 3s
+OK   SphincsC10CapstoneCharged 4s
+### CLOSURE_COMPILED=19 EXPECTED=19
+### PHASE 1d — EVERY CLOSURE FILE MUST BE REQUIRABLE (not merely compilable)
+OK   all closure files are requirable
+### PHASE 1b/1c — NAMED RESULTS + STATEMENT/DEFINITION DIGESTS
+OK   pinned: cdrafts-fork/SphincsC10CapstoneWired.ec::EUFCMA_SPHINCS_PLUS_C10_GROUNDED
+OK   pinned: cdrafts-fork/SphincsC10CapstoneCharged.ec::EUFCMA_SPHINCS_PLUS_C10_CHARGED
+OK   pinned: op:cdrafts-fork/WOTS_C_Real.ec::emb_in
+OK   pinned: op:cdrafts-fork/WOTS_C_Real.ec::ThC
+OK   pinned: op:cdrafts-fork/WOTS_C_Real.ec::predC
+OK   pinned: op:base-c10-fork/WOTS_TW_ES.ec::n
+OK   pinned: op:base-c10-fork/WOTS_TW_ES.ec::len
+OK   pinned: base-c10-fork/WOTS_TW_ES.ec::nhchwcoll_hchwpre_msg
+OK   pinned: base-c10-fork/FL_SL_XMSS_MT_ES.ec::EUFNAGCMA_FLSLXMSSMTTWESNPRF
+statements pinned=9 expected=9 (manifest rows)
+### PHASE 2 — CONE CENSUS vs cert-baseline.tsv
+### CONE keys now=1377 baseline=1377 | ROWS now=1456 baseline=1456
+###   ledger=233  parameters=160  bindings=357  meaning=357  total=1107
+OK   no new admits/axioms in the cone
+### CONE_ADMITS=2
+### PHASE 2b — CENSUS REGRESSION CANARY (admitted.)
+OK   census detects 'admitted.' (canary caught)
+### PHASE 2c — DIGEST DISCRIMINATION CANARY
+OK   module-type digest discriminates (module-type:1ed74e3a5614 vs module-type:f9d6086d602e)
+OK   admit statement digest discriminates (admit:7c56af2d53b1 vs admit:4eeb8521bd94)
+OK   no live row carries a degenerate digest
+OK   no live admit row degraded to 'nostmt'
+### PHASE 3 — CONTROLS (polarity AND reason)
+OK   pass-control scratch/LWVacuity.ec
+OK   pass-control scratch/synth_exact_prefix_vacuity.ec
+OK   pass-control scratch/synth_repaired_nonvacuity.ec
+OK   fail-control scratch/synth_repaired_canary1.ec (rejected for the declared reason)
+OK   fail-control scratch/synth_repaired_canary2.ec (rejected for the declared reason)
+OK   fail-control scratch/synth_repaired_canary3.ec (rejected for the declared reason)
+OK   fail-control scratch/synth_negctl.ec (rejected for the declared reason)
+OK   fail-control scratch/synth_grounded_canary4.ec (rejected for the declared reason)
+OK   fail-control scratch/synth_charged_canary5.ec (rejected for the declared reason)
+OK   fail-control scratch/synth_charged_canary6.ec (rejected for the declared reason)
+OK   fail-control scratch/synth_charged_canary7.ec (rejected for the declared reason)
+OK   fail-control scratch/synth_charged_canary8.ec (rejected for the declared reason)
+controls executed (unique)=12 expected=12
+OK   inputs unchanged across the run (9c2d21280c84d52c30b22111151f1135)
+### CERT_FAILURES=0
+CERTGATEDONE
+__GATE_RC=0 __WALL_S=2594

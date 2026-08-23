@@ -1693,3 +1693,38 @@ was touched.
 spans two. Its own comment records that the split gate "never had this hole because its
 compile set and hashed set are the same two directories." So the fork hashes a *wider* set
 than I assumed when I called the regeneration mechanical.
+
+### UPDATE 2026-08-22 — both gates re-confirmed GREEN after a full machine restart
+
+Not a new change — a **reproduction**. The machine was rebooted, the `ec-grind` container
+brought back up, and both gates run to confirm the certified state survived.
+
+```
+SPLIT   RESULT: GREEN     __GATE_RC=0   __WALL_S=4467
+FORK    CERT_FAILURES=0   __GATE_RC=0   __WALL_S=2594
+```
+
+**Every gated number is identical to the pre-reboot receipts** — "both green" alone would
+be a much weaker claim:
+
+| | pre-reboot | post-reboot |
+|---|---|---|
+| split cone | `ROWS 1634=1634, added=0` | **same** |
+| split classes | `ledger=242 · parameters=215 · bindings=366 · meaning=389 · definitions=422` | **same** |
+| split pins / coverage | `1068/1068` · `984/984` | **same** |
+| fork | `19/19`, `ROWS 1456=1456`, `CONE_ADMITS=2` | **same** |
+
+Run **sequentially, not in parallel**: concurrent runs contend for provers, and each
+receipt would then be partly a measurement of the other — the flake class this arc spent a
+long time diagnosing.
+
+Wall-clock moved slightly (4705 → 4467 and 2731 → 2594, both ~5% *faster* on a freshly
+booted machine). That is the only difference, it is not a gated quantity, and the
+CPU-vs-elapsed check was run in flight to confirm the work was real (`etime 11:54` vs
+`CPU 691s`, ~97% CPU-bound).
+
+**Why this earns a receipt:** it is an independent reproduction on a fresh boot, so the
+GREEN is not an artifact of accumulated machine state — stale `.eco` caches, a warm
+prover, leaked container processes. And the identity matched *before* any proof was
+checked (`f58333ec` split, `9c2d2128` fork), so the tree came back from the restart
+byte-identical to what was certified.
