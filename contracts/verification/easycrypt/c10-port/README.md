@@ -24,14 +24,40 @@ earlier stage of the same work and is retained only as history.
 
 Read this section before quoting anything from this directory.
 
-The headline theorem is `EUFCMA_SPHINCS_PLUS_C10_GROUNDED`
-(`cdrafts-split/SphincsC10CapstoneWired.ec`). It is a real, machine-checked
-theorem, and it is **not a numerically meaningful bound**:
+The headline theorem is **`EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED`**
+(`cdrafts-split/GprocChargedQWired.ec:69`) — a gated closure member whose statement
+is pinned by digest. It is a real, machine-checked theorem, and it is **not a
+numerically meaningful bound**.
 
-* It carries `Q = Pr[EUF_CMA_Gproc_I(R_fors_p(F)) : res /\ !covered]` as an
-  UNREDUCED bad-event probability. What `Q` buys over the earlier free-real
-  formulation is that it is a *named game probability an instantiator cannot
-  choose*, where a free real could be set to 1 at will.
+> **Headline changed 2026-08-24, and the previous one is kept below.** Until this
+> date the front page advertised `EUFCMA_SPHINCS_PLUS_C10_GROUNDED`
+> (`cdrafts-split/SphincsC10CapstoneWired.ec`), which is **measurably weaker**:
+> diffing the two statements, both carry 7 premises, but `GROUNDED` carries **N2**
+> — `exists cc, predC (ThC ps ad m cc)`, App-D gap #1, which this tree's own
+> comments call *"A PREMISE, not a theorem"* — and an **unreduced `Q`**.
+> `CHARGED_QWIRED` carries neither; its only extra premise is `0%r <= mkg_adv`.
+> `GROUNDED` remains a true, gated theorem and is still in the closure; it is no
+> longer what this directory advertises.
+
+**What the headline carries.** Its premises are `c <= p_tgts`, `0%r <= mkg_adv`,
+the encode-compatibility equation `encode_msgWOTS_C p a x cc = encode_msgWOTS
+(ThC p a x cc)`, and four C10 width facts on `dfC0`. Its right-hand side is the
+SKG-PRF distinguishing advantage, the free real `mkg_adv`, and **ten named game
+probabilities**: `M.F.ITSRC10`; the three that replace `Q`
+(`F_OpenPRE.SM_DT_OpenPRE`, `TRHC_TCR.SM_DT_TCR_C`, `TRCOC_TCR.SM_DT_TCR_C`); the
+four hypertree terms (`M_EUF_GCMA_WOTSTWESNPRF`, `S_TCR_C_Int_MA`,
+`PKCOC_TCR.SM_DT_TCR_C`, `TRHC_TCR.SM_DT_TCR_C`); and `GAME1_INT`, which is the
+**N2 charge** — a named game an instantiator cannot choose, where N2 was
+previously a premise.
+
+**Why it is still not numerically meaningful**, and this is unchanged by the
+headline swap:
+
+* **`Q` is bounded, and the headline no longer carries it.**
+  `GprocQBound.ec:62::gproc_Q_bound` bounds
+  `Pr[EUF_CMA_Gproc_I(...) : res /\ !covered]` by three NAMED SM-DT hardness
+  advantages, and the headline consumes it. (The superseded `GROUNDED` capstone
+  carries `Q` unreduced; that is one of the two reasons it was superseded.)
 
   > **:warning: CORRECTED 2026-08-24.** This bullet previously ended *"Nothing in
   > this tree bounds `Q` below 1, so the bound is currently compatible with 1."*
@@ -53,6 +79,8 @@ theorem, and it is **not a numerically meaningful bound**:
   > `0%r <= mkg_adv`, a non-negativity side condition. Which theorem should be
   > *advertised* as the headline is an owner call, not a proof question — but the
   > front page should not name a weaker one without saying so.
+  > **RESOLVED 2026-08-24: the owner made that call and the headline is now
+  > `CHARGED_QWIRED`.** See the top of this file.
 * `Pr[M.F.ITSRC10 ...]` is likewise carried unreduced — that is the FORS+C10
   assumption and the honest headline term. **This one is irreducible, and that is
   proved rather than assumed:** `scratch/_countermodel.ec::countermodel_pr1`
@@ -184,6 +212,14 @@ this snapshot specifically so this finding travels with the artifact.
   verified **non-load-bearing** for the headline: `FORS_C_TreePort.ec:1511`
   (a leaf nothing requires) and `base-c10-split/WOTS_TW_ES.ec:1513` (feeds a
   theorem the capstone never applies).
+  **RE-VERIFIED 2026-08-24 against the NEW headline.** This claim is
+  capstone-relative, so changing the headline could have invalidated it — the
+  `:1513` admit becomes load-bearing for anything that *reduces*
+  `M_EUF_GCMA_WOTSTWESNPRF` by applying the existing WOTS theorem. Measured on
+  both statements: `GROUNDED` **and** `CHARGED_QWIRED` each carry
+  `M_EUF_GCMA_WOTSTWESNPRF` **unreduced on the RHS**, so neither applies that
+  theorem and both admits stay non-load-bearing. Checked rather than carried
+  over.
 * `Pr[M.F.ITSRC10 ..]` and `Pr[M_EUF_GCMA_WOTSTWESNPRF ..]` are carried
   unreduced. Reducing the latter must NOT be done by applying the existing WOTS
   theorem — that consumes the `:1513` admit and would make it load-bearing.
