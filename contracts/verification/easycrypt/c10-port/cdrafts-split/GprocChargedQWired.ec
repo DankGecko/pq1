@@ -194,3 +194,102 @@ lemma charged_qwired_at_witness (mkg_adv : real) &m :
 proof.
 by apply (EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED WitnessF mkg_adv &m).
 qed.
+
+
+(* ==========================================================================
+   H1 RESOLVED -- THE PHANTOM `mkg_adv` SUMMAND IS DROPPED.
+
+   FxChain.ec:2824-2834 records this as an OPEN ACCOUNTING HAZARD against the
+   capstone, in its own words:
+
+     "hop3 : p_nprfprf <= p_nprfnprf + mkg_adv  (admit; mkg_adv a FREE real).
+      Once the in-chain step is recognised as the identity (p_nprfprf =
+      p_nprfnprf), mkg_adv becomes a PHANTOM summand: sound as an upper bound
+      but silently zeroable by a consumer, and double-paying if kept alongside
+      the already-idealised dcond LHS.  Honest fix: drop mkg_adv from the +C FX
+      PRF-term sum ...  Do NOT leave it as an in-chain MKG-PRF summand."
+
+   The headline still carried it.  This discharges it, and the discharge is
+   TRIVIAL because of how the term enters: `mkg_adv` is a LEMMA PARAMETER --
+   universally quantified, constrained only by `0%r <= mkg_adv`.  A statement
+   holding for EVERY admissible value holds at 0, and 0 is the tightest
+   admissible value, so instantiating there is sound and yields a STRICTLY
+   TIGHTER bound with one FEWER premise and NO free real.  The hazard the
+   comment names -- "silently zeroable by a consumer" -- is closed by doing the
+   zeroing here, visibly, instead of leaving it available to whoever quotes the
+   theorem.
+
+   WHAT THIS DOES *NOT* MEAN, and the same comment is explicit about it:
+   "WHERE THE GENUINE mkg TERM LIVES (it is NOT zero)".  The real RO-idealisation
+   cost sits at the MODEL-DEFINITION / pre-hop-1 boundary -- the keyed salted
+   grinder of production (sphincs-c10/src/fors.rs nonce loop) idealised to the
+   uniform-conditioned `dcond` draw -- NOT between NPRFPRF and NPRFNPRF.  Dropping
+   the in-chain summand does NOT make that idealisation free; it stops the chain
+   DOUBLE-PAYING for something already priced in the model definition.  The
+   boundary idealisation remains an open, documented assumption
+   (sphincs_c10_scheme_wip.ec:52-67, FORS_C10.ec:52-54).
+
+   STATEMENT DERIVED MECHANICALLY, not retyped: the parameter, the premise and
+   the summand were deleted from EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED by
+   script, with an assertion that no `mkg_adv` token survives.
+   ========================================================================== *)
+lemma EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT
+  (F <: Adv_EUFCMA_C{ -R_int_STCRC, -R_int_WOTSTW,
+             -O_MEUFGCMA_WOTSC_Default, -O_MEUFGCMA_WOTSTWESNPRF,
+             -STCRC_WC.O_STCRC_Default, -FC.O_THFC_Default, -O_THFC_MA, -G0_INT,
+             -R_MEUFGCMAWOTSC_EUFNAGCMA_C, -EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_C,
+             -O_MEUFGCMA_WOTSC_V, -R_SMDTTCRCPKCO_C, -R_SMDTTCRCTRH_C,
+             -FSSLXMTWES.PKCOC_TCR.O_SMDTTCR_Default, -FSSLXMTWES.PKCOC.O_THFC_Default,
+             -FSSLXMTWES.TRHC_TCR.O_SMDTTCR_Default, -FSSLXMTWES.TRHC.O_THFC_Default,
+             -R_top,
+             -DSSC.Stateless.O_CMA_Default, -O_CMA_SPHINCSPLUSTWC_FS,
+             -SKG_PRF.O_PRF_Default, -EUF_CMA_SPHINCSPLUSTWC_NPRFNPRF_V,
+             -R_top_C, -EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_RV,
+             -R_fors_p, -O_CMA_Gproc, -O_CMA_Gproc_I, -R_ITSRC10_Gproc,
+             -EUF_CMA_Gproc_I, -M.F.O_ITSRC10_Default,
+             (* the nine Q-leg separations gproc_Q_bound needs -- identical to the
+                block GprocQWired.ec carries, and a deliberate NARROWING of F. *)
+             -EUF_CMA_Gproc_V, -R_OPRE_Gproc, -R_TRH_Gproc, -R_TRCO_Gproc,
+             -FTWES.F_OpenPRE.O_SMDTOpenPRE_Default,
+             -FTWES.TRHC_TCR.O_SMDTTCR_Default, -FTWES.TRHC.O_THFC_Default,
+             -FTWES.TRCOC_TCR.O_SMDTTCR_Default, -FTWES.TRCOC.O_THFC_Default })
+  &m :
+    c <= p_tgts =>
+    (forall (p : pseed) (a : adrs) (x : dgstblock) (cc : cntr),
+       encode_msgWOTS_C p a x cc = encode_msgWOTS (ThC p a x cc)) =>
+    dfC0 <> 8 * n =>
+    dfC0 <> 8 * n * len =>
+    dfC0 <> 8 * n * 2 =>
+    dfC0 <> 8 * n * k =>
+    Pr[EUFCMA_C10(F).main() @ &m : res]
+      <= `|  Pr[SKG_PRF.PRF(R_SKGPRF_EUFCMA_C(F), SKG_PRF.O_PRF_Default).main(false) @ &m : res]
+           - Pr[SKG_PRF.PRF(R_SKGPRF_EUFCMA_C(F), SKG_PRF.O_PRF_Default).main(true) @ &m : res] |
+       + ( Pr[M.F.ITSRC10(R_ITSRC10_Gproc(R_fors_p(F)),
+                          M.F.O_ITSRC10_Default).main() @ &m : res]
+           + ( Pr[FTWES.F_OpenPRE.SM_DT_OpenPRE(R_OPRE_Gproc(R_fors_p(F)),
+                    FTWES.F_OpenPRE.O_SMDTOpenPRE_Default).main() @ &m : res]
+             + Pr[FTWES.TRHC_TCR.SM_DT_TCR_C(R_TRH_Gproc(R_fors_p(F)),
+                    FTWES.TRHC_TCR.O_SMDTTCR_Default,
+                    FTWES.TRHC.O_THFC_Default).main() @ &m : res]
+             + Pr[FTWES.TRCOC_TCR.SM_DT_TCR_C(R_TRCO_Gproc(R_fors_p(F)),
+                    FTWES.TRCOC_TCR.O_SMDTTCR_Default,
+                    FTWES.TRCOC.O_THFC_Default).main() @ &m : res] ) )
+       + ( Pr[M_EUF_GCMA_WOTSTWESNPRF(R_int_WOTSTW(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(F))),
+                                      O_MEUFGCMA_WOTSTWESNPRF, FC.O_THFC_Default).main() @ &m : res]
+           + Pr[S_TCR_C_Int_MA(R_int_STCRC(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(F))),
+                               STCRC_WC.O_STCRC_Default).main() @ &m : res]
+           + Pr[FSSLXMTWES.PKCOC_TCR.SM_DT_TCR_C(R_SMDTTCRCPKCO_C(R_top_C(F)),
+                  FSSLXMTWES.PKCOC_TCR.O_SMDTTCR_Default,
+                  FSSLXMTWES.PKCOC.O_THFC_Default).main() @ &m : res]
+           + Pr[FSSLXMTWES.TRHC_TCR.SM_DT_TCR_C(R_SMDTTCRCTRH_C(R_top_C(F)),
+                  FSSLXMTWES.TRHC_TCR.O_SMDTTCR_Default,
+                  FSSLXMTWES.TRHC.O_THFC_Default).main() @ &m : res]
+           + Pr[GAME1_INT(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(F)),
+                          O_MEUFGCMA_WOTSC_Default, FC.O_THFC_Default).main() @ &m :
+                  res /\ gfail_of O_MEUFGCMA_WOTSC_Default.ps
+                                  O_MEUFGCMA_WOTSC_Default.qs] ).
+proof.
+move=> hc henc hd1 hd2 hd3 hd4.
+have h := EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED F 0%r &m hc _ henc hd1 hd2 hd3 hd4; first by [].
+smt().
+qed.

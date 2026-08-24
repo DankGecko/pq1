@@ -1147,3 +1147,9 @@ op:cdrafts-split/FORS_C.ec::fkeygen	7bd60a3e5cfc35c22e486c817674ce21
 op:cdrafts-split/FORS_C.ec::fsign	c597fa5279eaeb73c081ce3a04812f0c
 op:cdrafts-split/FORS_C.ec::fverify	297c6ad567c6001ba7b29f0265359ba6
 op:cdrafts-split/FORS_C.ec::verifyC	0bec72ca57ce72a09a89023c7e144710
+# --- H1 resolved: the phantom mkg_adv summand dropped (2026-08-24) ---
+# The headline at mkg_adv := 0.  FxChain.ec:2824-2834 records dropping this summand as
+# the "honest fix" for an OPEN accounting hazard; the term is a universally quantified
+# free real, so instantiating at its tightest admissible value is sound and yields a
+# STRICTLY TIGHTER bound with one fewer premise and NO free real.
+cdrafts-split/GprocChargedQWired.ec::EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT	de541fd033b367fc762a539e1d79fb36

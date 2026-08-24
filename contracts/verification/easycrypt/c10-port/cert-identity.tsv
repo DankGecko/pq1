@@ -524,6 +524,39 @@
 #   covered contributes nothing.  Second prediction of the day I lost to the same
 #   reviewer -- the first was that the split/fork rows were "documentary".
 #
+# 2026-08-24.  split f58333ec13efa4da5d9ea23a660c297a -> cb901c18d79650eef742a8ddcd884094.
+#   H1 RESOLVED -- THE PHANTOM `mkg_adv` SUMMAND IS DROPPED FROM THE HEADLINE.
+#   New lemma EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT in GprocChargedQWired.ec.
+#   FxChain.ec:2824-2834 has recorded this as an OPEN ACCOUNTING HAZARD against the
+#   capstone, in its own words: "mkg_adv becomes a PHANTOM summand: sound as an upper
+#   bound but SILENTLY ZEROABLE BY A CONSUMER, and double-paying if kept alongside the
+#   already-idealised dcond LHS.  Honest fix: drop mkg_adv from the +C FX PRF-term sum
+#   ...  Do NOT leave it as an in-chain MKG-PRF summand."  The headline still carried it.
+#   THE DISCHARGE IS TRIVIAL BECAUSE OF HOW THE TERM ENTERS, and that is worth stating:
+#   `mkg_adv` is a LEMMA PARAMETER -- universally quantified, constrained only by
+#   `0%r <= mkg_adv`.  A statement holding for EVERY admissible value holds at 0, and 0 is
+#   the TIGHTEST admissible value.  So the tightened form is sound, STRICTLY TIGHTER (a
+#   non-negative summand removed), has ONE FEWER premise, and contains NO FREE REAL.  The
+#   named hazard -- "silently zeroable by a consumer" -- is closed by doing the zeroing
+#   HERE, visibly, rather than leaving it available to whoever quotes the theorem.
+#   WHAT IT DOES *NOT* MEAN, and the same comment is explicit: "WHERE THE GENUINE mkg TERM
+#   LIVES (it is NOT zero)".  The real RO-idealisation cost sits at the MODEL-DEFINITION /
+#   pre-hop-1 boundary -- production's keyed salted grinder idealised to the
+#   uniform-conditioned `dcond` draw -- NOT between NPRFPRF and NPRFNPRF.  Dropping the
+#   in-chain summand does not make that idealisation free; it stops the chain DOUBLE-PAYING
+#   for something already priced in the model definition.  That boundary idealisation
+#   remains an open, documented assumption.
+#   STATEMENT DERIVED MECHANICALLY, not retyped: the parameter, the premise and the summand
+#   were deleted from the parent by script, asserting no `mkg_adv` token survives.
+#   VACUITY CONTROL, and it FAILED FIRST TIME FOR THE RIGHT REASON TO NOTICE: replacing the
+#   ITSRC10 summand with 0%r in the tightened statement must break the proof.  My first
+#   attempt at that control did not mutate the file at all (a regex miss), and the run
+#   returned RC=0 -- which I did NOT count as a pass.  Re-armed against the real text:
+#   RC=1, no .eco, "cannot prove goal (strict)".  Restored: RC=0, .eco.  So the lemma
+#   genuinely needs the term and the terminal smt() is not closing everything.
+#   COST: EXPECT_PINS 1068 -> 1069, EXPECT_STMTS 984 -> 985, and the CENSUS IS UNCHANGED
+#   (1634 rows, added=0 removed=0, ledger 242).  A strictly stronger theorem at ZERO
+#   assumption cost, so cert-baseline-split.tsv needed no edit.
 # 2026-08-22 (fork).  fork 7ab20d2ab0ba2c1f3942408a193b4836 -> 9c2d21280c84d52c30b22111151f1135.
 #   THE FORK BASELINE IS NOW GATE-VERIFIED, which it had not been since the split-side
 #   cert_cone.py changes.  It was regenerated MECHANICALLY on 2026-08-21 (shared
@@ -1003,5 +1036,5 @@
 #   Updated to the live 242/217/345/389/1193 with a dated note; the superseded
 #   value stays recoverable in git and in the dated entries below it.
 # tree	hash
-split	f58333ec13efa4da5d9ea23a660c297a
+split	cb901c18d79650eef742a8ddcd884094
 fork	9c2d21280c84d52c30b22111151f1135

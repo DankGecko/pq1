@@ -39,6 +39,15 @@ numerically meaningful bound**.
 > `GROUNDED` remains a true, gated theorem and is still in the closure; it is no
 > longer what this directory advertises.
 
+> **:white_check_mark: UPDATE 2026-08-24 — quote the TIGHTENED form.**
+> `EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT` (same file) is the headline
+> instantiated at `mkg_adv := 0`, which is sound because `mkg_adv` is a
+> universally quantified lemma parameter constrained only by `0%r <= mkg_adv`,
+> and 0 is its **tightest admissible value**. It is therefore **strictly
+> tighter**, carries **6 premises not 7**, and contains **no free real** — see
+> the final section of this file. The description below is of the parent, which
+> it is derived from and which remains gated and true.
+
 **What the headline carries.** Its premises are `c <= p_tgts`, `0%r <= mkg_adv`,
 the encode-compatibility equation `encode_msgWOTS_C p a x cc = encode_msgWOTS
 (ThC p a x cc)`, and four C10 width facts on `dfC0`. Its right-hand side is the
@@ -1791,3 +1800,50 @@ GREEN is not an artifact of accumulated machine state — stale `.eco` caches, a
 prover, leaked container processes. And the identity matched *before* any proof was
 checked (`f58333ec` split, `9c2d2128` fork), so the tree came back from the restart
 byte-identical to what was certified.
+
+### UPDATE 2026-08-24 — H1 resolved: the phantom `mkg_adv` summand is dropped
+
+`FxChain.ec:2824-2834` has carried this as an **open accounting hazard against the
+capstone**, in its own words:
+
+> *"`mkg_adv` becomes a PHANTOM summand: sound as an upper bound but **silently zeroable
+> by a consumer**, and double-paying if kept alongside the already-idealised `dcond` LHS.
+> Honest fix: drop `mkg_adv` from the +C FX PRF-term sum … **Do NOT leave it as an
+> in-chain MKG-PRF summand.**"*
+
+The headline still carried it — the one **free real** in a theorem whose own front page
+condemns free reals because they can *"be set to 1 at will."*
+
+**New lemma `EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT`.** The discharge is trivial
+because of how the term enters: `mkg_adv` is a **lemma parameter** — universally
+quantified, constrained only by `0%r <= mkg_adv`. A statement holding for *every*
+admissible value holds at `0`, and `0` is the **tightest** admissible value. So the
+tightened form is sound, **strictly tighter** (a non-negative summand removed), carries
+**one fewer premise**, and contains **no free real**. The named hazard — *silently zeroable
+by a consumer* — is closed by doing the zeroing here, visibly, rather than leaving it
+available to whoever quotes the theorem.
+
+**What it does *not* mean**, and the same comment is explicit: *"WHERE THE GENUINE mkg TERM
+LIVES (it is NOT zero)"*. The real RO-idealisation sits at the **model-definition /
+pre-hop-1 boundary** — production's keyed salted grinder idealised to the
+uniform-conditioned `dcond` draw — **not** between NPRFPRF and NPRFNPRF. Dropping the
+in-chain summand does not make that idealisation free; it stops the chain **double-paying**
+for something already priced in the model definition. That assumption stays open.
+
+**Statement derived mechanically**, not retyped: parameter, premise and summand deleted
+from the parent by script, asserting no `mkg_adv` token survives.
+
+**Vacuity control — and the first attempt did not count.** Replacing the `ITSRC10` summand
+with `0%r` must break the proof. My first attempt hit a regex miss, never mutated the file,
+and returned `RC=0` — which I did **not** read as a pass. Re-armed against the real text:
+`RC=1`, no `.eco`, "cannot prove goal (strict)"; restored: `RC=0`, `.eco`. So the lemma
+genuinely needs the term.
+
+```
+GATE: GREEN (RC=0)   identity f58333ec -> cb901c18   __WALL_S=4539
+  1069/1069 pins · coverage 985/985 across 45 cone files · quarantine intact
+  cone: added=0 removed=0 · ledger=242 · CLI_DISAGREEMENTS=0 · inputs unchanged
+```
+
+**A strictly stronger theorem at zero assumption cost** — `cert-baseline-split.tsv` needed
+no edit at all.
