@@ -57,6 +57,10 @@ require import BitEncoding. import BS2Int BitChunking.
 require import GFailCharged XmssmtCCCharged SphincsC10CapstoneCharged.
 require import GprocT1Opre GprocT2Trh GprocT3Trco GprocQBound.
 require import GprocQWired.   (* reuse its WitnessF for the anti-vacuity check *)
+(* c10_n / c10_len / c10_k / c10_r for the DEPLOYED variant below.  Same import
+   GprocQWired.ec:55 uses, and both files are ALREADY closure members, so this adds
+   no new file to the cone -- verified after the edit (CONE_FILES stays 45). *)
+require import C10DeployedInstance.
 
 import FSSLXMTWES.
 import FSSLXMTWES.WTWES.
@@ -292,4 +296,97 @@ proof.
 move=> hc henc hd1 hd2 hd3 hd4.
 have h := EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED F 0%r &m hc _ henc hd1 hd2 hd3 hd4; first by [].
 smt().
+qed.
+
+
+(* ==========================================================================
+   THE CLEAN STATEMENT, AT DEPLOYED PARAMETERS.
+
+   GAP THIS CLOSES.  Surveying the capstone family, EVERY deployed variant
+   carried N2 -- AT_DEPLOYED_PARAMS, AT_DEPLOYED_PARAMS_PINNED_ENCODER, and both
+   of their QWIRED forms -- while the only statement free of N2, of Q and of the
+   free real `mkg_adv` (CHARGED_QWIRED_TIGHT) was NOT deployed.  So the surface
+   the product actually quotes, at C10's pinned parameters, was strictly WEAKER
+   than the abstract headline.  This is the first deployed statement that is
+   N2-free AND Q-free AND free-real-free.
+
+   WHAT IS AND IS NOT TRADED.  The four ABSTRACT width disequalities
+   (`dfC0 <> 8*n`, `... * len`, `... * 2`, `... * k`) are DISCHARGED here by
+   c10_dfC_separations_deployed (C10DeployedInstance.ec:294) from the four
+   DEPLOYED parameter pins.  That is a trade, not an elimination: the premise
+   count is unchanged at 6.  What it buys is that the remaining premises are
+   about DEPLOYED PARAMETERS -- n = 16, len = 43, k = 13, and the embedding width
+   -- rather than about an abstract constant, which is the whole point of a
+   deployed quotation surface.
+
+   Statement derived MECHANICALLY from CHARGED_QWIRED_TIGHT: the four dfC0
+   premises were replaced by the deployed block by script, asserting no `dfC0`
+   token survives.
+   ========================================================================== *)
+lemma EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT_AT_DEPLOYED_PARAMS
+  (F <: Adv_EUFCMA_C{ -R_int_STCRC, -R_int_WOTSTW,
+             -O_MEUFGCMA_WOTSC_Default, -O_MEUFGCMA_WOTSTWESNPRF,
+             -STCRC_WC.O_STCRC_Default, -FC.O_THFC_Default, -O_THFC_MA, -G0_INT,
+             -R_MEUFGCMAWOTSC_EUFNAGCMA_C, -EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_C,
+             -O_MEUFGCMA_WOTSC_V, -R_SMDTTCRCPKCO_C, -R_SMDTTCRCTRH_C,
+             -FSSLXMTWES.PKCOC_TCR.O_SMDTTCR_Default, -FSSLXMTWES.PKCOC.O_THFC_Default,
+             -FSSLXMTWES.TRHC_TCR.O_SMDTTCR_Default, -FSSLXMTWES.TRHC.O_THFC_Default,
+             -R_top,
+             -DSSC.Stateless.O_CMA_Default, -O_CMA_SPHINCSPLUSTWC_FS,
+             -SKG_PRF.O_PRF_Default, -EUF_CMA_SPHINCSPLUSTWC_NPRFNPRF_V,
+             -R_top_C, -EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_RV,
+             -R_fors_p, -O_CMA_Gproc, -O_CMA_Gproc_I, -R_ITSRC10_Gproc,
+             -EUF_CMA_Gproc_I, -M.F.O_ITSRC10_Default,
+             (* the nine Q-leg separations gproc_Q_bound needs -- identical to the
+                block GprocQWired.ec carries, and a deliberate NARROWING of F. *)
+             -EUF_CMA_Gproc_V, -R_OPRE_Gproc, -R_TRH_Gproc, -R_TRCO_Gproc,
+             -FTWES.F_OpenPRE.O_SMDTOpenPRE_Default,
+             -FTWES.TRHC_TCR.O_SMDTTCR_Default, -FTWES.TRHC.O_THFC_Default,
+             -FTWES.TRCOC_TCR.O_SMDTTCR_Default, -FTWES.TRCOC.O_THFC_Default })
+  &m :
+    c <= p_tgts =>
+    (forall (p : pseed) (a : adrs) (x : dgstblock) (cc : cntr),
+       encode_msgWOTS_C p a x cc = encode_msgWOTS (ThC p a x cc)) =>
+    n       = c10_n     =>   (* 16, params.rs:19 *)
+    len     = c10_len   =>   (* 43, params.rs:49 *)
+    k       = c10_k     =>   (* 13, params.rs:34 *)
+    size (emb_in witness) = 8 * n + c10_r =>   (* NODE || u32 counter *)
+    Pr[EUFCMA_C10(F).main() @ &m : res]
+      <= `|  Pr[SKG_PRF.PRF(R_SKGPRF_EUFCMA_C(F), SKG_PRF.O_PRF_Default).main(false) @ &m : res]
+           - Pr[SKG_PRF.PRF(R_SKGPRF_EUFCMA_C(F), SKG_PRF.O_PRF_Default).main(true) @ &m : res] |
+       + ( Pr[M.F.ITSRC10(R_ITSRC10_Gproc(R_fors_p(F)),
+                          M.F.O_ITSRC10_Default).main() @ &m : res]
+           + ( Pr[FTWES.F_OpenPRE.SM_DT_OpenPRE(R_OPRE_Gproc(R_fors_p(F)),
+                    FTWES.F_OpenPRE.O_SMDTOpenPRE_Default).main() @ &m : res]
+             + Pr[FTWES.TRHC_TCR.SM_DT_TCR_C(R_TRH_Gproc(R_fors_p(F)),
+                    FTWES.TRHC_TCR.O_SMDTTCR_Default,
+                    FTWES.TRHC.O_THFC_Default).main() @ &m : res]
+             + Pr[FTWES.TRCOC_TCR.SM_DT_TCR_C(R_TRCO_Gproc(R_fors_p(F)),
+                    FTWES.TRCOC_TCR.O_SMDTTCR_Default,
+                    FTWES.TRCOC.O_THFC_Default).main() @ &m : res] ) )
+       + ( Pr[M_EUF_GCMA_WOTSTWESNPRF(R_int_WOTSTW(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(F))),
+                                      O_MEUFGCMA_WOTSTWESNPRF, FC.O_THFC_Default).main() @ &m : res]
+           + Pr[S_TCR_C_Int_MA(R_int_STCRC(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(F))),
+                               STCRC_WC.O_STCRC_Default).main() @ &m : res]
+           + Pr[FSSLXMTWES.PKCOC_TCR.SM_DT_TCR_C(R_SMDTTCRCPKCO_C(R_top_C(F)),
+                  FSSLXMTWES.PKCOC_TCR.O_SMDTTCR_Default,
+                  FSSLXMTWES.PKCOC.O_THFC_Default).main() @ &m : res]
+           + Pr[FSSLXMTWES.TRHC_TCR.SM_DT_TCR_C(R_SMDTTCRCTRH_C(R_top_C(F)),
+                  FSSLXMTWES.TRHC_TCR.O_SMDTTCR_Default,
+                  FSSLXMTWES.TRHC.O_THFC_Default).main() @ &m : res]
+           + Pr[GAME1_INT(R_MEUFGCMAWOTSC_EUFNAGCMA_C(R_top_C(F)),
+                          O_MEUFGCMA_WOTSC_Default, FC.O_THFC_Default).main() @ &m :
+                  res /\ gfail_of O_MEUFGCMA_WOTSC_Default.ps
+                                  O_MEUFGCMA_WOTSC_Default.qs] ).
+
+proof.
+(* Binder order follows the STATEMENT, which keeps `c <= p_tgts` and the encode
+   equation first (inherited from the parent) and appends the deployed block.  The
+   first attempt used AT_DEPLOYED_PARAMS_QWIRED's order and misaligned every name:
+   `hc` was fed where `n = c10_n` was expected.  EasyCrypt reported it precisely --
+   "this proof-term proves: c <= p_tgts / but is expected to prove: n = c10_n" -- so
+   this is read off the error, not guessed. *)
+move=> hc henc hn hlen hk hsz.
+have [# h0 h1 h2 h3 g0 g1 g2 g3 hnem] := c10_dfC_separations_deployed hn hlen hk hsz.
+exact (EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT F &m hc henc h0 h1 h2 h3).
 qed.

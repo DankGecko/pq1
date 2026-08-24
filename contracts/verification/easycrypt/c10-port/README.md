@@ -47,6 +47,13 @@ numerically meaningful bound**.
 > tighter**, carries **6 premises not 7**, and contains **no free real** — see
 > the final section of this file. The description below is of the parent, which
 > it is derived from and which remains gated and true.
+>
+> **For the PRODUCT, quote
+> `EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT_AT_DEPLOYED_PARAMS`** — the same
+> clean statement with the four abstract width facts discharged from C10's
+> deployed parameter pins (n=16, len=43, k=13). It is the **first** deployed
+> statement that is N2-free, Q-free *and* free-real-free; until 2026-08-24 every
+> deployed variant still carried N2.
 
 **What the headline carries.** Its premises are `c <= p_tgts`, `0%r <= mkg_adv`,
 the encode-compatibility equation `encode_msgWOTS_C p a x cc = encode_msgWOTS
@@ -1847,3 +1854,49 @@ GATE: GREEN (RC=0)   identity f58333ec -> cb901c18   __WALL_S=4539
 
 **A strictly stronger theorem at zero assumption cost** — `cert-baseline-split.tsv` needed
 no edit at all.
+
+### UPDATE 2026-08-24 (second) — the clean statement now exists AT DEPLOYED PARAMETERS
+
+Surveying the whole capstone family exposed a gap:
+
+| | N2 | Q | free real | deployed |
+|---|---|---|---|---|
+| `CHARGED_QWIRED_TIGHT` | — | — | — | **no** |
+| `AT_DEPLOYED_PARAMS`, `..._PINNED_ENCODER`, and both QWIRED forms | **N2** | varies | — | yes |
+
+**Every deployed variant carried N2**, while the only statement free of N2, of `Q` *and*
+of the free real `mkg_adv` was not deployed. So the surface the product actually quotes —
+at C10's pinned parameters — was strictly **weaker** than the abstract headline.
+
+`EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT_AT_DEPLOYED_PARAMS` closes it: the **first**
+deployed statement that is N2-free, Q-free and free-real-free. All four properties measured
+on the statement text, not asserted.
+
+**What is traded, stated plainly.** The four *abstract* width disequalities are discharged
+by `c10_dfC_separations_deployed` (`C10DeployedInstance.ec:294`) from the four *deployed*
+parameter pins. That is a **trade, not an elimination** — the premise count stays 6. What
+it buys is premises about deployed parameters (n=16, len=43, k=13, embedding width) rather
+than an abstract constant, which is the point of a deployed quotation surface.
+
+```
+GATE: GREEN (RC=0)   identity cb901c18 -> 6eead428   __WALL_S=4410
+  1070/1070 pins · coverage 986/986 across 45 cone files · quarantine intact
+  cone: added=0 removed=0 · ledger=242 · CONE_FILES still 45
+```
+
+**Third consecutive change at zero assumption cost.** The added
+`require import C10DeployedInstance` pulls in a file that was *already* a closure member —
+checked, not assumed.
+
+**Two mistakes, both caught by the compiler**, the second a method error: `c10_n` was out
+of scope (fixed with the import `GprocQWired.ec:55` already uses); and I wrote the proof
+binders in the *other* lemma's premise order while the mechanically-derived statement kept
+its parent's order, misaligning every name. EasyCrypt reported it exactly — *"this
+proof-term proves: `c <= p_tgts` / but is expected to prove: `n = c10_n`"* — and the fix
+was read off the error rather than guessed.
+
+**A number I quoted but never published, corrected:** I reported
+`AT_DEPLOYED_PARAMS_QWIRED` as having "3 premises". It has **seven**. My counting script
+counted lines *ending* in `=>`, silently missing multi-line premises. Re-counted by proof
+binders: `GROUNDED` 7, `CHARGED_QWIRED` 7, `TIGHT` 6, `AT_DEPLOYED_PARAMS_QWIRED` 7 —
+every count in this README was right; only the verbal one was wrong.

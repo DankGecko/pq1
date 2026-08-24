@@ -1153,3 +1153,7 @@ op:cdrafts-split/FORS_C.ec::verifyC	0bec72ca57ce72a09a89023c7e144710
 # free real, so instantiating at its tightest admissible value is sound and yields a
 # STRICTLY TIGHTER bound with one fewer premise and NO free real.
 cdrafts-split/GprocChargedQWired.ec::EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT	de541fd033b367fc762a539e1d79fb36
+# --- the clean statement AT DEPLOYED PARAMETERS (2026-08-24) ---
+# Every previous deployed variant carried N2; the only N2-free/Q-free/free-real-free
+# statement was not deployed.  This is the first that is all four.
+cdrafts-split/GprocChargedQWired.ec::EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED_TIGHT_AT_DEPLOYED_PARAMS	f284fc09dfe073ca84886a06c77b2276
