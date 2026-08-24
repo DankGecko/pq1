@@ -29,12 +29,39 @@ The headline theorem is `EUFCMA_SPHINCS_PLUS_C10_GROUNDED`
 theorem, and it is **not a numerically meaningful bound**:
 
 * It carries `Q = Pr[EUF_CMA_Gproc_I(R_fors_p(F)) : res /\ !covered]` as an
-  UNREDUCED bad-event probability. Nothing in this tree bounds `Q` below 1, so
-  the bound is currently compatible with 1. What `Q` buys over the earlier
-  free-real formulation is that it is a *named game probability an instantiator
-  cannot choose*, where a free real could be set to 1 at will.
+  UNREDUCED bad-event probability. What `Q` buys over the earlier free-real
+  formulation is that it is a *named game probability an instantiator cannot
+  choose*, where a free real could be set to 1 at will.
+
+  > **:warning: CORRECTED 2026-08-24.** This bullet previously ended *"Nothing in
+  > this tree bounds `Q` below 1, so the bound is currently compatible with 1."*
+  > **That sentence was false, and it understated the artifact.**
+  > `cdrafts-split/GprocQBound.ec::gproc_Q_bound` bounds `Q` by three NAMED
+  > SM-DT hardness advantages (`SM_DT_OpenPRE`, and `SM_DT_TCR_C` for TRH and
+  > TRCO), and it is a gated closure member. Two capstones consume it and carry
+  > **no `Q` at all** — `GprocQWired.ec::EUFCMA_SPHINCS_PLUS_C10_QWIRED` and
+  > `GprocChargedQWired.ec::EUFCMA_SPHINCS_PLUS_C10_CHARGED_QWIRED`, both also
+  > gated. What remains true is the narrower statement: *the theorem named as the
+  > headline here* (`GROUNDED`) carries `Q`, because it does not consume that
+  > bound. The tree does bound it.
+  >
+  > **And `CHARGED_QWIRED` is strictly stronger than the headline**, measured on
+  > the statements: it drops the N2 grind premise
+  > (`exists cc, predC (ThC ps ad m cc)` — App-D gap #1, a premise and not a
+  > theorem) in favour of `Pr[GAME1_INT ...]`, a NAMED GAME probability, and it
+  > drops `Q` for the three SM-DT terms. Its only additional premise is
+  > `0%r <= mkg_adv`, a non-negativity side condition. Which theorem should be
+  > *advertised* as the headline is an owner call, not a proof question — but the
+  > front page should not name a weaker one without saying so.
 * `Pr[M.F.ITSRC10 ...]` is likewise carried unreduced — that is the FORS+C10
-  assumption and the honest headline term.
+  assumption and the honest headline term. **This one is irreducible, and that is
+  proved rather than assumed:** `scratch/_countermodel.ec::countermodel_pr1`
+  exhibits a LEGAL clone of the abstract theory in which
+  `Pr[ITSRC10(...)] = 1%r`, so no parameter-independent bound exists. It is
+  carried by ALL THREE capstones, which is why the verdict above — *not a
+  numerically meaningful bound* — stands even for the Q-wired ones. Correcting
+  the `Q` sentence does not make the headline numeric; it moves the honest
+  residual onto the term that genuinely cannot be reduced.
 * Each cone contains **two admits**, every one pinned by statement digest:
   * split — `nhchwcoll_hchwpre_msg` (`base-c10-split/WOTS_TW_ES.ec`), inherited
     from MM45; and `extract_op` (`cdrafts-split/FORS_C_TreePort.ec`), the
